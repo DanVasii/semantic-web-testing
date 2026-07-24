@@ -116,6 +116,13 @@ const createApi = (): {
     saveTestFlow: vi.fn(),
     listTestVersions: vi.fn().mockResolvedValue([]),
     deleteTest: vi.fn(),
+    startRun: vi.fn(),
+    stopRun: vi.fn(),
+    retryRunStep: vi.fn(),
+    getRunnerStatus: vi.fn(),
+    listTestRuns: vi.fn().mockResolvedValue([]),
+    listRunStepResults: vi.fn().mockResolvedValue([]),
+    onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
   };
   return {
     api,

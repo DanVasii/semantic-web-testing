@@ -1,3 +1,5 @@
+import type { StepRunResult, TestRun } from "./persistence.js";
+
 export const RUNNER_STATES = [
   "idle",
   "preparing",
@@ -19,3 +21,60 @@ export const RUNNER_STATES = [
 ] as const;
 
 export type RunnerState = (typeof RUNNER_STATES)[number];
+
+export type RunnerErrorCode =
+  | "browser_unavailable"
+  | "dataset_missing"
+  | "invalid_test"
+  | "locator_not_found"
+  | "locator_ambiguous"
+  | "missing_data"
+  | "step_failed"
+  | "unsupported_step";
+
+export interface RunnerErrorDetails {
+  code: RunnerErrorCode;
+  message: string;
+  count?: number;
+  stepId?: string;
+}
+
+export interface RunnerSnapshot {
+  state: RunnerState;
+  run?: TestRun;
+  currentStepIndex: number;
+  totalSteps: number;
+  currentStepId?: string;
+  message?: string;
+  error?: RunnerErrorDetails;
+  canStop: boolean;
+  canRetry: boolean;
+}
+
+export interface StartRunInput {
+  projectId: string;
+  testId: string;
+  datasetId?: string;
+}
+
+export interface RunDetails {
+  snapshot: RunnerSnapshot;
+  stepResults: StepRunResult[];
+}
+
+export const isRunnerSnapshot = (value: unknown): value is RunnerSnapshot => {
+  if (typeof value !== "object" || value === null) return false;
+  return (
+    "state" in value &&
+    typeof value.state === "string" &&
+    (RUNNER_STATES as readonly string[]).includes(value.state) &&
+    "currentStepIndex" in value &&
+    typeof value.currentStepIndex === "number" &&
+    "totalSteps" in value &&
+    typeof value.totalSteps === "number" &&
+    "canStop" in value &&
+    typeof value.canStop === "boolean" &&
+    "canRetry" in value &&
+    typeof value.canRetry === "boolean"
+  );
+};

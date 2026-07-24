@@ -1,9 +1,12 @@
 import type { ProjectInput, ProjectOverview } from "./projects.js";
 import type {
   BrowserConfig,
+  StepRunResult,
   TestDefinition,
+  TestRun,
   TestVersion,
 } from "./persistence.js";
+import type { RunnerSnapshot, StartRunInput } from "./runner.js";
 import type { TestFlowItem } from "./test-model.js";
 import type {
   AnalyzedPageSummary,
@@ -62,6 +65,16 @@ export const TEST_CHANNELS = {
   saveFlow: "tests:save-flow",
   listVersions: "tests:list-versions",
   delete: "tests:delete",
+} as const;
+
+export const RUNNER_CHANNELS = {
+  start: "runner:start",
+  stop: "runner:stop",
+  retry: "runner:retry",
+  getStatus: "runner:get-status",
+  listRuns: "runner:list-runs",
+  listStepResults: "runner:list-step-results",
+  statusChanged: "runner:status-changed",
 } as const;
 
 export interface AppInfo {
@@ -126,4 +139,20 @@ export interface SemanticAppApi {
     testId: string,
   ) => Promise<TestVersion[]>;
   deleteTest: (projectId: string, testId: string) => Promise<boolean>;
+  startRun: (input: StartRunInput) => Promise<RunnerSnapshot>;
+  stopRun: (runId: string) => Promise<RunnerSnapshot>;
+  retryRunStep: (runId: string) => Promise<RunnerSnapshot>;
+  getRunnerStatus: (
+    projectId: string,
+    testId: string,
+  ) => Promise<RunnerSnapshot>;
+  listTestRuns: (projectId: string, testId: string) => Promise<TestRun[]>;
+  listRunStepResults: (
+    projectId: string,
+    testId: string,
+    runId: string,
+  ) => Promise<StepRunResult[]>;
+  onRunnerStatusChange: (
+    listener: (snapshot: RunnerSnapshot) => void,
+  ) => () => void;
 }

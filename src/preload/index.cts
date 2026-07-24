@@ -14,9 +14,12 @@ import type {
   BrowserConfig,
   Page,
   PageVersion,
+  StepRunResult,
   TestDefinition,
+  TestRun,
   TestVersion,
 } from "../shared/persistence.js";
+import type { RunnerSnapshot, RunnerState } from "../shared/runner.js";
 import type {
   AnalyzedPageSummary,
   InaccessibleStylesheet,
@@ -61,6 +64,15 @@ const TEST_CHANNELS = {
   saveFlow: "tests:save-flow",
   listVersions: "tests:list-versions",
   delete: "tests:delete",
+} as const;
+const RUNNER_CHANNELS = {
+  start: "runner:start",
+  stop: "runner:stop",
+  retry: "runner:retry",
+  getStatus: "runner:get-status",
+  listRuns: "runner:list-runs",
+  listStepResults: "runner:list-step-results",
+  statusChanged: "runner:status-changed",
 } as const;
 
 const isAppInfo = (value: unknown): value is AppInfo => {
@@ -443,6 +455,70 @@ const isTestVersion = (value: unknown): value is TestVersion =>
   "snapshotFilePath" in value &&
   typeof value.snapshotFilePath === "string";
 
+const runnerStates = new Set<RunnerState>([
+  "idle",
+  "preparing",
+  "browser_starting",
+  "waiting_for_basic_auth",
+  "waiting_for_start",
+  "running",
+  "waiting_at_breakpoint",
+  "waiting_after_step",
+  "waiting_for_missing_data",
+  "waiting_for_fallback_decision",
+  "waiting_for_manual_intervention",
+  "waiting_for_mysql_check",
+  "waiting_for_imap_check",
+  "paused_on_error",
+  "completed",
+  "failed",
+  "stopped",
+]);
+
+const isTestRun = (value: unknown): value is TestRun =>
+  typeof value === "object" &&
+  value !== null &&
+  "id" in value &&
+  typeof value.id === "string" &&
+  "projectId" in value &&
+  typeof value.projectId === "string" &&
+  "testId" in value &&
+  typeof value.testId === "string" &&
+  "status" in value &&
+  typeof value.status === "string" &&
+  "startedAt" in value &&
+  typeof value.startedAt === "string";
+
+const isStepRunResult = (value: unknown): value is StepRunResult =>
+  typeof value === "object" &&
+  value !== null &&
+  "id" in value &&
+  typeof value.id === "string" &&
+  "runId" in value &&
+  typeof value.runId === "string" &&
+  "stepId" in value &&
+  typeof value.stepId === "string" &&
+  "status" in value &&
+  typeof value.status === "string" &&
+  "logs" in value &&
+  Array.isArray(value.logs);
+
+const isRunnerSnapshot = (value: unknown): value is RunnerSnapshot =>
+  typeof value === "object" &&
+  value !== null &&
+  "state" in value &&
+  typeof value.state === "string" &&
+  runnerStates.has(value.state as RunnerState) &&
+  "currentStepIndex" in value &&
+  typeof value.currentStepIndex === "number" &&
+  "totalSteps" in value &&
+  typeof value.totalSteps === "number" &&
+  "canStop" in value &&
+  typeof value.canStop === "boolean" &&
+  "canRetry" in value &&
+  typeof value.canRetry === "boolean" &&
+  (!("run" in value) || isTestRun(value.run));
+
 const semanticAppApi: SemanticAppApi = {
   getAppInfo: async () => {
     const appInfo: unknown = await ipcRenderer.invoke(APP_INFO_CHANNEL);
@@ -738,6 +814,82 @@ const semanticAppApi: SemanticAppApi = {
       throw new TypeError("Main process returned an invalid delete result.");
     }
     return wasDeleted;
+  },
+  startRun: async (input) => {
+    const snapshot: unknown = await ipcRenderer.invoke(
+      RUNNER_CHANNELS.start,
+      input,
+    );
+    if (!isRunnerSnapshot(snapshot)) {
+      throw new TypeError("Main process returned invalid runner data.");
+    }
+    return snapshot;
+  },
+  stopRun: async (runId) => {
+    const snapshot: unknown = await ipcRenderer.invoke(
+      RUNNER_CHANNELS.stop,
+      runId,
+    );
+    if (!isRunnerSnapshot(snapshot)) {
+      throw new TypeError("Main process returned invalid runner data.");
+    }
+    return snapshot;
+  },
+  retryRunStep: async (runId) => {
+    const snapshot: unknown = await ipcRenderer.invoke(
+      RUNNER_CHANNELS.retry,
+      runId,
+    );
+    if (!isRunnerSnapshot(snapshot)) {
+      throw new TypeError("Main process returned invalid runner data.");
+    }
+    return snapshot;
+  },
+  getRunnerStatus: async (projectId, testId) => {
+    const snapshot: unknown = await ipcRenderer.invoke(
+      RUNNER_CHANNELS.getStatus,
+      projectId,
+      testId,
+    );
+    if (!isRunnerSnapshot(snapshot)) {
+      throw new TypeError("Main process returned invalid runner data.");
+    }
+    return snapshot;
+  },
+  listTestRuns: async (projectId, testId) => {
+    const runs: unknown = await ipcRenderer.invoke(
+      RUNNER_CHANNELS.listRuns,
+      projectId,
+      testId,
+    );
+    if (!Array.isArray(runs) || !runs.every((run) => isTestRun(run))) {
+      throw new TypeError("Main process returned invalid test runs.");
+    }
+    return runs;
+  },
+  listRunStepResults: async (projectId, testId, runId) => {
+    const results: unknown = await ipcRenderer.invoke(
+      RUNNER_CHANNELS.listStepResults,
+      projectId,
+      testId,
+      runId,
+    );
+    if (
+      !Array.isArray(results) ||
+      !results.every((result) => isStepRunResult(result))
+    ) {
+      throw new TypeError("Main process returned invalid step results.");
+    }
+    return results;
+  },
+  onRunnerStatusChange: (listener) => {
+    const handleStatus = (_event: unknown, snapshot: unknown): void => {
+      if (isRunnerSnapshot(snapshot)) listener(snapshot);
+    };
+    ipcRenderer.on(RUNNER_CHANNELS.statusChanged, handleStatus);
+    return () => {
+      ipcRenderer.removeListener(RUNNER_CHANNELS.statusChanged, handleStatus);
+    };
   },
 };
 

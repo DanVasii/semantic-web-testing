@@ -252,6 +252,21 @@ export class PlaywrightBrowserManager implements BrowserManager {
     return capturePage(tracked.page, onProgress);
   }
 
+  public getRunnerPage(projectId: string): Page {
+    return this.requireCurrentProjectPage(projectId)[1].page;
+  }
+
+  public getRunnerContext(projectId: string): BrowserContext {
+    if (
+      this.context === undefined ||
+      this.session === undefined ||
+      this.session.projectId !== projectId
+    ) {
+      throw new Error("Browserul proiectului nu este pregătit pentru rulare.");
+    }
+    return this.context;
+  }
+
   public async submitBasicAuth(
     credentials: BasicAuthCredentials,
   ): Promise<BrowserNavigationResult> {

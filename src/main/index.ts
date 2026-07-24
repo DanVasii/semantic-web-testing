@@ -8,6 +8,7 @@ import {
   BROWSER_CHANNELS,
   PAGE_ANALYSIS_CHANNELS,
   PROJECT_CHANNELS,
+  RUNNER_CHANNELS,
   TEST_CHANNELS,
 } from "../shared/ipc.js";
 import type {
@@ -16,6 +17,7 @@ import type {
 } from "../shared/browser-manager.js";
 import type { BrowserConfig } from "../shared/persistence.js";
 import type { TestFlowItem } from "../shared/test-model.js";
+import type { StartRunInput } from "../shared/runner.js";
 import type { ProjectInput } from "../shared/projects.js";
 import type { TestInput } from "../shared/tests.js";
 import { createAppInfo } from "./app-info.js";
@@ -28,11 +30,13 @@ import {
   DatasetRepository,
   PageRepository,
   ProjectRepository,
+  RunRepository,
   TestRepository,
 } from "./persistence/repositories.js";
 import { PageAnalysisService } from "./page-analysis/page-analysis-service.js";
 import { ProjectsService } from "./projects-service.js";
 import { TestsService } from "./tests-service.js";
+import { TestRunnerService } from "./runner/test-runner-service.js";
 import { resolveRendererTarget } from "./renderer-target.js";
 import { createMainWindowOptions } from "./window-options.js";
 
@@ -98,6 +102,7 @@ void app
     const datasetRepository = new DatasetRepository(
       applicationDatabase.connection,
     );
+    const runRepository = new RunRepository(applicationDatabase.connection);
     const projectsService = new ProjectsService(projectRepository, {
       createId: randomUUID,
       now: () => new Date(),
@@ -122,6 +127,23 @@ void app
         snapshotRoot: join(app.getPath("userData"), "data", "test-versions"),
       },
     );
+    const testRunnerService = new TestRunnerService(
+      projectRepository,
+      testRepository,
+      datasetRepository,
+      pageRepository,
+      runRepository,
+      browserManager,
+      {
+        createId: randomUUID,
+        now: () => new Date(),
+      },
+    );
+    testRunnerService.onStatusChange((snapshot) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        window.webContents.send(RUNNER_CHANNELS.statusChanged, snapshot);
+      }
+    });
 
     ipcMain.handle(APP_INFO_CHANNEL, () =>
       createAppInfo(app.getVersion(), process.versions.electron),
@@ -230,6 +252,30 @@ void app
       TEST_CHANNELS.delete,
       (_event, projectId: string, testId: string) =>
         testsService.delete(projectId, testId),
+    );
+    ipcMain.handle(RUNNER_CHANNELS.start, (_event, input: StartRunInput) =>
+      testRunnerService.start(input),
+    );
+    ipcMain.handle(RUNNER_CHANNELS.stop, (_event, runId: string) =>
+      testRunnerService.stop(runId),
+    );
+    ipcMain.handle(RUNNER_CHANNELS.retry, (_event, runId: string) =>
+      testRunnerService.retry(runId),
+    );
+    ipcMain.handle(
+      RUNNER_CHANNELS.getStatus,
+      (_event, projectId: string, testId: string) =>
+        testRunnerService.getStatus(projectId, testId),
+    );
+    ipcMain.handle(
+      RUNNER_CHANNELS.listRuns,
+      (_event, projectId: string, testId: string) =>
+        testRunnerService.listRuns(projectId, testId),
+    );
+    ipcMain.handle(
+      RUNNER_CHANNELS.listStepResults,
+      (_event, projectId: string, testId: string, runId: string) =>
+        testRunnerService.listStepResults(projectId, testId, runId),
     );
 
     createMainWindow();

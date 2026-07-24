@@ -70,6 +70,19 @@ const createApi = (): SemanticAppApi => ({
   saveTestFlow: vi.fn().mockResolvedValue(testDefinition),
   listTestVersions: vi.fn().mockResolvedValue([]),
   deleteTest: vi.fn(),
+  startRun: vi.fn(),
+  stopRun: vi.fn(),
+  retryRunStep: vi.fn(),
+  getRunnerStatus: vi.fn().mockResolvedValue({
+    state: "idle",
+    currentStepIndex: -1,
+    totalSteps: 0,
+    canStop: false,
+    canRetry: false,
+  }),
+  listTestRuns: vi.fn().mockResolvedValue([]),
+  listRunStepResults: vi.fn().mockResolvedValue([]),
+  onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
 });
 
 afterEach(() => {

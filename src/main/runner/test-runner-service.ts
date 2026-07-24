@@ -1,0 +1,593 @@
+import type { BrowserContext, Page } from "playwright-core";
+
+import type {
+  BrowserLaunchOptions,
+  BrowserManagerStatus,
+  BrowserNavigationResult,
+  BrowserSession,
+  DetectedBrowser,
+} from "../../shared/browser-manager.js";
+import type {
+  JsonValue,
+  Project,
+  StepRunResult,
+  TestDataset,
+  TestDefinition,
+  TestRun,
+} from "../../shared/persistence.js";
+import {
+  type RunnerErrorDetails,
+  type RunnerSnapshot,
+  type StartRunInput,
+} from "../../shared/runner.js";
+import { toDeclarativeTestDefinition } from "../../shared/test-editor.js";
+import type { TestFlowItem } from "../../shared/test-model.js";
+import { validateDeclarativeTest } from "../../shared/test-validation.js";
+import {
+  DatasetRepository,
+  PageRepository,
+  ProjectRepository,
+  RunRepository,
+  TestRepository,
+} from "../persistence/repositories.js";
+import { materializeDataset } from "./dataset-values.js";
+import {
+  executeFlowItem,
+  StepExecutionError,
+  type StepExecutionResult,
+} from "./step-executor.js";
+
+export interface RunnerBrowserGateway {
+  detectAvailableBrowsers: () => Promise<DetectedBrowser[]>;
+  getStatus: () => BrowserManagerStatus;
+  launch: (options: BrowserLaunchOptions) => Promise<BrowserSession>;
+  openProjectUrl: (
+    projectId: string,
+    url: string,
+  ) => Promise<BrowserNavigationResult>;
+  getRunnerPage: (projectId: string) => Page;
+  getRunnerContext: (projectId: string) => BrowserContext;
+}
+
+export interface TestRunnerServiceOptions {
+  createId: () => string;
+  now: () => Date;
+  random?: () => number;
+}
+
+export type RunnerStatusListener = (snapshot: RunnerSnapshot) => void;
+
+interface RunnerSession {
+  project: Project;
+  test: TestDefinition;
+  dataset?: TestDataset;
+  datasetValues: Record<string, string>;
+  page: Page;
+  run: TestRun;
+  snapshot: RunnerSnapshot;
+  stopRequested: boolean;
+}
+
+const activeBrowserStates = new Set([
+  "starting",
+  "running",
+  "reconnecting",
+  "waiting_for_basic_auth",
+]);
+
+const copySnapshot = (snapshot: RunnerSnapshot): RunnerSnapshot => ({
+  ...snapshot,
+  ...(snapshot.run === undefined ? {} : { run: { ...snapshot.run } }),
+  ...(snapshot.error === undefined ? {} : { error: { ...snapshot.error } }),
+});
+
+const jsonError = (error: RunnerErrorDetails): JsonValue => ({
+  code: error.code,
+  message: error.message,
+  ...(error.count === undefined ? {} : { count: error.count }),
+  ...(error.stepId === undefined ? {} : { stepId: error.stepId }),
+});
+
+export class TestRunnerService {
+  private readonly listeners = new Set<RunnerStatusListener>();
+  private readonly sessions = new Map<string, RunnerSession>();
+  private readonly latestByTest = new Map<string, RunnerSnapshot>();
+
+  public constructor(
+    private readonly projectRepository: ProjectRepository,
+    private readonly testRepository: TestRepository,
+    private readonly datasetRepository: DatasetRepository,
+    private readonly pageRepository: PageRepository,
+    private readonly runRepository: RunRepository,
+    private readonly browser: RunnerBrowserGateway,
+    private readonly options: TestRunnerServiceOptions,
+  ) {}
+
+  public onStatusChange(listener: RunnerStatusListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  public async start(input: StartRunInput): Promise<RunnerSnapshot> {
+    const key = this.testKey(input.projectId, input.testId);
+    const existing = this.latestByTest.get(key);
+    if (existing?.canStop === true || existing?.canRetry === true) {
+      throw new Error(
+        "Testul are deja o rulare activă sau o eroare în review.",
+      );
+    }
+
+    const project = this.requireProject(input.projectId);
+    const test = this.requireTest(input.projectId, input.testId);
+    const datasets = this.datasetRepository.listByTest(test.id);
+    const dataset = this.selectDataset(datasets, input.datasetId);
+    this.assertRunnable(test, datasets);
+    this.publishForTest(project.id, test.id, {
+      state: "preparing",
+      currentStepIndex: -1,
+      totalSteps: test.flowItems.length,
+      message: "Se încarcă testul și dataset-ul.",
+      canStop: false,
+      canRetry: false,
+    });
+
+    try {
+      this.publishForTest(project.id, test.id, {
+        state: "browser_starting",
+        currentStepIndex: -1,
+        totalSteps: test.flowItems.length,
+        message: "Se pregătește browserul.",
+        canStop: false,
+        canRetry: false,
+      });
+      await this.prepareBrowser(project, test);
+      const page = this.browser.getRunnerPage(project.id);
+      const context = this.browser.getRunnerContext(project.id);
+      if (test.wipeBeforeRun) {
+        await this.wipeBrowserState(context, page, test.startUrl);
+      }
+
+      const startedAt = this.options.now().toISOString();
+      const run: TestRun = {
+        id: this.options.createId(),
+        projectId: project.id,
+        testId: test.id,
+        testVersion: test.version,
+        ...(dataset === undefined ? {} : { datasetId: dataset.id }),
+        startedAt,
+        status: "running",
+        browserType: project.browserConfig.browserType,
+        pageVersionIds: this.findPageVersionIds(test.flowItems),
+      };
+      this.runRepository.create(run);
+      const snapshot: RunnerSnapshot = {
+        state: "running",
+        run,
+        currentStepIndex: 0,
+        totalSteps: test.flowItems.length,
+        ...(test.flowItems[0] === undefined
+          ? {}
+          : { currentStepId: test.flowItems[0].id }),
+        message: "Rularea a început.",
+        canStop: true,
+        canRetry: false,
+      };
+      const session: RunnerSession = {
+        project,
+        test,
+        ...(dataset === undefined ? {} : { dataset }),
+        datasetValues: materializeDataset(dataset, {
+          createId: this.options.createId,
+          now: this.options.now,
+          random: this.options.random ?? Math.random,
+        }),
+        page,
+        run,
+        snapshot,
+        stopRequested: false,
+      };
+      this.sessions.set(run.id, session);
+      this.publish(session, snapshot);
+      void this.continueRun(session);
+      return copySnapshot(snapshot);
+    } catch (error) {
+      const details = this.toRunnerError(error);
+      this.publishForTest(project.id, test.id, {
+        state:
+          this.browser.getStatus().state === "waiting_for_basic_auth"
+            ? "waiting_for_basic_auth"
+            : "failed",
+        currentStepIndex: -1,
+        totalSteps: test.flowItems.length,
+        message: details.message,
+        error: details,
+        canStop: false,
+        canRetry: false,
+      });
+      throw error;
+    }
+  }
+
+  public stop(runId: string): RunnerSnapshot {
+    const session = this.requireSession(runId);
+    if (!session.snapshot.canStop) {
+      throw new Error("Rularea nu poate fi oprită în starea curentă.");
+    }
+    session.stopRequested = true;
+    const endedAt = this.options.now().toISOString();
+    session.run = { ...session.run, status: "stopped", endedAt };
+    this.runRepository.updateStatus(runId, "stopped", endedAt);
+    const snapshotWithoutError = { ...session.snapshot };
+    delete snapshotWithoutError.error;
+    this.publish(session, {
+      ...snapshotWithoutError,
+      state: "stopped",
+      run: session.run,
+      message: "Rularea a fost oprită manual.",
+      canStop: false,
+      canRetry: false,
+    });
+    return copySnapshot(session.snapshot);
+  }
+
+  public retry(runId: string): RunnerSnapshot {
+    const session = this.requireSession(runId);
+    if (!session.snapshot.canRetry) {
+      throw new Error("Pasul curent nu poate fi reîncercat.");
+    }
+    session.stopRequested = false;
+    session.run = {
+      ...session.run,
+      status: "running",
+    };
+    delete session.run.endedAt;
+    this.runRepository.updateStatus(runId, "running");
+    this.publish(session, {
+      ...session.snapshot,
+      state: "running",
+      run: session.run,
+      message: "Se reîncearcă pasul curent.",
+      canStop: true,
+      canRetry: false,
+    });
+    void this.continueRun(session);
+    return copySnapshot(session.snapshot);
+  }
+
+  public getStatus(projectId: string, testId: string): RunnerSnapshot {
+    this.requireTest(projectId, testId);
+    return copySnapshot(
+      this.latestByTest.get(this.testKey(projectId, testId)) ?? {
+        state: "idle",
+        currentStepIndex: -1,
+        totalSteps: 0,
+        canStop: false,
+        canRetry: false,
+      },
+    );
+  }
+
+  public listRuns(projectId: string, testId: string): TestRun[] {
+    this.requireTest(projectId, testId);
+    return this.runRepository
+      .listByProject(projectId)
+      .filter((run) => run.testId === testId);
+  }
+
+  public listStepResults(
+    projectId: string,
+    testId: string,
+    runId: string,
+  ): StepRunResult[] {
+    this.requireTest(projectId, testId);
+    const run = this.runRepository.findById(runId);
+    if (
+      run === undefined ||
+      run.projectId !== projectId ||
+      run.testId !== testId
+    ) {
+      throw new Error("Rularea nu există.");
+    }
+    return this.runRepository.listStepResults(runId);
+  }
+
+  private async continueRun(session: RunnerSession): Promise<void> {
+    while (session.snapshot.currentStepIndex < session.test.flowItems.length) {
+      if (session.stopRequested) return;
+      const index = session.snapshot.currentStepIndex;
+      const item = session.test.flowItems[index];
+      if (item === undefined) break;
+      const stepStartedAt = this.options.now().toISOString();
+      this.publish(session, {
+        ...session.snapshot,
+        state: "running",
+        currentStepId: item.id,
+        message: `Se execută pasul ${index + 1} din ${session.test.flowItems.length}.`,
+      });
+
+      if (!item.enabled) {
+        this.saveStepResult(
+          session,
+          item,
+          "skipped",
+          {
+            logs: [{ level: "info", message: "Pas dezactivat." }],
+          },
+          stepStartedAt,
+        );
+        session.snapshot.currentStepIndex += 1;
+        continue;
+      }
+
+      try {
+        const result = await executeFlowItem(
+          session.page,
+          item,
+          session.datasetValues,
+        );
+        if (session.stopRequested) {
+          this.saveStepResult(
+            session,
+            item,
+            "stopped",
+            {
+              logs: [
+                ...result.logs,
+                { level: "warning", message: "Rularea a fost oprită manual." },
+              ],
+            },
+            stepStartedAt,
+          );
+          return;
+        }
+        this.saveStepResult(session, item, "passed", result, stepStartedAt);
+        session.snapshot.currentStepIndex += 1;
+      } catch (error) {
+        const details = this.toRunnerError(error, item.id);
+        this.saveStepResult(
+          session,
+          item,
+          "failed",
+          { logs: [{ level: "error", message: details.message }] },
+          stepStartedAt,
+          details,
+        );
+        const endedAt = this.options.now().toISOString();
+        session.run = { ...session.run, status: "failed", endedAt };
+        this.runRepository.updateStatus(session.run.id, "failed", endedAt);
+        this.publish(session, {
+          ...session.snapshot,
+          state:
+            details.code === "missing_data"
+              ? "waiting_for_missing_data"
+              : "paused_on_error",
+          run: session.run,
+          message: details.message,
+          error: details,
+          canStop: false,
+          canRetry: true,
+        });
+        return;
+      }
+    }
+
+    if (session.stopRequested) return;
+    const endedAt = this.options.now().toISOString();
+    session.run = { ...session.run, status: "passed", endedAt };
+    this.runRepository.updateStatus(session.run.id, "passed", endedAt);
+    const completedSnapshot = { ...session.snapshot };
+    delete completedSnapshot.currentStepId;
+    delete completedSnapshot.error;
+    this.publish(session, {
+      ...completedSnapshot,
+      state: "completed",
+      run: session.run,
+      currentStepIndex: session.test.flowItems.length,
+      message: "Testul a trecut.",
+      canStop: false,
+      canRetry: false,
+    });
+  }
+
+  private saveStepResult(
+    session: RunnerSession,
+    item: TestFlowItem,
+    status: StepRunResult["status"],
+    execution: StepExecutionResult,
+    startedAt: string,
+    error?: RunnerErrorDetails,
+  ): void {
+    const endedAt = this.options.now().toISOString();
+    this.runRepository.createStepResult({
+      id: this.options.createId(),
+      runId: session.run.id,
+      stepId: item.id,
+      status,
+      startedAt,
+      endedAt,
+      ...(execution.locatorUsed === undefined
+        ? {}
+        : { locatorUsed: execution.locatorUsed }),
+      ...(error === undefined ? {} : { error: jsonError(error) }),
+      logs: execution.logs,
+    });
+  }
+
+  private async prepareBrowser(
+    project: Project,
+    test: TestDefinition,
+  ): Promise<void> {
+    const status = this.browser.getStatus();
+    if (
+      activeBrowserStates.has(status.state) &&
+      status.projectId !== project.id
+    ) {
+      throw new Error("Browserul activ aparține altui proiect.");
+    }
+    if (!activeBrowserStates.has(status.state)) {
+      const detections = await this.browser.detectAvailableBrowsers();
+      const detected = detections.find(
+        (candidate) =>
+          candidate.id === project.browserConfig.browserType &&
+          candidate.installed &&
+          candidate.supported,
+      );
+      if (detected === undefined) {
+        throw new StepExecutionError(
+          "browser_unavailable",
+          "Browserul configurat nu este disponibil.",
+        );
+      }
+      await this.browser.launch({
+        projectId: project.id,
+        browser: detected.id,
+        source: detected.source,
+        sessionMode: project.browserConfig.sessionMode,
+        ...(detected.executablePath === undefined
+          ? {}
+          : { executablePath: detected.executablePath }),
+        ...(project.browserConfig.profilePath === undefined
+          ? {}
+          : { profilePath: project.browserConfig.profilePath }),
+        ...(project.browserConfig.remoteDebuggingPort === undefined
+          ? {}
+          : {
+              remoteDebuggingPort: project.browserConfig.remoteDebuggingPort,
+            }),
+        ...(project.browserConfig.viewport === undefined
+          ? {}
+          : { viewport: project.browserConfig.viewport }),
+      });
+    }
+    const navigation = await this.browser.openProjectUrl(
+      project.id,
+      test.startUrl,
+    );
+    if (navigation.state !== "opened") {
+      throw new Error("Autentificarea HTTP trebuie finalizată înainte de run.");
+    }
+  }
+
+  private async wipeBrowserState(
+    context: BrowserContext,
+    page: Page,
+    startUrl: string,
+  ): Promise<void> {
+    const hostname = new URL(startUrl).hostname;
+    const escapedHostname = hostname.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    await context.clearCookies({
+      domain: new RegExp(`^\\.?${escapedHostname}$`, "i"),
+    });
+    await page.evaluate(() => {
+      localStorage.clear();
+      sessionStorage.clear();
+    });
+    await page.goto(startUrl, { waitUntil: "domcontentloaded" });
+  }
+
+  private assertRunnable(test: TestDefinition, datasets: TestDataset[]): void {
+    const validation = validateDeclarativeTest(
+      toDeclarativeTestDefinition(test, test.flowItems, datasets),
+    );
+    if (
+      !validation.valid ||
+      test.status !== "valid" ||
+      test.workflowState !== "ready"
+    ) {
+      throw new StepExecutionError(
+        "invalid_test",
+        "Testul trebuie să fie valid și pregătit de rulare.",
+      );
+    }
+  }
+
+  private selectDataset(
+    datasets: TestDataset[],
+    datasetId: string | undefined,
+  ): TestDataset | undefined {
+    if (datasetId === undefined) return datasets[0];
+    const dataset = datasets.find((candidate) => candidate.id === datasetId);
+    if (dataset === undefined) {
+      throw new StepExecutionError(
+        "dataset_missing",
+        "Dataset-ul selectat nu există pentru acest test.",
+      );
+    }
+    return dataset;
+  }
+
+  private findPageVersionIds(items: TestFlowItem[]): string[] {
+    const ids = new Set<string>();
+    for (const item of items) {
+      if (item.type !== "action" || item.pageId === undefined) continue;
+      const version = this.pageRepository.findLatestVersion(item.pageId);
+      if (version !== undefined) ids.add(version.id);
+    }
+    return [...ids];
+  }
+
+  private requireProject(projectId: string): Project {
+    const project = this.projectRepository.findById(projectId);
+    if (project === undefined) throw new Error("Proiectul nu există.");
+    return project;
+  }
+
+  private requireTest(projectId: string, testId: string): TestDefinition {
+    const test = this.testRepository.findById(testId);
+    if (test === undefined || test.projectId !== projectId) {
+      throw new Error("Testul nu există.");
+    }
+    return test;
+  }
+
+  private requireSession(runId: string): RunnerSession {
+    const session = this.sessions.get(runId);
+    if (session === undefined) throw new Error("Rularea nu există.");
+    return session;
+  }
+
+  private testKey(projectId: string, testId: string): string {
+    return `${projectId}:${testId}`;
+  }
+
+  private publish(session: RunnerSession, snapshot: RunnerSnapshot): void {
+    session.snapshot = snapshot;
+    this.latestByTest.set(
+      this.testKey(session.project.id, session.test.id),
+      snapshot,
+    );
+    this.emit(snapshot);
+  }
+
+  private publishForTest(
+    projectId: string,
+    testId: string,
+    snapshot: RunnerSnapshot,
+  ): void {
+    this.latestByTest.set(this.testKey(projectId, testId), snapshot);
+    this.emit(snapshot);
+  }
+
+  private emit(snapshot: RunnerSnapshot): void {
+    for (const listener of this.listeners) listener(copySnapshot(snapshot));
+  }
+
+  private toRunnerError(error: unknown, stepId?: string): RunnerErrorDetails {
+    if (error instanceof StepExecutionError) {
+      return {
+        code: error.code,
+        message: error.message,
+        ...(error.count === undefined ? {} : { count: error.count }),
+        ...(stepId === undefined ? {} : { stepId }),
+      };
+    }
+    return {
+      code: "step_failed",
+      message:
+        error instanceof Error ? error.message : "Eroare necunoscută la run.",
+      ...(stepId === undefined ? {} : { stepId }),
+    };
+  }
+}
