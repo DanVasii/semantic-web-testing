@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import {
   APP_INFO_CHANNEL,
   BROWSER_CHANNELS,
+  PAGE_ANALYSIS_CHANNELS,
   PROJECT_CHANNELS,
 } from "../shared/ipc.js";
 import type {
@@ -20,7 +21,11 @@ import {
   openApplicationDatabase,
   type ApplicationDatabase,
 } from "./persistence/database.js";
-import { ProjectRepository } from "./persistence/repositories.js";
+import {
+  PageRepository,
+  ProjectRepository,
+} from "./persistence/repositories.js";
+import { PageAnalysisService } from "./page-analysis/page-analysis-service.js";
 import { ProjectsService } from "./projects-service.js";
 import { resolveRendererTarget } from "./renderer-target.js";
 import { createMainWindowOptions } from "./window-options.js";
@@ -79,9 +84,20 @@ void app
       );
     }
 
-    const projectsService = new ProjectsService(
-      new ProjectRepository(applicationDatabase.connection),
+    const projectRepository = new ProjectRepository(
+      applicationDatabase.connection,
+    );
+    const pageRepository = new PageRepository(applicationDatabase.connection);
+    const projectsService = new ProjectsService(projectRepository, {
+      createId: randomUUID,
+      now: () => new Date(),
+    });
+    const pageAnalysisService = new PageAnalysisService(
+      projectRepository,
+      pageRepository,
+      browserManager,
       {
+        artifactRoot: join(app.getPath("userData"), "data", "artifacts"),
         createId: randomUUID,
         now: () => new Date(),
       },
@@ -144,6 +160,23 @@ void app
     });
     ipcMain.handle(BROWSER_CHANNELS.getStatus, () =>
       browserManager.getStatus(),
+    );
+    ipcMain.handle(
+      PAGE_ANALYSIS_CHANNELS.getCurrentTarget,
+      (_event, projectId: string) =>
+        pageAnalysisService.getCurrentTarget(projectId),
+    );
+    ipcMain.handle(
+      PAGE_ANALYSIS_CHANNELS.analyzeCurrent,
+      (event, projectId: string) =>
+        pageAnalysisService.analyzeCurrentPage(projectId, (progress) => {
+          if (!event.sender.isDestroyed()) {
+            event.sender.send(PAGE_ANALYSIS_CHANNELS.progress, progress);
+          }
+        }),
+    );
+    ipcMain.handle(PAGE_ANALYSIS_CHANNELS.list, (_event, projectId: string) =>
+      pageAnalysisService.listAnalyzedPages(projectId),
     );
 
     createMainWindow();

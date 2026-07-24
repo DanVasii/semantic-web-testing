@@ -151,6 +151,46 @@ h2 {
   min-height: 240px;
 }
 
+form {
+  display: grid;
+  gap: 12px;
+}
+
+label {
+  font-weight: 700;
+}
+
+input,
+select,
+button {
+  min-height: 42px;
+  border: 1px solid #cfc6bd;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font: inherit;
+}
+
+button {
+  color: #ffffff;
+  background: #d8520c;
+  font-weight: 750;
+}
+
+button:disabled {
+  color: #746a63;
+  background: #eee9e4;
+}
+
+.fixture-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fixture-checkbox input {
+  min-height: auto;
+}
+
 footer {
   display: flex;
   justify-content: space-between;

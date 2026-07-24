@@ -63,6 +63,17 @@ const createApi = (
   selectBrowserProfilePath: vi.fn(),
   getBrowserStatus: vi.fn().mockResolvedValue({ state: "idle" }),
   onBrowserStatusChange: vi.fn().mockReturnValue(vi.fn()),
+  getCurrentPageAnalysisTarget: vi.fn().mockResolvedValue({
+    projectId: overview.project.id,
+    tabId: "tab-1",
+    url: overview.project.normalizedBaseUrl,
+    normalizedUrl: overview.project.normalizedBaseUrl,
+    title: overview.project.name,
+    isAnalyzed: false,
+  }),
+  analyzeCurrentPage: vi.fn(),
+  listAnalyzedPages: vi.fn().mockResolvedValue([]),
+  onPageAnalysisProgress: vi.fn().mockReturnValue(vi.fn()),
 });
 
 beforeEach(() => {

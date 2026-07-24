@@ -1,6 +1,12 @@
 import type { ProjectInput, ProjectOverview } from "./projects.js";
 import type { BrowserConfig } from "./persistence.js";
 import type {
+  AnalyzedPageSummary,
+  PageAnalysisProgress,
+  PageAnalysisResult,
+  PageAnalysisTarget,
+} from "./page-analysis.js";
+import type {
   BrowserLaunchOptions,
   BrowserManagerStatus,
   BrowserNavigationResult,
@@ -33,6 +39,13 @@ export const BROWSER_CHANNELS = {
   selectProfilePath: "browsers:select-profile-path",
   getStatus: "browsers:get-status",
   statusChanged: "browsers:status-changed",
+} as const;
+
+export const PAGE_ANALYSIS_CHANNELS = {
+  getCurrentTarget: "pages:get-current-analysis-target",
+  analyzeCurrent: "pages:analyze-current",
+  list: "pages:list-analyses",
+  progress: "pages:analysis-progress",
 } as const;
 
 export interface AppInfo {
@@ -70,5 +83,13 @@ export interface SemanticAppApi {
   getBrowserStatus: () => Promise<BrowserManagerStatus>;
   onBrowserStatusChange: (
     listener: (status: BrowserManagerStatus) => void,
+  ) => () => void;
+  getCurrentPageAnalysisTarget: (
+    projectId: string,
+  ) => Promise<PageAnalysisTarget>;
+  analyzeCurrentPage: (projectId: string) => Promise<PageAnalysisResult>;
+  listAnalyzedPages: (projectId: string) => Promise<AnalyzedPageSummary[]>;
+  onPageAnalysisProgress: (
+    listener: (progress: PageAnalysisProgress) => void,
   ) => () => void;
 }

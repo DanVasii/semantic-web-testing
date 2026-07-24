@@ -10,7 +10,19 @@ import type {
   DetectedBrowser,
 } from "../shared/browser-manager.js";
 import type { ProjectOverview } from "../shared/projects.js";
-import type { BrowserConfig } from "../shared/persistence.js";
+import type {
+  BrowserConfig,
+  Page,
+  PageVersion,
+} from "../shared/persistence.js";
+import type {
+  AnalyzedPageSummary,
+  InaccessibleStylesheet,
+  PageAnalysisCounts,
+  PageAnalysisProgress,
+  PageAnalysisResult,
+  PageAnalysisTarget,
+} from "../shared/page-analysis.js";
 
 const APP_INFO_CHANNEL: AppInfoChannel = "app:get-info";
 const PROJECT_CHANNELS = {
@@ -32,6 +44,12 @@ const BROWSER_CHANNELS = {
   selectProfilePath: "browsers:select-profile-path",
   getStatus: "browsers:get-status",
   statusChanged: "browsers:status-changed",
+} as const;
+const PAGE_ANALYSIS_CHANNELS = {
+  getCurrentTarget: "pages:get-current-analysis-target",
+  analyzeCurrent: "pages:analyze-current",
+  list: "pages:list-analyses",
+  progress: "pages:analysis-progress",
 } as const;
 
 const isAppInfo = (value: unknown): value is AppInfo => {
@@ -185,6 +203,173 @@ const isBrowserStatus = (value: unknown): value is BrowserManagerStatus => {
     isBasicAuthChallenge(value.basicAuthChallenge)
   );
 };
+
+const isPage = (value: unknown): value is Page =>
+  typeof value === "object" &&
+  value !== null &&
+  "id" in value &&
+  typeof value.id === "string" &&
+  "projectId" in value &&
+  typeof value.projectId === "string" &&
+  "name" in value &&
+  typeof value.name === "string" &&
+  "url" in value &&
+  typeof value.url === "string" &&
+  "normalizedUrl" in value &&
+  typeof value.normalizedUrl === "string" &&
+  "createdAt" in value &&
+  typeof value.createdAt === "string" &&
+  "updatedAt" in value &&
+  typeof value.updatedAt === "string";
+
+const isPageVersion = (value: unknown): value is PageVersion =>
+  typeof value === "object" &&
+  value !== null &&
+  "id" in value &&
+  typeof value.id === "string" &&
+  "pageId" in value &&
+  typeof value.pageId === "string" &&
+  "versionNumber" in value &&
+  typeof value.versionNumber === "number" &&
+  "createdAt" in value &&
+  typeof value.createdAt === "string" &&
+  "normalizedUrl" in value &&
+  typeof value.normalizedUrl === "string" &&
+  "domFilePath" in value &&
+  typeof value.domFilePath === "string" &&
+  "cssFilePath" in value &&
+  typeof value.cssFilePath === "string" &&
+  "accessibilityFilePath" in value &&
+  typeof value.accessibilityFilePath === "string" &&
+  "analysisFilePath" in value &&
+  typeof value.analysisFilePath === "string" &&
+  "semanticHash" in value &&
+  typeof value.semanticHash === "string";
+
+const isPageAnalysisCounts = (value: unknown): value is PageAnalysisCounts => {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  return [
+    "visibleTexts",
+    "interactiveElements",
+    "forms",
+    "inputs",
+    "buttons",
+    "links",
+    "selectableElements",
+    "inlineStyles",
+    "styleTags",
+    "externalStylesheets",
+  ].every(
+    (key) =>
+      key in value &&
+      typeof (value as Record<string, unknown>)[key] === "number",
+  );
+};
+
+const isInaccessibleStylesheet = (
+  value: unknown,
+): value is InaccessibleStylesheet =>
+  typeof value === "object" &&
+  value !== null &&
+  "href" in value &&
+  typeof value.href === "string" &&
+  "reason" in value &&
+  typeof value.reason === "string";
+
+const hasStylesheetFailures = (
+  value: object,
+): value is {
+  inaccessibleStylesheets: InaccessibleStylesheet[];
+} =>
+  "inaccessibleStylesheets" in value &&
+  Array.isArray(value.inaccessibleStylesheets) &&
+  value.inaccessibleStylesheets.every(isInaccessibleStylesheet);
+
+const isPageAnalysisTarget = (value: unknown): value is PageAnalysisTarget =>
+  typeof value === "object" &&
+  value !== null &&
+  "projectId" in value &&
+  typeof value.projectId === "string" &&
+  "tabId" in value &&
+  typeof value.tabId === "string" &&
+  "url" in value &&
+  typeof value.url === "string" &&
+  "normalizedUrl" in value &&
+  typeof value.normalizedUrl === "string" &&
+  "title" in value &&
+  typeof value.title === "string" &&
+  "isAnalyzed" in value &&
+  typeof value.isAnalyzed === "boolean" &&
+  (!("pageId" in value) || typeof value.pageId === "string") &&
+  (!("latestVersionNumber" in value) ||
+    typeof value.latestVersionNumber === "number");
+
+const isPageAnalysisResult = (value: unknown): value is PageAnalysisResult =>
+  typeof value === "object" &&
+  value !== null &&
+  "projectId" in value &&
+  typeof value.projectId === "string" &&
+  "page" in value &&
+  isPage(value.page) &&
+  "version" in value &&
+  isPageVersion(value.version) &&
+  "title" in value &&
+  typeof value.title === "string" &&
+  "url" in value &&
+  typeof value.url === "string" &&
+  "normalizedUrl" in value &&
+  typeof value.normalizedUrl === "string" &&
+  "capturedAt" in value &&
+  typeof value.capturedAt === "string" &&
+  "counts" in value &&
+  isPageAnalysisCounts(value.counts) &&
+  hasStylesheetFailures(value) &&
+  "artifactDirectory" in value &&
+  typeof value.artifactDirectory === "string";
+
+const isAnalyzedPageSummary = (value: unknown): value is AnalyzedPageSummary =>
+  typeof value === "object" &&
+  value !== null &&
+  "page" in value &&
+  isPage(value.page) &&
+  "latestVersion" in value &&
+  isPageVersion(value.latestVersion) &&
+  "title" in value &&
+  typeof value.title === "string" &&
+  "counts" in value &&
+  isPageAnalysisCounts(value.counts) &&
+  hasStylesheetFailures(value);
+
+const pageAnalysisStages = new Set([
+  "preparing",
+  "capturing_html",
+  "capturing_accessibility",
+  "capturing_elements",
+  "capturing_styles",
+  "saving_artifacts",
+  "creating_version",
+  "completed",
+]);
+
+const isPageAnalysisProgress = (
+  value: unknown,
+): value is PageAnalysisProgress =>
+  typeof value === "object" &&
+  value !== null &&
+  "projectId" in value &&
+  typeof value.projectId === "string" &&
+  "stage" in value &&
+  typeof value.stage === "string" &&
+  pageAnalysisStages.has(value.stage) &&
+  "completedSteps" in value &&
+  typeof value.completedSteps === "number" &&
+  "totalSteps" in value &&
+  typeof value.totalSteps === "number" &&
+  "message" in value &&
+  typeof value.message === "string";
 
 const semanticAppApi: SemanticAppApi = {
   getAppInfo: async () => {
@@ -341,6 +526,60 @@ const semanticAppApi: SemanticAppApi = {
       ipcRenderer.removeListener(
         BROWSER_CHANNELS.statusChanged,
         handleStatusChange,
+      );
+    };
+  },
+  getCurrentPageAnalysisTarget: async (projectId) => {
+    const target: unknown = await ipcRenderer.invoke(
+      PAGE_ANALYSIS_CHANNELS.getCurrentTarget,
+      projectId,
+    );
+
+    if (!isPageAnalysisTarget(target)) {
+      throw new TypeError("Main process returned an invalid analysis target.");
+    }
+
+    return target;
+  },
+  analyzeCurrentPage: async (projectId) => {
+    const result: unknown = await ipcRenderer.invoke(
+      PAGE_ANALYSIS_CHANNELS.analyzeCurrent,
+      projectId,
+    );
+
+    if (!isPageAnalysisResult(result)) {
+      throw new TypeError("Main process returned invalid page analysis data.");
+    }
+
+    return result;
+  },
+  listAnalyzedPages: async (projectId) => {
+    const pages: unknown = await ipcRenderer.invoke(
+      PAGE_ANALYSIS_CHANNELS.list,
+      projectId,
+    );
+
+    if (
+      !Array.isArray(pages) ||
+      !pages.every((page) => isAnalyzedPageSummary(page))
+    ) {
+      throw new TypeError("Main process returned an invalid analysis list.");
+    }
+
+    return pages;
+  },
+  onPageAnalysisProgress: (listener) => {
+    const handleProgress = (_event: unknown, progress: unknown): void => {
+      if (isPageAnalysisProgress(progress)) {
+        listener(progress);
+      }
+    };
+
+    ipcRenderer.on(PAGE_ANALYSIS_CHANNELS.progress, handleProgress);
+    return () => {
+      ipcRenderer.removeListener(
+        PAGE_ANALYSIS_CHANNELS.progress,
+        handleProgress,
       );
     };
   },

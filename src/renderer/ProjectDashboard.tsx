@@ -12,6 +12,7 @@ import { Toast, type ToastVariant } from "./components/Toast.js";
 import { BrowserSelector } from "./BrowserSelector.js";
 import { BasicAuthDialog } from "./BasicAuthDialog.js";
 import { ProjectFormModal } from "./ProjectFormModal.js";
+import { PageAnalysisPanel } from "./PageAnalysisPanel.js";
 
 const LAST_PROJECT_STORAGE_KEY = "semantic-app:last-project-id";
 
@@ -117,6 +118,23 @@ export const ProjectDashboard = ({
       ),
     );
   }, []);
+
+  const refreshProjectOverview = useCallback(
+    async (projectId: string): Promise<void> => {
+      try {
+        const loadedProjects = await api.listProjects();
+        const updated = loadedProjects.find(
+          ({ project }) => project.id === projectId,
+        );
+        if (updated !== undefined) {
+          updateProjectOverview(updated);
+        }
+      } catch {
+        // Analiza este deja salvată; statisticile se vor reîncărca la redeschidere.
+      }
+    },
+    [api, updateProjectOverview],
+  );
 
   const submitBasicAuth = async (
     credentials: BasicAuthCredentials,
@@ -408,6 +426,9 @@ export const ProjectDashboard = ({
             <ProjectOverviewPanel
               api={api}
               browserStatus={browserStatus}
+              onPageAnalyzed={() => {
+                void refreshProjectOverview(selectedProject.project.id);
+              }}
               onProjectUpdated={updateProjectOverview}
               overview={selectedProject}
             />
@@ -482,11 +503,13 @@ export const ProjectDashboard = ({
 const ProjectOverviewPanel = ({
   api,
   browserStatus,
+  onPageAnalyzed,
   onProjectUpdated,
   overview,
 }: {
   api: SemanticAppApi;
   browserStatus: BrowserManagerStatus;
+  onPageAnalyzed: () => void;
   onProjectUpdated: (overview: ProjectOverview) => void;
   overview: ProjectOverview;
 }) => {
@@ -556,6 +579,12 @@ const ProjectOverviewPanel = ({
         browserStatus={browserStatus}
         onProjectUpdated={onProjectUpdated}
         project={project}
+      />
+      <PageAnalysisPanel
+        api={api}
+        browserStatus={browserStatus}
+        project={project}
+        onAnalysisCompleted={onPageAnalyzed}
       />
     </article>
   );

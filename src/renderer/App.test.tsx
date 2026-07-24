@@ -31,6 +31,10 @@ describe("App", () => {
       selectBrowserProfilePath: vi.fn(),
       getBrowserStatus: vi.fn().mockResolvedValue({ state: "idle" }),
       onBrowserStatusChange: vi.fn().mockReturnValue(vi.fn()),
+      getCurrentPageAnalysisTarget: vi.fn(),
+      analyzeCurrentPage: vi.fn(),
+      listAnalyzedPages: vi.fn().mockResolvedValue([]),
+      onPageAnalysisProgress: vi.fn().mockReturnValue(vi.fn()),
     };
     window.semanticApp = api;
 

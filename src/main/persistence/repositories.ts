@@ -285,6 +285,22 @@ export class PageRepository {
     ).map(mapPage);
   }
 
+  public findByProjectAndNormalizedUrl(
+    projectId: string,
+    normalizedUrl: string,
+  ): Page | undefined {
+    const row = asRow(
+      this.database
+        .prepare(
+          `SELECT * FROM pages
+           WHERE project_id = ? AND normalized_url = ?
+           ORDER BY created_at, id LIMIT 1`,
+        )
+        .get(projectId, normalizedUrl),
+    );
+    return row === undefined ? undefined : mapPage(row);
+  }
+
   public update(page: Page): Page {
     this.database
       .prepare(
@@ -336,6 +352,18 @@ export class PageRepository {
         )
         .all(pageId),
     ).map(mapPageVersion);
+  }
+
+  public findLatestVersion(pageId: string): PageVersion | undefined {
+    const row = asRow(
+      this.database
+        .prepare(
+          `SELECT * FROM page_versions
+           WHERE page_id = ? ORDER BY version_number DESC LIMIT 1`,
+        )
+        .get(pageId),
+    );
+    return row === undefined ? undefined : mapPageVersion(row);
   }
 }
 

@@ -107,6 +107,10 @@ const createApi = (): SemanticAppApi => ({
   selectBrowserProfilePath: vi.fn().mockResolvedValue("D:\\profiles\\semantic"),
   getBrowserStatus: vi.fn().mockResolvedValue({ state: "idle" }),
   onBrowserStatusChange: vi.fn().mockReturnValue(vi.fn()),
+  getCurrentPageAnalysisTarget: vi.fn(),
+  analyzeCurrentPage: vi.fn(),
+  listAnalyzedPages: vi.fn().mockResolvedValue([]),
+  onPageAnalysisProgress: vi.fn().mockReturnValue(vi.fn()),
 });
 
 const idleStatus: BrowserManagerStatus = { state: "idle" };

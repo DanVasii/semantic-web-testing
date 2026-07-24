@@ -27,6 +27,11 @@ import type {
   DetectedBrowser,
 } from "../../shared/browser-manager.js";
 import { detectBrowsers } from "./browser-detection.js";
+import {
+  capturePage,
+  type PageCapture,
+  type PageCaptureProgressListener,
+} from "../page-analysis/page-capture.js";
 
 type BrowserContextOptions = NonNullable<Parameters<Browser["newContext"]>[0]>;
 type PersistentContextOptions = NonNullable<
@@ -222,6 +227,29 @@ export class PlaywrightBrowserManager implements BrowserManager {
       await page.close().catch(() => undefined);
       throw error;
     }
+  }
+
+  public async getCurrentPageMetadata(projectId: string): Promise<{
+    tabId: string;
+    projectId: string;
+    url: string;
+    title: string;
+  }> {
+    const [tabId, tracked] = this.requireCurrentProjectPage(projectId);
+    return {
+      tabId,
+      projectId,
+      url: tracked.page.url(),
+      title: await tracked.page.title(),
+    };
+  }
+
+  public async captureCurrentPage(
+    projectId: string,
+    onProgress?: PageCaptureProgressListener,
+  ): Promise<PageCapture> {
+    const [, tracked] = this.requireCurrentProjectPage(projectId);
+    return capturePage(tracked.page, onProgress);
   }
 
   public async submitBasicAuth(
@@ -709,10 +737,53 @@ export class PlaywrightBrowserManager implements BrowserManager {
     page.once("close", () => {
       this.pages.delete(tabId);
     });
+    page.on("domcontentloaded", () => {
+      this.markPageRecent(tabId);
+    });
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) {
+        this.markPageRecent(tabId);
+      }
+    });
     page.on("popup", (popup) => {
       this.trackPage(projectId, popup);
     });
     return tabId;
+  }
+
+  private markPageRecent(tabId: string): void {
+    const tracked = this.pages.get(tabId);
+    if (tracked === undefined) {
+      return;
+    }
+
+    this.pages.delete(tabId);
+    this.pages.set(tabId, tracked);
+  }
+
+  private requireCurrentProjectPage(projectId: string): [string, TrackedPage] {
+    if (this.session === undefined || this.context === undefined) {
+      throw new Error("Pornește browserul înainte de a analiza pagina.");
+    }
+
+    if (this.session.projectId !== projectId) {
+      throw new Error("Browserul activ aparține altui proiect.");
+    }
+
+    const current = [...this.pages.entries()]
+      .reverse()
+      .find(
+        ([, tracked]) =>
+          tracked.projectId === projectId &&
+          !tracked.page.isClosed() &&
+          /^https?:\/\//i.test(tracked.page.url()),
+      );
+
+    if (current === undefined) {
+      throw new Error("Nu există o pagină web deschisă pentru analiză.");
+    }
+
+    return current;
   }
 
   private createSession(options: BrowserLaunchOptions): BrowserSession {

@@ -6,6 +6,11 @@
     <meta name="color-scheme" content="light" />
     <title>Fixture web semantic</title>
     <link rel="stylesheet" href="/styles.css" />
+    <style>
+      .fixture-inline-style-tag {
+        border-color: #d8520c;
+      }
+    </style>
   </head>
   <body>
     <header class="topbar">
@@ -46,6 +51,50 @@
       >
         <h2 id="target-title">Țintă de navigare</h2>
         <p data-testid="fixture-navigation-target">navigation-ready</p>
+      </section>
+
+      <section
+        class="target-card fixture-inline-style-tag"
+        aria-labelledby="fixture-form-title"
+        data-component="customer-form"
+      >
+        <h2 id="fixture-form-title">Formular de verificare</h2>
+        <form action="/submit" method="post" data-testid="fixture-form">
+          <label for="customer-email">Email client</label>
+          <input
+            id="customer-email"
+            name="customer_email"
+            type="email"
+            placeholder="client@example.test"
+            aria-describedby="email-help"
+            data-field="customer_email"
+          />
+          <small id="email-help">Adresă folosită doar în fixture.</small>
+
+          <label class="fixture-checkbox">
+            <input
+              name="newsletter"
+              type="checkbox"
+              checked
+              data-field="newsletter"
+            />
+            Primește noutăți
+          </label>
+
+          <select name="service" aria-label="Serviciu" data-field="service">
+            <option value="">Alege serviciul</option>
+            <option value="semantic" selected>Testare semantică</option>
+          </select>
+
+          <button
+            type="submit"
+            data-testid="fixture-submit"
+            style="letter-spacing: 0.01em"
+          >
+            Trimite formularul
+          </button>
+          <button type="button" disabled>Acțiune indisponibilă</button>
+        </form>
       </section>
     </main>
 

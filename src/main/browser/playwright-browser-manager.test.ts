@@ -14,6 +14,15 @@ import {
 const createPage = () => ({
   goto: vi.fn().mockResolvedValue(null),
   url: vi.fn().mockReturnValue("https://example.test/shop"),
+  title: vi.fn().mockResolvedValue("Magazin"),
+  content: vi.fn().mockResolvedValue("<html><body>Magazin</body></html>"),
+  waitForLoadState: vi.fn().mockResolvedValue(undefined),
+  locator: vi.fn().mockReturnValue({
+    ariaSnapshot: vi.fn().mockResolvedValue('- heading "Magazin"'),
+  }),
+  evaluate: vi.fn(),
+  isClosed: vi.fn().mockReturnValue(false),
+  mainFrame: vi.fn().mockReturnValue({ id: "main-frame" }),
   once: vi.fn(),
   on: vi.fn(),
   close: vi.fn().mockResolvedValue(undefined),
@@ -313,6 +322,60 @@ describe("PlaywrightBrowserManager navigation and lifecycle", () => {
       state: "running",
       canReconnect: false,
     });
+  });
+
+  it("captures the most recently tracked project page for analysis", async () => {
+    const { engines, manager } = createManager();
+    engines.chromium.page.evaluate
+      .mockResolvedValueOnce({
+        serializedDom: "<html><body><button>Continuă</button></body></html>",
+        visibleTexts: [
+          { path: "/html[1]/body[1]/button[1]", text: "Continuă" },
+        ],
+        interactiveElements: [],
+        ariaElements: [],
+        dataElements: [],
+        statefulElements: [],
+        forms: [],
+        inputs: [],
+        buttons: [],
+        links: [],
+        selectableElements: [],
+        shadowRoots: [],
+      })
+      .mockResolvedValueOnce({
+        inlineStyles: [],
+        styleTags: [],
+        stylesheets: [
+          {
+            order: 0,
+            href: "https://example.test/styles.css",
+            media: "",
+            disabled: false,
+            accessible: true,
+            cssText: "button { color: red; }",
+            failureReason: null,
+          },
+        ],
+      });
+    await manager.launch(launchOptions("chromium", "playwright"));
+    await manager.openProjectUrl("project-1", "https://example.test/shop");
+
+    expect(await manager.getCurrentPageMetadata("project-1")).toMatchObject({
+      tabId: "tab-1",
+      url: "https://example.test/shop",
+      title: "Magazin",
+    });
+    const capture = await manager.captureCurrentPage("project-1");
+
+    expect(capture).toMatchObject({
+      title: "Magazin",
+      counts: {
+        visibleTexts: 1,
+        externalStylesheets: 1,
+      },
+    });
+    expect(capture.css).toContain("button { color: red; }");
   });
 
   it("reconnects to an existing CDP browser without relaunching Chrome", async () => {
