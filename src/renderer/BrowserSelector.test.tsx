@@ -6,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SemanticAppApi } from "../shared/ipc.js";
 import type { Project } from "../shared/persistence.js";
-import type { DetectedBrowser } from "../shared/browser-manager.js";
+import type {
+  BrowserManagerStatus,
+  DetectedBrowser,
+} from "../shared/browser-manager.js";
 import { BrowserSelector } from "./BrowserSelector.js";
 
 const project: Project = {
@@ -72,7 +75,17 @@ const createApi = (): SemanticAppApi => ({
     sessionMode: "temporary",
     startedAt: "2026-07-24T12:00:00.000Z",
   }),
+  openProjectUrl: vi.fn().mockResolvedValue({
+    id: "tab-1",
+    projectId: project.id,
+    url: project.normalizedBaseUrl,
+  }),
+  closeBrowser: vi.fn().mockResolvedValue(undefined),
+  getBrowserStatus: vi.fn().mockResolvedValue({ state: "idle" }),
+  onBrowserStatusChange: vi.fn().mockReturnValue(vi.fn()),
 });
+
+const idleStatus: BrowserManagerStatus = { state: "idle" };
 
 beforeEach(() => {
   localStorage.clear();
@@ -85,7 +98,13 @@ afterEach(() => {
 
 describe("BrowserSelector", () => {
   it("lists only installed and supported browsers", async () => {
-    render(<BrowserSelector api={createApi()} project={project} />);
+    render(
+      <BrowserSelector
+        api={createApi()}
+        browserStatus={idleStatus}
+        project={project}
+      />,
+    );
 
     const select = await screen.findByLabelText("Browser disponibil");
     const optionLabels = Array.from(
@@ -100,14 +119,20 @@ describe("BrowserSelector", () => {
   it("launches the selected installation with its executable path", async () => {
     const user = userEvent.setup();
     const api = createApi();
-    render(<BrowserSelector api={api} project={project} />);
+    render(
+      <BrowserSelector
+        api={api}
+        browserStatus={idleStatus}
+        project={project}
+      />,
+    );
 
     await user.selectOptions(
       await screen.findByLabelText("Browser disponibil"),
       "playwright:webkit",
     );
     await user.click(
-      screen.getByRole("button", { name: "Pornește browserul" }),
+      screen.getByRole("button", { name: "Pornește și deschide" }),
     );
 
     await waitFor(() => {
@@ -119,11 +144,53 @@ describe("BrowserSelector", () => {
         executablePath: "C:\\Playwright\\webkit.exe",
       });
     });
+    expect(api.openProjectUrl).toHaveBeenCalledWith(
+      "project-1",
+      "https://example.test/",
+    );
     expect(
-      await screen.findByText("WebKit (Playwright) a fost pornit."),
+      await screen.findByText(
+        "WebKit (Playwright) a fost pornit și URL-ul proiectului a fost deschis.",
+      ),
     ).not.toBeNull();
     expect(localStorage.getItem("semantic-app:browser:project-1")).toBe(
       "playwright:webkit",
     );
+  });
+
+  it("opens another tab and closes an active browser", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    const runningStatus: BrowserManagerStatus = {
+      state: "running",
+      browser: "chrome",
+      projectId: project.id,
+      sessionId: "session-1",
+    };
+    render(
+      <BrowserSelector
+        api={api}
+        browserStatus={runningStatus}
+        project={project}
+      />,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "Deschide URL-ul" }),
+    );
+    expect(api.openProjectUrl).toHaveBeenCalledWith(
+      "project-1",
+      "https://example.test/",
+    );
+    expect(
+      await screen.findByText(
+        "URL-ul proiectului a fost deschis într-un tab nou.",
+      ),
+    ).not.toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Închide browserul" }));
+    await waitFor(() => {
+      expect(api.closeBrowser).toHaveBeenCalledOnce();
+    });
   });
 });

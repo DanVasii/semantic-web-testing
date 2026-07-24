@@ -25,6 +25,12 @@ let mainWindow: BrowserWindow | null = null;
 let applicationDatabase: ApplicationDatabase | null = null;
 const browserManager = new PlaywrightBrowserManager();
 
+browserManager.onStatusChange((status) => {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send(BROWSER_CHANNELS.statusChanged, status);
+  }
+});
+
 const rendererEntryPath = fileURLToPath(
   new URL("../renderer/index.html", import.meta.url),
 );
@@ -98,6 +104,15 @@ void app
     ipcMain.handle(
       BROWSER_CHANNELS.launch,
       (_event, options: BrowserLaunchOptions) => browserManager.launch(options),
+    );
+    ipcMain.handle(
+      BROWSER_CHANNELS.openProjectUrl,
+      (_event, projectId: string, url: string) =>
+        browserManager.openProjectUrl(projectId, url),
+    );
+    ipcMain.handle(BROWSER_CHANNELS.close, () => browserManager.close());
+    ipcMain.handle(BROWSER_CHANNELS.getStatus, () =>
+      browserManager.getStatus(),
     );
 
     createMainWindow();

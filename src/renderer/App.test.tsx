@@ -21,6 +21,10 @@ describe("App", () => {
       deleteProject: vi.fn(),
       detectBrowsers: vi.fn().mockResolvedValue([]),
       launchBrowser: vi.fn(),
+      openProjectUrl: vi.fn(),
+      closeBrowser: vi.fn(),
+      getBrowserStatus: vi.fn().mockResolvedValue({ state: "idle" }),
+      onBrowserStatusChange: vi.fn().mockReturnValue(vi.fn()),
     };
     window.semanticApp = api;
 

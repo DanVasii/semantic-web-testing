@@ -4,6 +4,7 @@ import type { SemanticAppApi } from "../shared/ipc.js";
 import type { Project } from "../shared/persistence.js";
 import {
   getSelectableBrowsers,
+  type BrowserManagerStatus,
   type DetectedBrowser,
 } from "../shared/browser-manager.js";
 import { Button } from "./components/Button.js";
@@ -11,17 +12,24 @@ import { Select } from "./components/Select.js";
 
 export interface BrowserSelectorProps {
   api: SemanticAppApi;
+  browserStatus: BrowserManagerStatus;
   project: Project;
 }
 
 const storageKey = (projectId: string): string =>
   `semantic-app:browser:${projectId}`;
 
-export const BrowserSelector = ({ api, project }: BrowserSelectorProps) => {
+export const BrowserSelector = ({
+  api,
+  browserStatus,
+  project,
+}: BrowserSelectorProps) => {
   const [detections, setDetections] = useState<DetectedBrowser[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isLaunching, setIsLaunching] = useState(false);
+  const [isOpening, setIsOpening] = useState(false);
+  const [isClosing, setIsClosing] = useState(false);
   const [error, setError] = useState<string>();
   const [successMessage, setSuccessMessage] = useState<string>();
 
@@ -70,6 +78,12 @@ export const BrowserSelector = ({ api, project }: BrowserSelectorProps) => {
   const selectedBrowser = selectableBrowsers.find(
     ({ installationId }) => installationId === selectedId,
   );
+  const hasActiveBrowser = ["starting", "running", "reconnecting"].includes(
+    browserStatus.state,
+  );
+  const isCurrentProject =
+    hasActiveBrowser && browserStatus.projectId === project.id;
+  const isBusy = isLaunching || isOpening || isClosing;
 
   const launch = async (): Promise<void> => {
     if (!selectedBrowser) {
@@ -79,6 +93,7 @@ export const BrowserSelector = ({ api, project }: BrowserSelectorProps) => {
     setIsLaunching(true);
     setError(undefined);
     setSuccessMessage(undefined);
+    let wasLaunched = false;
 
     try {
       await api.launchBrowser({
@@ -101,17 +116,53 @@ export const BrowserSelector = ({ api, project }: BrowserSelectorProps) => {
           ? {}
           : { viewport: project.browserConfig.viewport }),
       });
+      wasLaunched = true;
       localStorage.setItem(
         storageKey(project.id),
         selectedBrowser.installationId,
       );
-      setSuccessMessage(`${selectedBrowser.displayName} a fost pornit.`);
+      await api.openProjectUrl(project.id, project.normalizedBaseUrl);
+      setSuccessMessage(
+        `${selectedBrowser.displayName} a fost pornit și URL-ul proiectului a fost deschis.`,
+      );
     } catch {
       setError(
-        `${selectedBrowser.displayName} nu a putut fi pornit. Verifică instalarea browserului.`,
+        wasLaunched
+          ? "Browserul a pornit, dar URL-ul proiectului nu a putut fi deschis."
+          : `${selectedBrowser.displayName} nu a putut fi pornit. Verifică instalarea browserului.`,
       );
     } finally {
       setIsLaunching(false);
+    }
+  };
+
+  const openProjectUrl = async (): Promise<void> => {
+    setIsOpening(true);
+    setError(undefined);
+    setSuccessMessage(undefined);
+
+    try {
+      await api.openProjectUrl(project.id, project.normalizedBaseUrl);
+      setSuccessMessage("URL-ul proiectului a fost deschis într-un tab nou.");
+    } catch {
+      setError("URL-ul proiectului nu a putut fi deschis.");
+    } finally {
+      setIsOpening(false);
+    }
+  };
+
+  const closeBrowser = async (): Promise<void> => {
+    setIsClosing(true);
+    setError(undefined);
+    setSuccessMessage(undefined);
+
+    try {
+      await api.closeBrowser();
+      setSuccessMessage("Browserul a fost închis.");
+    } catch {
+      setError("Browserul nu a putut fi închis.");
+    } finally {
+      setIsClosing(false);
     }
   };
 
@@ -122,7 +173,9 @@ export const BrowserSelector = ({ api, project }: BrowserSelectorProps) => {
           <Select
             label="Browser disponibil"
             value={selectedId}
-            disabled={isLoading || selectableBrowsers.length === 0}
+            disabled={
+              isLoading || hasActiveBrowser || selectableBrowsers.length === 0
+            }
             options={
               isLoading
                 ? [{ value: "", label: "Se detectează browserele..." }]
@@ -140,14 +193,37 @@ export const BrowserSelector = ({ api, project }: BrowserSelectorProps) => {
             }}
           />
         </div>
-        <Button
-          disabled={!selectedBrowser || isLaunching}
-          onClick={() => {
-            void launch();
-          }}
-        >
-          {isLaunching ? "Se pornește..." : "Pornește browserul"}
-        </Button>
+        {isCurrentProject && browserStatus.state === "running" ? (
+          <Button
+            disabled={isBusy}
+            onClick={() => {
+              void openProjectUrl();
+            }}
+          >
+            {isOpening ? "Se deschide..." : "Deschide URL-ul"}
+          </Button>
+        ) : null}
+        {hasActiveBrowser && browserStatus.state !== "starting" ? (
+          <Button
+            variant="secondary"
+            disabled={isBusy}
+            onClick={() => {
+              void closeBrowser();
+            }}
+          >
+            {isClosing ? "Se închide..." : "Închide browserul"}
+          </Button>
+        ) : null}
+        {!hasActiveBrowser ? (
+          <Button
+            disabled={!selectedBrowser || isBusy}
+            onClick={() => {
+              void launch();
+            }}
+          >
+            {isLaunching ? "Se pornește..." : "Pornește și deschide"}
+          </Button>
+        ) : null}
       </div>
 
       {selectedBrowser ? (
@@ -160,6 +236,12 @@ export const BrowserSelector = ({ api, project }: BrowserSelectorProps) => {
             : ""}
         </p>
       ) : null}
+      {hasActiveBrowser && !isCurrentProject ? (
+        <p role="status" className="mt-3 text-sm text-amber-700">
+          Există deja un browser activ pentru alt proiect. Închide-l pentru a
+          porni selecția curentă.
+        </p>
+      ) : null}
       {error ? (
         <p role="alert" className="mt-3 text-sm text-red-700">
           {error}
@@ -168,6 +250,14 @@ export const BrowserSelector = ({ api, project }: BrowserSelectorProps) => {
       {successMessage ? (
         <p role="status" className="mt-3 text-sm text-emerald-700">
           {successMessage}
+        </p>
+      ) : null}
+      {!error &&
+      !successMessage &&
+      browserStatus.message &&
+      browserStatus.projectId === project.id ? (
+        <p role="status" className="mt-3 text-sm text-app-muted">
+          {browserStatus.message}
         </p>
       ) : null}
     </section>

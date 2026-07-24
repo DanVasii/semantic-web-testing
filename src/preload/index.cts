@@ -2,7 +2,9 @@ import { contextBridge, ipcRenderer } from "electron";
 
 import type { AppInfo, AppInfoChannel, SemanticAppApi } from "../shared/ipc.js";
 import type {
+  BrowserManagerStatus,
   BrowserSession,
+  BrowserTab,
   DetectedBrowser,
 } from "../shared/browser-manager.js";
 import type { ProjectOverview } from "../shared/projects.js";
@@ -17,6 +19,10 @@ const PROJECT_CHANNELS = {
 const BROWSER_CHANNELS = {
   detect: "browsers:detect",
   launch: "browsers:launch",
+  openProjectUrl: "browsers:open-project-url",
+  close: "browsers:close",
+  getStatus: "browsers:get-status",
+  statusChanged: "browsers:status-changed",
 } as const;
 
 const isAppInfo = (value: unknown): value is AppInfo => {
@@ -96,6 +102,32 @@ const isBrowserSession = (value: unknown): value is BrowserSession =>
   "startedAt" in value &&
   typeof value.startedAt === "string";
 
+const isBrowserTab = (value: unknown): value is BrowserTab =>
+  typeof value === "object" &&
+  value !== null &&
+  "id" in value &&
+  typeof value.id === "string" &&
+  "projectId" in value &&
+  typeof value.projectId === "string" &&
+  "url" in value &&
+  typeof value.url === "string";
+
+const browserStates = new Set([
+  "idle",
+  "starting",
+  "running",
+  "reconnecting",
+  "closed",
+  "failed",
+]);
+
+const isBrowserStatus = (value: unknown): value is BrowserManagerStatus =>
+  typeof value === "object" &&
+  value !== null &&
+  "state" in value &&
+  typeof value.state === "string" &&
+  browserStates.has(value.state);
+
 const semanticAppApi: SemanticAppApi = {
   getAppInfo: async () => {
     const appInfo: unknown = await ipcRenderer.invoke(APP_INFO_CHANNEL);
@@ -161,6 +193,48 @@ const semanticAppApi: SemanticAppApi = {
     }
 
     return session;
+  },
+  openProjectUrl: async (projectId, url) => {
+    const tab: unknown = await ipcRenderer.invoke(
+      BROWSER_CHANNELS.openProjectUrl,
+      projectId,
+      url,
+    );
+
+    if (!isBrowserTab(tab)) {
+      throw new TypeError("Main process returned invalid browser tab data.");
+    }
+
+    return tab;
+  },
+  closeBrowser: async () => {
+    await ipcRenderer.invoke(BROWSER_CHANNELS.close);
+  },
+  getBrowserStatus: async () => {
+    const status: unknown = await ipcRenderer.invoke(
+      BROWSER_CHANNELS.getStatus,
+    );
+
+    if (!isBrowserStatus(status)) {
+      throw new TypeError("Main process returned an invalid browser status.");
+    }
+
+    return status;
+  },
+  onBrowserStatusChange: (listener) => {
+    const handleStatusChange = (_event: unknown, status: unknown): void => {
+      if (isBrowserStatus(status)) {
+        listener(status);
+      }
+    };
+
+    ipcRenderer.on(BROWSER_CHANNELS.statusChanged, handleStatusChange);
+    return () => {
+      ipcRenderer.removeListener(
+        BROWSER_CHANNELS.statusChanged,
+        handleStatusChange,
+      );
+    };
   },
 };
 

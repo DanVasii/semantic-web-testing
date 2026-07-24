@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { SemanticAppApi } from "../shared/ipc.js";
+import type { BrowserManagerStatus } from "../shared/browser-manager.js";
 import type { ProjectInput, ProjectOverview } from "../shared/projects.js";
 import { Button } from "./components/Button.js";
 import { ConfirmDialog } from "./components/ConfirmDialog.js";
@@ -44,6 +45,9 @@ export const ProjectDashboard = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [notification, setNotification] = useState<Notification>();
+  const [browserStatus, setBrowserStatus] = useState<BrowserManagerStatus>({
+    state: "idle",
+  });
 
   const loadProjects = useCallback(async () => {
     setIsLoading(true);
@@ -72,6 +76,29 @@ export const ProjectDashboard = ({
   useEffect(() => {
     void loadProjects();
   }, [loadProjects]);
+
+  useEffect(() => {
+    let isActive = true;
+    const unsubscribe = api.onBrowserStatusChange((status) => {
+      if (isActive) {
+        setBrowserStatus(status);
+      }
+    });
+
+    void api
+      .getBrowserStatus()
+      .then((status) => {
+        if (isActive) {
+          setBrowserStatus(status);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      isActive = false;
+      unsubscribe();
+    };
+  }, [api]);
 
   const selectedProject = useMemo(
     () => projects.find(({ project }) => project.id === selectedProjectId),
@@ -324,7 +351,11 @@ export const ProjectDashboard = ({
           </div>
 
           {selectedProject ? (
-            <ProjectOverviewPanel api={api} overview={selectedProject} />
+            <ProjectOverviewPanel
+              api={api}
+              browserStatus={browserStatus}
+              overview={selectedProject}
+            />
           ) : (
             <div className="grid min-h-72 place-items-center rounded-2xl border border-app-border bg-app-surface p-8 text-center shadow-sm">
               <div>
@@ -380,9 +411,11 @@ export const ProjectDashboard = ({
 
 const ProjectOverviewPanel = ({
   api,
+  browserStatus,
   overview,
 }: {
   api: SemanticAppApi;
+  browserStatus: BrowserManagerStatus;
   overview: ProjectOverview;
 }) => {
   const { project, statistics } = overview;
@@ -439,13 +472,48 @@ const ProjectOverviewPanel = ({
           label="Ultima rulare"
           value={formatDate(statistics.lastRunAt)}
         />
-        <OverviewRow label="Status browser" value="Nepornit" />
+        <OverviewRow
+          label="Status browser"
+          value={formatBrowserStatus(browserStatus, project.id)}
+        />
         <OverviewRow label="Conexiuni" value="Neconfigurate" />
       </dl>
 
-      <BrowserSelector api={api} project={project} />
+      <BrowserSelector
+        api={api}
+        browserStatus={browserStatus}
+        project={project}
+      />
     </article>
   );
+};
+
+const formatBrowserStatus = (
+  status: BrowserManagerStatus,
+  projectId: string,
+): string => {
+  const isActive = ["starting", "running", "reconnecting"].includes(
+    status.state,
+  );
+
+  if (isActive && status.projectId !== projectId) {
+    return "Activ în alt proiect";
+  }
+
+  switch (status.state) {
+    case "starting":
+      return "Se pornește";
+    case "running":
+      return status.browser ? `Pornit · ${status.browser}` : "Pornit";
+    case "reconnecting":
+      return "Se reconectează";
+    case "closed":
+      return "Închis";
+    case "failed":
+      return "Eroare";
+    default:
+      return "Nepornit";
+  }
 };
 
 const OverviewRow = ({ label, value }: { label: string; value: string }) => (

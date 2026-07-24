@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SemanticAppApi } from "../shared/ipc.js";
+import type { BrowserManagerStatus } from "../shared/browser-manager.js";
 import type { ProjectOverview } from "../shared/projects.js";
 import { ProjectDashboard } from "./ProjectDashboard.js";
 
@@ -45,6 +46,10 @@ const createApi = (
   deleteProject: vi.fn().mockResolvedValue(true),
   detectBrowsers: vi.fn().mockResolvedValue([]),
   launchBrowser: vi.fn(),
+  openProjectUrl: vi.fn(),
+  closeBrowser: vi.fn(),
+  getBrowserStatus: vi.fn().mockResolvedValue({ state: "idle" }),
+  onBrowserStatusChange: vi.fn().mockReturnValue(vi.fn()),
 });
 
 beforeEach(() => {
@@ -69,6 +74,42 @@ describe("ProjectDashboard", () => {
     expect(screen.getByText("Rulări").previousSibling?.textContent).toBe("12");
     expect(
       screen.getByRole("link", { name: "https://example.test/shop" }),
+    ).not.toBeNull();
+  });
+
+  it("displays live browser status and an external close notification", async () => {
+    localStorage.setItem("semantic-app:last-project-id", overview.project.id);
+    const api = createApi();
+    let statusListener: ((status: BrowserManagerStatus) => void) | undefined;
+    vi.mocked(api.onBrowserStatusChange).mockImplementation((listener) => {
+      statusListener = listener;
+      return vi.fn();
+    });
+    render(<ProjectDashboard api={api} />);
+    await screen.findByText("Proiect deschis");
+
+    act(() => {
+      statusListener?.({
+        state: "running",
+        browser: "chrome",
+        projectId: overview.project.id,
+        sessionId: "session-1",
+      });
+    });
+    expect(await screen.findByText("Pornit · chrome")).not.toBeNull();
+
+    act(() => {
+      statusListener?.({
+        state: "closed",
+        browser: "chrome",
+        projectId: overview.project.id,
+        sessionId: "session-1",
+        message: "Browserul a fost închis din exterior.",
+      });
+    });
+    expect(await screen.findByText("Închis")).not.toBeNull();
+    expect(
+      await screen.findByText("Browserul a fost închis din exterior."),
     ).not.toBeNull();
   });
 
