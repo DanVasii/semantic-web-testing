@@ -77,6 +77,19 @@ export const PageAnalysisPanel = ({
     void loadTarget();
   }, [loadPages, loadTarget, project.id]);
 
+  useEffect(() => {
+    if (!browserIsReady) {
+      return;
+    }
+
+    const refreshInterval = window.setInterval(() => {
+      void loadTarget();
+    }, 1_500);
+    return () => {
+      window.clearInterval(refreshInterval);
+    };
+  }, [browserIsReady, loadTarget]);
+
   useEffect(
     () =>
       api.onPageAnalysisProgress((nextProgress) => {
