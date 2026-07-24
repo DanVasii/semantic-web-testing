@@ -56,6 +56,15 @@ npm run fixture:web
 Pagina devine disponibilă la `http://127.0.0.1:4173`. Comanda folosește un port
 strict și va eșua dacă portul este deja ocupat.
 
+Pentru verificarea build-ului static:
+
+```bash
+npm run fixture:web:build
+```
+
+Artefactele sunt generate în `dist/fixture-web` și sunt incluse automat în
+`npm run verify`.
+
 ## Stadiu
 
 Etapa 0: workspace TypeScript, lint, formatare automată, teste unitare și fixture
