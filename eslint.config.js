@@ -6,7 +6,7 @@ import tseslint from "typescript-eslint";
 
 export default defineConfig({
   name: "typescript-source",
-  files: ["src/**/*.ts"],
+  files: ["src/**/*.{ts,tsx}"],
   extends: [js.configs.recommended, tseslint.configs.recommendedTypeChecked],
   languageOptions: {
     parserOptions: {
