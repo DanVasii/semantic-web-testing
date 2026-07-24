@@ -1,6 +1,8 @@
 import type { BrowserWindowConstructorOptions } from "electron";
 
-export const createMainWindowOptions = (): BrowserWindowConstructorOptions => ({
+export const createMainWindowOptions = (
+  preloadPath: string,
+): BrowserWindowConstructorOptions => ({
   width: 1280,
   height: 800,
   minWidth: 960,
@@ -10,6 +12,7 @@ export const createMainWindowOptions = (): BrowserWindowConstructorOptions => ({
   webPreferences: {
     contextIsolation: true,
     nodeIntegration: false,
+    preload: preloadPath,
     sandbox: true,
   },
 });
