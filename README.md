@@ -21,6 +21,17 @@ npm run verify
 
 Comanda `verify` rulează toate verificările locale ale proiectului.
 
+## Aplicația desktop
+
+Compilează și pornește fereastra Electron:
+
+```bash
+npm run electron:start
+```
+
+În acest stadiu, fereastra este intenționat goală. Renderer-ul React va fi
+adăugat într-un task separat.
+
 ## Verificări locale
 
 ```bash
