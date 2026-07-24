@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ro">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>Fixture web semantic</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <span class="topbar__label">Semantic Web Testing</span>
+      <span class="topbar__badge">Fixture local</span>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="page-title">
+        <p class="eyebrow">Pagină deterministă</p>
+        <h1 id="page-title">Verificare semantică locală</h1>
+        <p class="lead">
+          Această pagină oferă o țintă stabilă pentru dezvoltarea și verificarea
+          aplicației desktop.
+        </p>
+
+        <div class="status-card" role="status" aria-live="polite">
+          <span>Stare fixture</span>
+          <strong id="fixture-status" data-testid="fixture-status"
+            >ready</strong
+          >
+        </div>
+
+        <a
+          class="primary-action"
+          data-testid="fixture-navigation-link"
+          href="#verification-target"
+        >
+          Mergi la ținta de navigare
+        </a>
+      </section>
+
+      <section
+        id="verification-target"
+        class="target-card"
+        aria-labelledby="target-title"
+        tabindex="-1"
+      >
+        <h2 id="target-title">Țintă de navigare</h2>
+        <p data-testid="fixture-navigation-target">navigation-ready</p>
+      </section>
+    </main>
+
+    <footer>
+      <span>Origin local controlat</span>
+      <code>http://127.0.0.1:4173</code>
+    </footer>
+  </body>
+</html>

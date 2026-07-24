@@ -45,8 +45,19 @@ Pentru rularea testelor în mod watch:
 npm run test:watch
 ```
 
+## Fixture web local
+
+Pornește pagina deterministă folosită pentru dezvoltarea testelor web:
+
+```bash
+npm run fixture:web
+```
+
+Pagina devine disponibilă la `http://127.0.0.1:4173`. Comanda folosește un port
+strict și va eșua dacă portul este deja ocupat.
+
 ## Stadiu
 
-Etapa 0: workspace TypeScript, lint, formatare automată și teste unitare
-configurate. Funcționalitățile Electron, React și Tailwind vor fi adăugate numai
-în task-urile dedicate.
+Etapa 0: workspace TypeScript, lint, formatare automată, teste unitare și fixture
+web local configurate. Funcționalitățile Electron, React și Tailwind vor fi
+adăugate numai în task-urile dedicate.

@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "tsc --project tsconfig.build.json",
+    "fixture:web": "vite fixtures/web --host 127.0.0.1 --port 4173 --strictPort",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "lint": "eslint src --max-warnings 0",
@@ -23,6 +24,7 @@
     "prettier": "3.9.6",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.65.0",
+    "vite": "^8.1.5",
     "vitest": "^4.1.10"
   }
 }
