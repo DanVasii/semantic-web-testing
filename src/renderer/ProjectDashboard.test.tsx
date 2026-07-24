@@ -43,6 +43,8 @@ const createApi = (
   createProject: vi.fn().mockResolvedValue(overview),
   updateProject: vi.fn().mockResolvedValue(overview),
   deleteProject: vi.fn().mockResolvedValue(true),
+  detectBrowsers: vi.fn().mockResolvedValue([]),
+  launchBrowser: vi.fn(),
 });
 
 beforeEach(() => {

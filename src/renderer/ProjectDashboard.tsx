@@ -5,6 +5,7 @@ import type { ProjectInput, ProjectOverview } from "../shared/projects.js";
 import { Button } from "./components/Button.js";
 import { ConfirmDialog } from "./components/ConfirmDialog.js";
 import { Toast, type ToastVariant } from "./components/Toast.js";
+import { BrowserSelector } from "./BrowserSelector.js";
 import { ProjectFormModal } from "./ProjectFormModal.js";
 
 const LAST_PROJECT_STORAGE_KEY = "semantic-app:last-project-id";
@@ -323,7 +324,7 @@ export const ProjectDashboard = ({
           </div>
 
           {selectedProject ? (
-            <ProjectOverviewPanel overview={selectedProject} />
+            <ProjectOverviewPanel api={api} overview={selectedProject} />
           ) : (
             <div className="grid min-h-72 place-items-center rounded-2xl border border-app-border bg-app-surface p-8 text-center shadow-sm">
               <div>
@@ -377,7 +378,13 @@ export const ProjectDashboard = ({
   );
 };
 
-const ProjectOverviewPanel = ({ overview }: { overview: ProjectOverview }) => {
+const ProjectOverviewPanel = ({
+  api,
+  overview,
+}: {
+  api: SemanticAppApi;
+  overview: ProjectOverview;
+}) => {
   const { project, statistics } = overview;
   const cards = [
     { label: "Pagini analizate", value: statistics.pageCount },
@@ -435,6 +442,8 @@ const ProjectOverviewPanel = ({ overview }: { overview: ProjectOverview }) => {
         <OverviewRow label="Status browser" value="Nepornit" />
         <OverviewRow label="Conexiuni" value="Neconfigurate" />
       </dl>
+
+      <BrowserSelector api={api} project={project} />
     </article>
   );
 };
