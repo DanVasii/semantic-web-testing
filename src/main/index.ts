@@ -1,12 +1,18 @@
 import { app, BrowserWindow, ipcMain } from "electron";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { APP_INFO_CHANNEL } from "../shared/ipc.js";
 import { createAppInfo } from "./app-info.js";
+import {
+  openApplicationDatabase,
+  type ApplicationDatabase,
+} from "./persistence/database.js";
 import { resolveRendererTarget } from "./renderer-target.js";
 import { createMainWindowOptions } from "./window-options.js";
 
 let mainWindow: BrowserWindow | null = null;
+let applicationDatabase: ApplicationDatabase | null = null;
 
 const rendererEntryPath = fileURLToPath(
   new URL("../renderer/index.html", import.meta.url),
@@ -41,7 +47,17 @@ app.enableSandbox();
 
 void app
   .whenReady()
-  .then(() => {
+  .then(async () => {
+    applicationDatabase = await openApplicationDatabase({
+      filePath: join(app.getPath("userData"), "data", "application.sqlite"),
+    });
+
+    if (applicationDatabase.backupPath !== undefined) {
+      console.info(
+        `Database backup created before migration: ${applicationDatabase.backupPath}`,
+      );
+    }
+
     ipcMain.handle(APP_INFO_CHANNEL, () =>
       createAppInfo(app.getVersion(), process.versions.electron),
     );
@@ -58,6 +74,11 @@ void app
     console.error("Electron failed to start.", error);
     app.exit(1);
   });
+
+app.on("before-quit", () => {
+  applicationDatabase?.close();
+  applicationDatabase = null;
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
