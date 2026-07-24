@@ -1,8 +1,15 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 import type { AppInfo, AppInfoChannel, SemanticAppApi } from "../shared/ipc.js";
+import type { ProjectOverview } from "../shared/projects.js";
 
 const APP_INFO_CHANNEL: AppInfoChannel = "app:get-info";
+const PROJECT_CHANNELS = {
+  list: "projects:list",
+  create: "projects:create",
+  update: "projects:update",
+  delete: "projects:delete",
+} as const;
 
 const isAppInfo = (value: unknown): value is AppInfo => {
   if (typeof value !== "object" || value === null) {
@@ -17,6 +24,44 @@ const isAppInfo = (value: unknown): value is AppInfo => {
   );
 };
 
+const isProjectOverview = (value: unknown): value is ProjectOverview => {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  if (!("project" in value) || !("statistics" in value)) {
+    return false;
+  }
+
+  const { project, statistics } = value;
+  return (
+    typeof project === "object" &&
+    project !== null &&
+    "id" in project &&
+    typeof project.id === "string" &&
+    "name" in project &&
+    typeof project.name === "string" &&
+    "baseUrl" in project &&
+    typeof project.baseUrl === "string" &&
+    typeof statistics === "object" &&
+    statistics !== null &&
+    "pageCount" in statistics &&
+    typeof statistics.pageCount === "number" &&
+    "testCount" in statistics &&
+    typeof statistics.testCount === "number" &&
+    "runCount" in statistics &&
+    typeof statistics.runCount === "number"
+  );
+};
+
+const requireProjectOverview = (value: unknown): ProjectOverview => {
+  if (!isProjectOverview(value)) {
+    throw new TypeError("Main process returned invalid project data.");
+  }
+
+  return value;
+};
+
 const semanticAppApi: SemanticAppApi = {
   getAppInfo: async () => {
     const appInfo: unknown = await ipcRenderer.invoke(APP_INFO_CHANNEL);
@@ -26,6 +71,38 @@ const semanticAppApi: SemanticAppApi = {
     }
 
     return appInfo;
+  },
+  listProjects: async () => {
+    const projects: unknown = await ipcRenderer.invoke(PROJECT_CHANNELS.list);
+
+    if (
+      !Array.isArray(projects) ||
+      !projects.every((project) => isProjectOverview(project))
+    ) {
+      throw new TypeError("Main process returned an invalid project list.");
+    }
+
+    return projects;
+  },
+  createProject: async (input) =>
+    requireProjectOverview(
+      await ipcRenderer.invoke(PROJECT_CHANNELS.create, input),
+    ),
+  updateProject: async (projectId, input) =>
+    requireProjectOverview(
+      await ipcRenderer.invoke(PROJECT_CHANNELS.update, projectId, input),
+    ),
+  deleteProject: async (projectId) => {
+    const wasDeleted: unknown = await ipcRenderer.invoke(
+      PROJECT_CHANNELS.delete,
+      projectId,
+    );
+
+    if (typeof wasDeleted !== "boolean") {
+      throw new TypeError("Main process returned an invalid delete result.");
+    }
+
+    return wasDeleted;
   },
 };
 

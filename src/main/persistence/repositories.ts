@@ -14,6 +14,7 @@ import type {
   TestStatus,
   TestVersion,
 } from "../../shared/persistence.js";
+import type { ProjectStatistics } from "../../shared/projects.js";
 
 type DatabaseRow = Record<string, unknown>;
 
@@ -222,6 +223,26 @@ export class ProjectRepository {
       this.database.prepare("DELETE FROM projects WHERE id = ?").run(id)
         .changes > 0
     );
+  }
+
+  public getStatistics(projectId: string): ProjectStatistics {
+    const row = this.database
+      .prepare(
+        `SELECT
+          (SELECT COUNT(*) FROM pages WHERE project_id = ?) AS page_count,
+          (SELECT COUNT(*) FROM tests WHERE project_id = ?) AS test_count,
+          (SELECT COUNT(*) FROM runs WHERE project_id = ?) AS run_count,
+          (SELECT MAX(started_at) FROM runs WHERE project_id = ?) AS last_run_at`,
+      )
+      .get(projectId, projectId, projectId, projectId) as DatabaseRow;
+    const lastRunAt = optionalText(row, "last_run_at");
+
+    return {
+      pageCount: number(row, "page_count"),
+      testCount: number(row, "test_count"),
+      runCount: number(row, "run_count"),
+      ...(lastRunAt === undefined ? {} : { lastRunAt }),
+    };
   }
 }
 
