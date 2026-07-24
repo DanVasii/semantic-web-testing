@@ -14,14 +14,16 @@ import {
 } from "playwright-core";
 
 import type {
+  BasicAuthChallenge,
+  BasicAuthCredentials,
   BrowserEngine,
   BrowserLaunchOptions,
   BrowserManager,
   BrowserManagerStatus,
+  BrowserNavigationResult,
   BrowserProduct,
   BrowserSession,
   BrowserStatusListener,
-  BrowserTab,
   DetectedBrowser,
 } from "../../shared/browser-manager.js";
 import { detectBrowsers } from "./browser-detection.js";
@@ -53,6 +55,14 @@ interface BrowserRuntime {
 
 interface TrackedPage {
   projectId: string;
+  page: Page;
+}
+
+interface PendingBasicAuth {
+  tabId: string;
+  projectId: string;
+  url: string;
+  origin: string;
   page: Page;
 }
 
@@ -106,6 +116,10 @@ export class PlaywrightBrowserManager implements BrowserManager {
   private readonly wait: (milliseconds: number) => Promise<void>;
   private readonly listeners = new Set<BrowserStatusListener>();
   private readonly pages = new Map<string, TrackedPage>();
+  private readonly basicAuthCredentials = new Map<
+    string,
+    BasicAuthCredentials
+  >();
   private browser: Browser | undefined;
   private context: BrowserContext | undefined;
   private runtimeKind: RuntimeKind | undefined;
@@ -113,6 +127,8 @@ export class PlaywrightBrowserManager implements BrowserManager {
   private cdpEndpoint: string | undefined;
   private session: BrowserSession | undefined;
   private lastLaunchOptions: BrowserLaunchOptions | undefined;
+  private pendingBasicAuth: PendingBasicAuth | undefined;
+  private appliedBasicAuthOrigin: string | undefined;
   private isClosing = false;
   private status: BrowserManagerStatus = { state: "idle" };
 
@@ -171,7 +187,7 @@ export class PlaywrightBrowserManager implements BrowserManager {
   public async openProjectUrl(
     projectId: string,
     url: string,
-  ): Promise<BrowserTab> {
+  ): Promise<BrowserNavigationResult> {
     const context = this.context;
     const session = this.session;
 
@@ -184,21 +200,70 @@ export class PlaywrightBrowserManager implements BrowserManager {
     }
 
     const normalizedUrl = this.requireWebUrl(url);
+    const origin = new URL(normalizedUrl).origin;
+    await this.applyBasicAuthForOrigin(context, origin);
     const page = await context.newPage();
     const tabId = this.trackPage(projectId, page);
+    const pending = {
+      tabId,
+      projectId,
+      url: normalizedUrl,
+      origin,
+      page,
+    };
 
     try {
-      await page.goto(normalizedUrl, { waitUntil: "domcontentloaded" });
-      return {
-        id: tabId,
-        projectId,
-        url: page.url(),
-      };
+      return await this.navigateWithBasicAuth(
+        pending,
+        this.basicAuthCredentials.has(origin),
+      );
     } catch (error) {
       this.pages.delete(tabId);
       await page.close().catch(() => undefined);
       throw error;
     }
+  }
+
+  public async submitBasicAuth(
+    credentials: BasicAuthCredentials,
+  ): Promise<BrowserNavigationResult> {
+    const pending = this.pendingBasicAuth;
+    const context = this.context;
+
+    if (pending === undefined || context === undefined) {
+      throw new Error("Nu există o autentificare HTTP în așteptare.");
+    }
+
+    this.assertValidBasicAuthCredentials(credentials);
+    const safeCredentials = {
+      username: credentials.username,
+      password: credentials.password,
+    };
+    this.basicAuthCredentials.set(pending.origin, safeCredentials);
+    await context.setHTTPCredentials(safeCredentials);
+    this.appliedBasicAuthOrigin = pending.origin;
+    return this.navigateWithBasicAuth(pending, true);
+  }
+
+  public async cancelBasicAuth(): Promise<void> {
+    const pending = this.pendingBasicAuth;
+    this.pendingBasicAuth = undefined;
+
+    if (pending !== undefined) {
+      this.pages.delete(pending.tabId);
+      await pending.page.close().catch(() => undefined);
+    }
+
+    await this.context?.setHTTPCredentials(null).catch(() => undefined);
+    this.appliedBasicAuthOrigin = undefined;
+    this.publishRunningStatus("Autentificarea HTTP a fost anulată.");
+  }
+
+  public clearBasicAuthCredentials(): void {
+    this.basicAuthCredentials.clear();
+    this.pendingBasicAuth = undefined;
+    this.appliedBasicAuthOrigin = undefined;
+    void this.context?.setHTTPCredentials(null).catch(() => undefined);
   }
 
   public async closeProjectTabs(projectId: string): Promise<void> {
@@ -212,6 +277,11 @@ export class PlaywrightBrowserManager implements BrowserManager {
         await tracked.page.close();
       }),
     );
+
+    if (this.pendingBasicAuth?.projectId === projectId) {
+      this.pendingBasicAuth = undefined;
+      this.publishRunningStatus("Taburile proiectului au fost închise.");
+    }
   }
 
   public async recoverConnection(): Promise<BrowserSession> {
@@ -286,6 +356,8 @@ export class PlaywrightBrowserManager implements BrowserManager {
     this.runtimeKind = undefined;
     this.cdpEndpoint = undefined;
     this.session = undefined;
+    this.pendingBasicAuth = undefined;
+    this.appliedBasicAuthOrigin = undefined;
     this.pages.clear();
 
     try {
@@ -454,6 +526,8 @@ export class PlaywrightBrowserManager implements BrowserManager {
     this.ownerContext = runtime.ownerContext;
     this.cdpEndpoint = runtime.cdpEndpoint;
     this.session = session;
+    this.pendingBasicAuth = undefined;
+    this.appliedBasicAuthOrigin = undefined;
 
     runtime.browser.once("disconnected", () => {
       if (this.browser === runtime.browser && !this.isClosing) {
@@ -461,6 +535,8 @@ export class PlaywrightBrowserManager implements BrowserManager {
         this.context = undefined;
         this.runtimeKind = undefined;
         this.session = undefined;
+        this.pendingBasicAuth = undefined;
+        this.appliedBasicAuthOrigin = undefined;
         this.pages.clear();
 
         if (runtime.kind !== "cdp") {
@@ -503,6 +579,128 @@ export class PlaywrightBrowserManager implements BrowserManager {
       session.browser === options.browser &&
       session.sessionMode === options.sessionMode
     );
+  }
+
+  private async navigateWithBasicAuth(
+    pending: PendingBasicAuth,
+    credentialsWereProvided: boolean,
+  ): Promise<BrowserNavigationResult> {
+    try {
+      const response = await pending.page.goto(pending.url, {
+        waitUntil: "domcontentloaded",
+      });
+
+      if (response?.status() === 401) {
+        return this.waitForBasicAuth(pending, credentialsWereProvided);
+      }
+    } catch (error) {
+      if (this.isBasicAuthNavigationError(error)) {
+        return this.waitForBasicAuth(pending, credentialsWereProvided);
+      }
+
+      throw error;
+    }
+
+    this.pendingBasicAuth = undefined;
+    this.publishRunningStatus();
+    return {
+      state: "opened",
+      tab: {
+        id: pending.tabId,
+        projectId: pending.projectId,
+        url: pending.page.url(),
+      },
+    };
+  }
+
+  private async waitForBasicAuth(
+    pending: PendingBasicAuth,
+    invalidCredentials: boolean,
+  ): Promise<BrowserNavigationResult> {
+    if (invalidCredentials) {
+      this.basicAuthCredentials.delete(pending.origin);
+      await this.context?.setHTTPCredentials(null).catch(() => undefined);
+      this.appliedBasicAuthOrigin = undefined;
+    }
+
+    const challenge: BasicAuthChallenge = {
+      projectId: pending.projectId,
+      url: pending.url,
+      origin: pending.origin,
+      invalidCredentials,
+    };
+    this.pendingBasicAuth = pending;
+    this.setStatus({
+      state: "waiting_for_basic_auth",
+      ...(this.session === undefined
+        ? {}
+        : {
+            browser: this.session.browser,
+            projectId: this.session.projectId,
+            sessionId: this.session.id,
+          }),
+      message: invalidCredentials
+        ? "Credentialele HTTP sunt invalide."
+        : "Site-ul solicită autentificare HTTP.",
+      canReconnect: false,
+      basicAuthChallenge: challenge,
+    });
+    return { state: "waiting_for_basic_auth", challenge };
+  }
+
+  private async applyBasicAuthForOrigin(
+    context: BrowserContext,
+    origin: string,
+  ): Promise<void> {
+    const credentials = this.basicAuthCredentials.get(origin);
+
+    if (credentials !== undefined) {
+      await context.setHTTPCredentials(credentials);
+      this.appliedBasicAuthOrigin = origin;
+    } else if (this.appliedBasicAuthOrigin !== undefined) {
+      await context.setHTTPCredentials(null);
+      this.appliedBasicAuthOrigin = undefined;
+    }
+  }
+
+  private assertValidBasicAuthCredentials(
+    credentials: BasicAuthCredentials,
+  ): void {
+    if (
+      typeof credentials.username !== "string" ||
+      typeof credentials.password !== "string" ||
+      credentials.username.trim().length === 0 ||
+      credentials.username.length > 512 ||
+      credentials.password.length > 512
+    ) {
+      throw new Error("Credentialele HTTP nu sunt valide.");
+    }
+  }
+
+  private isBasicAuthNavigationError(error: unknown): boolean {
+    return (
+      error instanceof Error &&
+      /ERR_INVALID_AUTH_CREDENTIALS|ERR_MISSING_AUTH_CREDENTIALS/i.test(
+        error.message,
+      )
+    );
+  }
+
+  private publishRunningStatus(message?: string): void {
+    const session = this.session;
+
+    if (session === undefined) {
+      return;
+    }
+
+    this.setStatus({
+      state: "running",
+      browser: session.browser,
+      projectId: session.projectId,
+      sessionId: session.id,
+      ...(message === undefined ? {} : { message }),
+      canReconnect: false,
+    });
   }
 
   private trackPage(projectId: string, page: Page): string {

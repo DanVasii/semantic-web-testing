@@ -3,8 +3,9 @@ import type { BrowserConfig } from "./persistence.js";
 import type {
   BrowserLaunchOptions,
   BrowserManagerStatus,
+  BrowserNavigationResult,
   BrowserSession,
-  BrowserTab,
+  BasicAuthCredentials,
   DetectedBrowser,
 } from "./browser-manager.js";
 
@@ -24,6 +25,8 @@ export const BROWSER_CHANNELS = {
   detect: "browsers:detect",
   launch: "browsers:launch",
   openProjectUrl: "browsers:open-project-url",
+  submitBasicAuth: "browsers:submit-basic-auth",
+  cancelBasicAuth: "browsers:cancel-basic-auth",
   close: "browsers:close",
   closeProjectTabs: "browsers:close-project-tabs",
   recover: "browsers:recover",
@@ -52,7 +55,14 @@ export interface SemanticAppApi {
   deleteProject: (projectId: string) => Promise<boolean>;
   detectBrowsers: () => Promise<DetectedBrowser[]>;
   launchBrowser: (options: BrowserLaunchOptions) => Promise<BrowserSession>;
-  openProjectUrl: (projectId: string, url: string) => Promise<BrowserTab>;
+  openProjectUrl: (
+    projectId: string,
+    url: string,
+  ) => Promise<BrowserNavigationResult>;
+  submitBasicAuth: (
+    credentials: BasicAuthCredentials,
+  ) => Promise<BrowserNavigationResult>;
+  cancelBasicAuth: () => Promise<void>;
   closeBrowser: () => Promise<void>;
   closeProjectTabs: (projectId: string) => Promise<void>;
   recoverBrowserConnection: () => Promise<BrowserSession>;

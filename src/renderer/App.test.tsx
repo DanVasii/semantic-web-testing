@@ -23,6 +23,8 @@ describe("App", () => {
       detectBrowsers: vi.fn().mockResolvedValue([]),
       launchBrowser: vi.fn(),
       openProjectUrl: vi.fn(),
+      submitBasicAuth: vi.fn(),
+      cancelBasicAuth: vi.fn(),
       closeBrowser: vi.fn(),
       closeProjectTabs: vi.fn(),
       recoverBrowserConnection: vi.fn(),

@@ -21,6 +21,7 @@ const createPage = () => ({
 
 const createContext = (page: ReturnType<typeof createPage>) => ({
   newPage: vi.fn().mockResolvedValue(page),
+  setHTTPCredentials: vi.fn().mockResolvedValue(undefined),
   close: vi.fn().mockResolvedValue(undefined),
   once: vi.fn(),
   isClosed: vi.fn().mockReturnValue(false),
@@ -346,6 +347,155 @@ describe("PlaywrightBrowserManager navigation and lifecycle", () => {
       state: "closed",
       message: "Browserul a fost închis.",
       canReconnect: false,
+    });
+  });
+});
+
+describe("PlaywrightBrowserManager HTTP Basic Auth", () => {
+  const unauthorizedResponse = { status: () => 401 };
+  const successfulResponse = { status: () => 200 };
+
+  it("detects a 401 response and enters the waiting state", async () => {
+    const { engines, manager } = createManager();
+    engines.chromium.page.goto.mockResolvedValueOnce(unauthorizedResponse);
+    await manager.launch(launchOptions("chromium", "playwright"));
+
+    const result = await manager.openProjectUrl(
+      "project-1",
+      "https://secure.example.test/account",
+    );
+
+    expect(result).toEqual({
+      state: "waiting_for_basic_auth",
+      challenge: {
+        projectId: "project-1",
+        url: "https://secure.example.test/account",
+        origin: "https://secure.example.test",
+        invalidCredentials: false,
+      },
+    });
+    if (result.state !== "waiting_for_basic_auth") {
+      throw new Error("Expected a Basic Auth challenge.");
+    }
+    expect(manager.getStatus()).toMatchObject({
+      state: "waiting_for_basic_auth",
+      message: "Site-ul solicită autentificare HTTP.",
+      basicAuthChallenge: result.challenge,
+    });
+  });
+
+  it("retries navigation and reports invalid credentials without exposing them", async () => {
+    const { engines, manager } = createManager();
+    engines.chromium.page.goto
+      .mockResolvedValueOnce(unauthorizedResponse)
+      .mockResolvedValueOnce(unauthorizedResponse);
+    await manager.launch(launchOptions("chromium", "playwright"));
+    await manager.openProjectUrl(
+      "project-1",
+      "https://secure.example.test/account",
+    );
+
+    const result = await manager.submitBasicAuth({
+      username: "tester",
+      password: "secret-value",
+    });
+
+    expect(
+      engines.chromium.regularContext.setHTTPCredentials,
+    ).toHaveBeenCalledWith({
+      username: "tester",
+      password: "secret-value",
+    });
+    expect(result).toMatchObject({
+      state: "waiting_for_basic_auth",
+      challenge: { invalidCredentials: true },
+    });
+    const serializedStatus = JSON.stringify(manager.getStatus());
+    expect(serializedStatus).toContain("Credentialele HTTP sunt invalide.");
+    expect(serializedStatus).not.toContain("tester");
+    expect(serializedStatus).not.toContain("secret-value");
+  });
+
+  it("keeps valid credentials in memory and continues navigation", async () => {
+    const { engines, manager } = createManager();
+    engines.chromium.page.goto
+      .mockResolvedValueOnce(unauthorizedResponse)
+      .mockResolvedValueOnce(successfulResponse)
+      .mockResolvedValueOnce(successfulResponse);
+    await manager.launch(launchOptions("chromium", "playwright"));
+    await manager.openProjectUrl(
+      "project-1",
+      "https://secure.example.test/account",
+    );
+
+    const authenticated = await manager.submitBasicAuth({
+      username: "tester",
+      password: "correct",
+    });
+    const reused = await manager.openProjectUrl(
+      "project-1",
+      "https://secure.example.test/settings",
+    );
+
+    expect(authenticated.state).toBe("opened");
+    expect(reused.state).toBe("opened");
+    expect(
+      engines.chromium.regularContext.setHTTPCredentials,
+    ).toHaveBeenLastCalledWith({
+      username: "tester",
+      password: "correct",
+    });
+    expect(manager.getStatus().state).toBe("running");
+  });
+
+  it("clears in-memory credentials explicitly at application shutdown", async () => {
+    const { engines, manager } = createManager();
+    engines.chromium.page.goto
+      .mockResolvedValueOnce(unauthorizedResponse)
+      .mockResolvedValueOnce(successfulResponse)
+      .mockResolvedValueOnce(unauthorizedResponse);
+    await manager.launch(launchOptions("chromium", "playwright"));
+    await manager.openProjectUrl(
+      "project-1",
+      "https://secure.example.test/account",
+    );
+    await manager.submitBasicAuth({
+      username: "tester",
+      password: "correct",
+    });
+
+    manager.clearBasicAuthCredentials();
+    await manager.close();
+    await manager.launch(launchOptions("chromium", "playwright"));
+    const result = await manager.openProjectUrl(
+      "project-1",
+      "https://secure.example.test/again",
+    );
+
+    expect(
+      engines.chromium.regularContext.setHTTPCredentials,
+    ).toHaveBeenLastCalledWith(null);
+    expect(result).toMatchObject({
+      state: "waiting_for_basic_auth",
+      challenge: { invalidCredentials: false },
+    });
+  });
+
+  it("cancels a pending authentication without closing the browser", async () => {
+    const { engines, manager } = createManager();
+    engines.chromium.page.goto.mockResolvedValueOnce(unauthorizedResponse);
+    await manager.launch(launchOptions("chromium", "playwright"));
+    await manager.openProjectUrl(
+      "project-1",
+      "https://secure.example.test/account",
+    );
+
+    await manager.cancelBasicAuth();
+
+    expect(engines.chromium.page.close).toHaveBeenCalledOnce();
+    expect(manager.getStatus()).toMatchObject({
+      state: "running",
+      message: "Autentificarea HTTP a fost anulată.",
     });
   });
 });

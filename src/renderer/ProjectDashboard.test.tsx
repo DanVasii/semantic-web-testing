@@ -48,6 +48,15 @@ const createApi = (
   detectBrowsers: vi.fn().mockResolvedValue([]),
   launchBrowser: vi.fn(),
   openProjectUrl: vi.fn(),
+  submitBasicAuth: vi.fn().mockResolvedValue({
+    state: "opened",
+    tab: {
+      id: "tab-auth",
+      projectId: overview.project.id,
+      url: overview.project.normalizedBaseUrl,
+    },
+  }),
+  cancelBasicAuth: vi.fn(),
   closeBrowser: vi.fn(),
   closeProjectTabs: vi.fn(),
   recoverBrowserConnection: vi.fn(),
@@ -115,6 +124,54 @@ describe("ProjectDashboard", () => {
     expect(
       await screen.findByText("Browserul a fost închis din exterior."),
     ).not.toBeNull();
+  });
+
+  it("opens the Basic Auth dialog and submits credentials", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("semantic-app:last-project-id", overview.project.id);
+    const api = createApi();
+    let statusListener: ((status: BrowserManagerStatus) => void) | undefined;
+    vi.mocked(api.onBrowserStatusChange).mockImplementation((listener) => {
+      statusListener = listener;
+      return vi.fn();
+    });
+    render(<ProjectDashboard api={api} />);
+    await screen.findByText("Proiect deschis");
+
+    act(() => {
+      statusListener?.({
+        state: "waiting_for_basic_auth",
+        browser: "chrome",
+        projectId: overview.project.id,
+        sessionId: "session-1",
+        message: "Site-ul solicită autentificare HTTP.",
+        basicAuthChallenge: {
+          projectId: overview.project.id,
+          url: overview.project.normalizedBaseUrl,
+          origin: "https://example.test",
+          invalidCredentials: false,
+        },
+      });
+    });
+
+    expect(
+      await screen.findByRole("dialog", {
+        name: "Autentificare HTTP necesară",
+      }),
+    ).not.toBeNull();
+    expect(screen.getByText("Așteaptă autentificarea")).not.toBeNull();
+    await user.type(screen.getByLabelText("Username"), "tester");
+    await user.type(screen.getByLabelText("Parolă"), "secret");
+    await user.click(
+      screen.getByRole("button", { name: "Autentifică și continuă" }),
+    );
+
+    await waitFor(() => {
+      expect(api.submitBasicAuth).toHaveBeenCalledWith({
+        username: "tester",
+        password: "secret",
+      });
+    });
   });
 
   it("validates and creates a project with a normalized URL preview", async () => {

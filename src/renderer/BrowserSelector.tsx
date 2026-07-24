@@ -113,9 +113,12 @@ export const BrowserSelector = ({
   const selectedBrowser = selectableBrowsers.find(
     ({ installationId }) => installationId === selectedId,
   );
-  const hasActiveBrowser = ["starting", "running", "reconnecting"].includes(
-    browserStatus.state,
-  );
+  const hasActiveBrowser = [
+    "starting",
+    "running",
+    "reconnecting",
+    "waiting_for_basic_auth",
+  ].includes(browserStatus.state);
   const isCurrentProject =
     hasActiveBrowser && browserStatus.projectId === project.id;
   const isBusy =
@@ -209,10 +212,15 @@ export const BrowserSelector = ({
         storageKey(project.id),
         selectedBrowser.installationId,
       );
-      await api.openProjectUrl(project.id, project.normalizedBaseUrl);
-      setSuccessMessage(
-        `${selectedBrowser.displayName} a fost pornit și URL-ul proiectului a fost deschis.`,
+      const navigation = await api.openProjectUrl(
+        project.id,
+        project.normalizedBaseUrl,
       );
+      if (navigation.state === "opened") {
+        setSuccessMessage(
+          `${selectedBrowser.displayName} a fost pornit și URL-ul proiectului a fost deschis.`,
+        );
+      }
     } catch (caughtError) {
       const message =
         caughtError instanceof Error ? caughtError.message : undefined;
@@ -234,8 +242,13 @@ export const BrowserSelector = ({
     setSuccessMessage(undefined);
 
     try {
-      await api.openProjectUrl(project.id, project.normalizedBaseUrl);
-      setSuccessMessage("URL-ul proiectului a fost deschis într-un tab nou.");
+      const navigation = await api.openProjectUrl(
+        project.id,
+        project.normalizedBaseUrl,
+      );
+      if (navigation.state === "opened") {
+        setSuccessMessage("URL-ul proiectului a fost deschis într-un tab nou.");
+      }
     } catch {
       setError("URL-ul proiectului nu a putut fi deschis.");
     } finally {
@@ -265,10 +278,15 @@ export const BrowserSelector = ({
 
     try {
       await api.recoverBrowserConnection();
-      await api.openProjectUrl(project.id, project.normalizedBaseUrl);
-      setSuccessMessage(
-        "Conexiunea a fost recuperată și URL-ul proiectului a fost redeschis.",
+      const navigation = await api.openProjectUrl(
+        project.id,
+        project.normalizedBaseUrl,
       );
+      if (navigation.state === "opened") {
+        setSuccessMessage(
+          "Conexiunea a fost recuperată și URL-ul proiectului a fost redeschis.",
+        );
+      }
     } catch {
       setError("Conexiunea cu browserul nu a putut fi recuperată.");
     } finally {

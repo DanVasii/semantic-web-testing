@@ -8,7 +8,10 @@ import {
   BROWSER_CHANNELS,
   PROJECT_CHANNELS,
 } from "../shared/ipc.js";
-import type { BrowserLaunchOptions } from "../shared/browser-manager.js";
+import type {
+  BasicAuthCredentials,
+  BrowserLaunchOptions,
+} from "../shared/browser-manager.js";
 import type { BrowserConfig } from "../shared/persistence.js";
 import type { ProjectInput } from "../shared/projects.js";
 import { createAppInfo } from "./app-info.js";
@@ -116,6 +119,14 @@ void app
       (_event, projectId: string, url: string) =>
         browserManager.openProjectUrl(projectId, url),
     );
+    ipcMain.handle(
+      BROWSER_CHANNELS.submitBasicAuth,
+      (_event, credentials: BasicAuthCredentials) =>
+        browserManager.submitBasicAuth(credentials),
+    );
+    ipcMain.handle(BROWSER_CHANNELS.cancelBasicAuth, () =>
+      browserManager.cancelBasicAuth(),
+    );
     ipcMain.handle(BROWSER_CHANNELS.close, () => browserManager.close());
     ipcMain.handle(
       BROWSER_CHANNELS.closeProjectTabs,
@@ -149,6 +160,7 @@ void app
   });
 
 app.on("before-quit", () => {
+  browserManager.clearBasicAuthCredentials();
   void browserManager.close();
   applicationDatabase?.close();
   applicationDatabase = null;

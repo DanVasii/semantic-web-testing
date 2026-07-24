@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { SemanticAppApi } from "../shared/ipc.js";
-import type { BrowserManagerStatus } from "../shared/browser-manager.js";
+import type {
+  BasicAuthCredentials,
+  BrowserManagerStatus,
+} from "../shared/browser-manager.js";
 import type { ProjectInput, ProjectOverview } from "../shared/projects.js";
 import { Button } from "./components/Button.js";
 import { ConfirmDialog } from "./components/ConfirmDialog.js";
 import { Toast, type ToastVariant } from "./components/Toast.js";
 import { BrowserSelector } from "./BrowserSelector.js";
+import { BasicAuthDialog } from "./BasicAuthDialog.js";
 import { ProjectFormModal } from "./ProjectFormModal.js";
 
 const LAST_PROJECT_STORAGE_KEY = "semantic-app:last-project-id";
@@ -43,6 +47,7 @@ export const ProjectDashboard = ({
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isSubmittingBasicAuth, setIsSubmittingBasicAuth] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [notification, setNotification] = useState<Notification>();
   const [browserStatus, setBrowserStatus] = useState<BrowserManagerStatus>({
@@ -112,6 +117,47 @@ export const ProjectDashboard = ({
       ),
     );
   }, []);
+
+  const submitBasicAuth = async (
+    credentials: BasicAuthCredentials,
+  ): Promise<void> => {
+    setIsSubmittingBasicAuth(true);
+
+    try {
+      const result = await api.submitBasicAuth(credentials);
+      if (result.state === "opened") {
+        setNotification({
+          variant: "success",
+          title: "Autentificare reușită",
+          message: "Navigarea proiectului a continuat.",
+        });
+      }
+    } catch {
+      setNotification({
+        variant: "error",
+        title: "Autentificarea nu a continuat",
+        message: "Încearcă din nou fără a închide browserul.",
+      });
+    } finally {
+      setIsSubmittingBasicAuth(false);
+    }
+  };
+
+  const cancelBasicAuth = async (): Promise<void> => {
+    if (isSubmittingBasicAuth) {
+      return;
+    }
+
+    try {
+      await api.cancelBasicAuth();
+    } catch {
+      setNotification({
+        variant: "error",
+        title: "Dialogul nu a putut fi închis",
+        message: "Închide browserul și încearcă din nou.",
+      });
+    }
+  };
 
   const openProject = (projectId: string): void => {
     setSelectedProjectId(projectId);
@@ -414,6 +460,21 @@ export const ProjectDashboard = ({
           }
         }}
       />
+
+      <BasicAuthDialog
+        open={
+          browserStatus.state === "waiting_for_basic_auth" &&
+          browserStatus.basicAuthChallenge !== undefined
+        }
+        {...(browserStatus.basicAuthChallenge === undefined
+          ? {}
+          : { challenge: browserStatus.basicAuthChallenge })}
+        isSubmitting={isSubmittingBasicAuth}
+        onCancel={() => {
+          void cancelBasicAuth();
+        }}
+        onSubmit={submitBasicAuth}
+      />
     </section>
   );
 };
@@ -504,9 +565,12 @@ const formatBrowserStatus = (
   status: BrowserManagerStatus,
   projectId: string,
 ): string => {
-  const isActive = ["starting", "running", "reconnecting"].includes(
-    status.state,
-  );
+  const isActive = [
+    "starting",
+    "running",
+    "reconnecting",
+    "waiting_for_basic_auth",
+  ].includes(status.state);
 
   if (isActive && status.projectId !== projectId) {
     return "Activ în alt proiect";
@@ -519,6 +583,8 @@ const formatBrowserStatus = (
       return status.browser ? `Pornit · ${status.browser}` : "Pornit";
     case "reconnecting":
       return "Se reconectează";
+    case "waiting_for_basic_auth":
+      return "Așteaptă autentificarea";
     case "closed":
       return "Închis";
     case "failed":

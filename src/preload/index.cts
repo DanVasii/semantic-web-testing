@@ -2,7 +2,9 @@ import { contextBridge, ipcRenderer } from "electron";
 
 import type { AppInfo, AppInfoChannel, SemanticAppApi } from "../shared/ipc.js";
 import type {
+  BasicAuthChallenge,
   BrowserManagerStatus,
+  BrowserNavigationResult,
   BrowserSession,
   BrowserTab,
   DetectedBrowser,
@@ -22,6 +24,8 @@ const BROWSER_CHANNELS = {
   detect: "browsers:detect",
   launch: "browsers:launch",
   openProjectUrl: "browsers:open-project-url",
+  submitBasicAuth: "browsers:submit-basic-auth",
+  cancelBasicAuth: "browsers:cancel-basic-auth",
   close: "browsers:close",
   closeProjectTabs: "browsers:close-project-tabs",
   recover: "browsers:recover",
@@ -117,21 +121,70 @@ const isBrowserTab = (value: unknown): value is BrowserTab =>
   "url" in value &&
   typeof value.url === "string";
 
+const isBasicAuthChallenge = (value: unknown): value is BasicAuthChallenge =>
+  typeof value === "object" &&
+  value !== null &&
+  "projectId" in value &&
+  typeof value.projectId === "string" &&
+  "url" in value &&
+  typeof value.url === "string" &&
+  "origin" in value &&
+  typeof value.origin === "string" &&
+  "invalidCredentials" in value &&
+  typeof value.invalidCredentials === "boolean";
+
+const isBrowserNavigationResult = (
+  value: unknown,
+): value is BrowserNavigationResult => {
+  if (typeof value !== "object" || value === null || !("state" in value)) {
+    return false;
+  }
+
+  if (value.state === "opened") {
+    return "tab" in value && isBrowserTab(value.tab);
+  }
+
+  return (
+    value.state === "waiting_for_basic_auth" &&
+    "challenge" in value &&
+    isBasicAuthChallenge(value.challenge)
+  );
+};
+
 const browserStates = new Set([
   "idle",
   "starting",
   "running",
   "reconnecting",
+  "waiting_for_basic_auth",
   "closed",
   "failed",
 ]);
 
-const isBrowserStatus = (value: unknown): value is BrowserManagerStatus =>
-  typeof value === "object" &&
-  value !== null &&
-  "state" in value &&
-  typeof value.state === "string" &&
-  browserStates.has(value.state);
+const isBrowserStatus = (value: unknown): value is BrowserManagerStatus => {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("state" in value) ||
+    typeof value.state !== "string" ||
+    !browserStates.has(value.state)
+  ) {
+    return false;
+  }
+
+  if (value.state === "waiting_for_basic_auth") {
+    return (
+      "basicAuthChallenge" in value &&
+      isBasicAuthChallenge(value.basicAuthChallenge)
+    );
+  }
+
+  return (
+    !("basicAuthChallenge" in value) ||
+    value.basicAuthChallenge === undefined ||
+    isBasicAuthChallenge(value.basicAuthChallenge)
+  );
+};
 
 const semanticAppApi: SemanticAppApi = {
   getAppInfo: async () => {
@@ -208,17 +261,36 @@ const semanticAppApi: SemanticAppApi = {
     return session;
   },
   openProjectUrl: async (projectId, url) => {
-    const tab: unknown = await ipcRenderer.invoke(
+    const result: unknown = await ipcRenderer.invoke(
       BROWSER_CHANNELS.openProjectUrl,
       projectId,
       url,
     );
 
-    if (!isBrowserTab(tab)) {
-      throw new TypeError("Main process returned invalid browser tab data.");
+    if (!isBrowserNavigationResult(result)) {
+      throw new TypeError(
+        "Main process returned invalid browser navigation data.",
+      );
     }
 
-    return tab;
+    return result;
+  },
+  submitBasicAuth: async (credentials) => {
+    const result: unknown = await ipcRenderer.invoke(
+      BROWSER_CHANNELS.submitBasicAuth,
+      credentials,
+    );
+
+    if (!isBrowserNavigationResult(result)) {
+      throw new TypeError(
+        "Main process returned invalid browser navigation data.",
+      );
+    }
+
+    return result;
+  },
+  cancelBasicAuth: async () => {
+    await ipcRenderer.invoke(BROWSER_CHANNELS.cancelBasicAuth);
   },
   closeBrowser: async () => {
     await ipcRenderer.invoke(BROWSER_CHANNELS.close);

@@ -85,10 +85,15 @@ const createApi = (): SemanticAppApi => ({
     startedAt: "2026-07-24T12:00:00.000Z",
   }),
   openProjectUrl: vi.fn().mockResolvedValue({
-    id: "tab-1",
-    projectId: project.id,
-    url: project.normalizedBaseUrl,
+    state: "opened",
+    tab: {
+      id: "tab-1",
+      projectId: project.id,
+      url: project.normalizedBaseUrl,
+    },
   }),
+  submitBasicAuth: vi.fn(),
+  cancelBasicAuth: vi.fn(),
   closeBrowser: vi.fn().mockResolvedValue(undefined),
   closeProjectTabs: vi.fn().mockResolvedValue(undefined),
   recoverBrowserConnection: vi.fn().mockResolvedValue({
