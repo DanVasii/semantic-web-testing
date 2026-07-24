@@ -48,6 +48,7 @@ export const RunnerPanel = ({ api, projectId, test }: RunnerPanelProps) => {
   const [runs, setRuns] = useState<TestRun[]>([]);
   const [stepResults, setStepResults] = useState<StepRunResult[]>([]);
   const [isStarting, setIsStarting] = useState(false);
+  const [isFallbackBusy, setIsFallbackBusy] = useState(false);
   const [error, setError] = useState<string>();
 
   const loadHistory = useCallback(async () => {
@@ -151,6 +152,32 @@ export const RunnerPanel = ({ api, projectId, test }: RunnerPanelProps) => {
     }
   };
 
+  const runFallback = async (): Promise<void> => {
+    if (snapshot.run === undefined) return;
+    setIsFallbackBusy(true);
+    setError(undefined);
+    try {
+      setSnapshot(await api.runCurrentFallback(snapshot.run.id));
+    } catch {
+      setError("Fallback-ul curent nu a putut fi executat.");
+    } finally {
+      setIsFallbackBusy(false);
+    }
+  };
+
+  const skipFallback = async (): Promise<void> => {
+    if (snapshot.run === undefined) return;
+    setIsFallbackBusy(true);
+    setError(undefined);
+    try {
+      setSnapshot(await api.skipCurrentFallback(snapshot.run.id));
+    } catch {
+      setError("Nu s-a putut trece la următorul fallback.");
+    } finally {
+      setIsFallbackBusy(false);
+    }
+  };
+
   const canStart =
     test.status === "valid" &&
     test.workflowState === "ready" &&
@@ -241,6 +268,43 @@ export const RunnerPanel = ({ api, projectId, test }: RunnerPanelProps) => {
             : ` (${snapshot.error.count} rezultate)`}
         </p>
       ) : null}
+
+      {snapshot.state === "waiting_for_fallback_decision" &&
+      snapshot.fallback !== undefined ? (
+        <section className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4">
+          <p className="text-xs font-semibold tracking-wide text-amber-800 uppercase">
+            Fallback {snapshot.fallback.index + 1} din {snapshot.fallback.total}
+          </p>
+          <h4 className="mt-1 font-semibold text-amber-950">
+            {snapshot.fallback.humanDescription}
+          </h4>
+          <p className="mt-1 text-sm text-amber-900">
+            {snapshot.fallback.whyExplanation}
+          </p>
+          <pre className="mt-3 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-100">
+            {JSON.stringify(snapshot.fallback.locator, null, 2)}
+          </pre>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              disabled={isFallbackBusy}
+              onClick={() => {
+                void runFallback();
+              }}
+            >
+              Rulează fallback
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={isFallbackBusy}
+              onClick={() => {
+                void skipFallback();
+              }}
+            >
+              Sari peste fallback
+            </Button>
+          </div>
+        </section>
+      ) : null}
       {error ? (
         <p className="mt-3 text-sm text-red-700" role="alert">
           {error}
@@ -263,6 +327,9 @@ export const RunnerPanel = ({ api, projectId, test }: RunnerPanelProps) => {
                 className="rounded-lg border border-app-border bg-app-surface p-3"
               >
                 v{run.testVersion} · {run.status} · {run.startedAt}
+                {(run.warnings?.length ?? 0) > 0
+                  ? ` · ${run.warnings?.length ?? 0} warning-uri`
+                  : ""}
               </li>
             ))}
           </ul>

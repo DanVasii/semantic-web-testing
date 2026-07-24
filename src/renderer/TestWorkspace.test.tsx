@@ -73,6 +73,8 @@ const createApi = (): SemanticAppApi => ({
   startRun: vi.fn(),
   stopRun: vi.fn(),
   retryRunStep: vi.fn(),
+  runCurrentFallback: vi.fn(),
+  skipCurrentFallback: vi.fn(),
   getRunnerStatus: vi.fn().mockResolvedValue({
     state: "idle",
     currentStepIndex: -1,

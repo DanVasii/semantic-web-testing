@@ -21,7 +21,11 @@ import {
   type StartRunInput,
 } from "../../shared/runner.js";
 import { toDeclarativeTestDefinition } from "../../shared/test-editor.js";
-import type { TestFlowItem } from "../../shared/test-model.js";
+import type {
+  ActionStep,
+  LocatorFallback,
+  TestFlowItem,
+} from "../../shared/test-model.js";
 import { validateDeclarativeTest } from "../../shared/test-validation.js";
 import {
   DatasetRepository,
@@ -66,6 +70,15 @@ interface RunnerSession {
   run: TestRun;
   snapshot: RunnerSnapshot;
   stopRequested: boolean;
+  pendingFallback?: PendingFallback;
+}
+
+interface PendingFallback {
+  item: ActionStep;
+  index: number;
+  startedAt: string;
+  primaryError: RunnerErrorDetails;
+  logs: JsonValue[];
 }
 
 const activeBrowserStates = new Set([
@@ -79,6 +92,14 @@ const copySnapshot = (snapshot: RunnerSnapshot): RunnerSnapshot => ({
   ...snapshot,
   ...(snapshot.run === undefined ? {} : { run: { ...snapshot.run } }),
   ...(snapshot.error === undefined ? {} : { error: { ...snapshot.error } }),
+  ...(snapshot.fallback === undefined
+    ? {}
+    : {
+        fallback: {
+          ...snapshot.fallback,
+          locator: structuredClone(snapshot.fallback.locator),
+        },
+      }),
 });
 
 const jsonError = (error: RunnerErrorDetails): JsonValue => ({
@@ -221,6 +242,8 @@ export class TestRunnerService {
     this.runRepository.updateStatus(runId, "stopped", endedAt);
     const snapshotWithoutError = { ...session.snapshot };
     delete snapshotWithoutError.error;
+    delete snapshotWithoutError.fallback;
+    delete session.pendingFallback;
     this.publish(session, {
       ...snapshotWithoutError,
       state: "stopped",
@@ -253,6 +276,121 @@ export class TestRunnerService {
       canRetry: false,
     });
     void this.continueRun(session);
+    return copySnapshot(session.snapshot);
+  }
+
+  public async runCurrentFallback(runId: string): Promise<RunnerSnapshot> {
+    const session = this.requireFallbackSession(runId);
+    const pending = session.pendingFallback;
+    const fallback = pending?.item.fallbacks[pending.index];
+    if (pending === undefined || fallback === undefined) {
+      throw new Error("Fallback-ul curent nu există.");
+    }
+
+    this.publish(session, {
+      ...session.snapshot,
+      state: "running",
+      message: `Se execută fallback-ul ${pending.index + 1}.`,
+      canStop: true,
+    });
+    let result: StepExecutionResult;
+    try {
+      result = await executeFlowItem(
+        session.page,
+        pending.item,
+        session.datasetValues,
+        fallback.locator,
+      );
+    } catch (error) {
+      const details = this.toRunnerError(error, pending.item.id);
+      pending.logs.push({
+        level: "warning",
+        message: `Fallback-ul ${pending.index + 1} a eșuat: ${details.message}`,
+      });
+      pending.index += 1;
+      if (pending.index >= pending.item.fallbacks.length) {
+        return this.finalizeExhaustedFallbacks(session, details);
+      }
+      this.publishFallbackDecision(session, details);
+      return copySnapshot(session.snapshot);
+    }
+
+    if (session.stopRequested) {
+      this.saveStepResult(
+        session,
+        pending.item,
+        "stopped",
+        {
+          ...result,
+          logs: [
+            ...pending.logs,
+            ...result.logs,
+            { level: "warning", message: "Rularea a fost oprită manual." },
+          ],
+        },
+        pending.startedAt,
+        undefined,
+        pending.index,
+      );
+      return copySnapshot(session.snapshot);
+    }
+
+    const warningMessage = `A fost folosit fallback-ul ${pending.index + 1}: ${fallback.humanDescription}`;
+    const warning: JsonValue = {
+      code: "fallback_used",
+      stepId: pending.item.id,
+      fallbackIndex: pending.index,
+      message: warningMessage,
+    };
+    session.run = this.runRepository.addWarning(session.run.id, warning);
+    this.saveStepResult(
+      session,
+      pending.item,
+      "passed_with_fallback",
+      {
+        ...result,
+        logs: [
+          ...pending.logs,
+          ...result.logs,
+          { level: "warning", message: warningMessage },
+        ],
+      },
+      pending.startedAt,
+      undefined,
+      pending.index,
+    );
+    session.snapshot.currentStepIndex += 1;
+    delete session.pendingFallback;
+    const nextSnapshot = { ...session.snapshot };
+    delete nextSnapshot.error;
+    delete nextSnapshot.fallback;
+    this.publish(session, {
+      ...nextSnapshot,
+      state: "running",
+      run: session.run,
+      message: "Fallback-ul a reușit. Rularea continuă.",
+      canStop: true,
+      canRetry: false,
+    });
+    void this.continueRun(session);
+    return copySnapshot(session.snapshot);
+  }
+
+  public skipCurrentFallback(runId: string): RunnerSnapshot {
+    const session = this.requireFallbackSession(runId);
+    const pending = session.pendingFallback;
+    if (pending === undefined) {
+      throw new Error("Fallback-ul curent nu există.");
+    }
+    pending.logs.push({
+      level: "warning",
+      message: `Fallback-ul ${pending.index + 1} a fost sărit de utilizator.`,
+    });
+    pending.index += 1;
+    if (pending.index >= pending.item.fallbacks.length) {
+      return this.finalizeExhaustedFallbacks(session, pending.primaryError);
+    }
+    this.publishFallbackDecision(session, pending.primaryError);
     return copySnapshot(session.snapshot);
   }
 
@@ -346,6 +484,26 @@ export class TestRunnerService {
         session.snapshot.currentStepIndex += 1;
       } catch (error) {
         const details = this.toRunnerError(error, item.id);
+        if (
+          item.type === "action" &&
+          item.fallbacks.length > 0 &&
+          ["locator_not_found", "locator_ambiguous"].includes(details.code)
+        ) {
+          session.pendingFallback = {
+            item,
+            index: 0,
+            startedAt: stepStartedAt,
+            primaryError: details,
+            logs: [
+              {
+                level: "warning",
+                message: `Locatorul principal a eșuat: ${details.message}`,
+              },
+            ],
+          };
+          this.publishFallbackDecision(session, details);
+          return;
+        }
         this.saveStepResult(
           session,
           item,
@@ -375,8 +533,12 @@ export class TestRunnerService {
 
     if (session.stopRequested) return;
     const endedAt = this.options.now().toISOString();
-    session.run = { ...session.run, status: "passed", endedAt };
-    this.runRepository.updateStatus(session.run.id, "passed", endedAt);
+    const finalStatus =
+      (session.run.warnings?.length ?? 0) > 0
+        ? "passed_with_warnings"
+        : "passed";
+    session.run = { ...session.run, status: finalStatus, endedAt };
+    this.runRepository.updateStatus(session.run.id, finalStatus, endedAt);
     const completedSnapshot = { ...session.snapshot };
     delete completedSnapshot.currentStepId;
     delete completedSnapshot.error;
@@ -385,7 +547,10 @@ export class TestRunnerService {
       state: "completed",
       run: session.run,
       currentStepIndex: session.test.flowItems.length,
-      message: "Testul a trecut.",
+      message:
+        finalStatus === "passed_with_warnings"
+          ? "Testul a trecut cu fallback-uri."
+          : "Testul a trecut.",
       canStop: false,
       canRetry: false,
     });
@@ -398,6 +563,7 @@ export class TestRunnerService {
     execution: StepExecutionResult,
     startedAt: string,
     error?: RunnerErrorDetails,
+    fallbackIndex?: number,
   ): void {
     const endedAt = this.options.now().toISOString();
     this.runRepository.createStepResult({
@@ -411,8 +577,95 @@ export class TestRunnerService {
         ? {}
         : { locatorUsed: execution.locatorUsed }),
       ...(error === undefined ? {} : { error: jsonError(error) }),
+      ...(fallbackIndex === undefined ? {} : { fallbackIndex }),
       logs: execution.logs,
     });
+  }
+
+  private publishFallbackDecision(
+    session: RunnerSession,
+    error: RunnerErrorDetails,
+  ): void {
+    const pending = session.pendingFallback;
+    const fallback = pending?.item.fallbacks[pending.index];
+    if (pending === undefined || fallback === undefined) {
+      throw new Error("Fallback-ul curent nu există.");
+    }
+    this.publish(session, {
+      ...session.snapshot,
+      state: "waiting_for_fallback_decision",
+      run: session.run,
+      message: `Locatorul principal a eșuat. Alege ce faci cu fallback-ul ${pending.index + 1} din ${pending.item.fallbacks.length}.`,
+      error,
+      fallback: this.toFallbackDecision(
+        fallback,
+        pending.index,
+        pending.item.fallbacks.length,
+      ),
+      canStop: true,
+      canRetry: false,
+    });
+  }
+
+  private finalizeExhaustedFallbacks(
+    session: RunnerSession,
+    lastError: RunnerErrorDetails,
+  ): RunnerSnapshot {
+    const pending = session.pendingFallback;
+    if (pending === undefined) {
+      throw new Error("Nu există fallback-uri în așteptare.");
+    }
+    const exhaustedError: RunnerErrorDetails = {
+      ...lastError,
+      message: `Toate fallback-urile au fost epuizate. ${lastError.message}`,
+      stepId: pending.item.id,
+    };
+    this.saveStepResult(
+      session,
+      pending.item,
+      "failed",
+      {
+        logs: [
+          ...pending.logs,
+          {
+            level: "error",
+            message: exhaustedError.message,
+          },
+        ],
+      },
+      pending.startedAt,
+      exhaustedError,
+    );
+    const endedAt = this.options.now().toISOString();
+    session.run = { ...session.run, status: "failed", endedAt };
+    this.runRepository.updateStatus(session.run.id, "failed", endedAt);
+    delete session.pendingFallback;
+    const failedSnapshot = { ...session.snapshot };
+    delete failedSnapshot.fallback;
+    this.publish(session, {
+      ...failedSnapshot,
+      state: "failed",
+      run: session.run,
+      message: exhaustedError.message,
+      error: exhaustedError,
+      canStop: false,
+      canRetry: false,
+    });
+    return copySnapshot(session.snapshot);
+  }
+
+  private toFallbackDecision(
+    fallback: LocatorFallback,
+    index: number,
+    total: number,
+  ): NonNullable<RunnerSnapshot["fallback"]> {
+    return {
+      index,
+      total,
+      humanDescription: fallback.humanDescription,
+      whyExplanation: fallback.whyExplanation,
+      locator: structuredClone(fallback.locator),
+    };
   }
 
   private async prepareBrowser(
@@ -545,6 +798,17 @@ export class TestRunnerService {
   private requireSession(runId: string): RunnerSession {
     const session = this.sessions.get(runId);
     if (session === undefined) throw new Error("Rularea nu există.");
+    return session;
+  }
+
+  private requireFallbackSession(runId: string): RunnerSession {
+    const session = this.requireSession(runId);
+    if (
+      session.snapshot.state !== "waiting_for_fallback_decision" ||
+      session.pendingFallback === undefined
+    ) {
+      throw new Error("Rularea nu așteaptă o decizie de fallback.");
+    }
     return session;
   }
 

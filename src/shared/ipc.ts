@@ -71,6 +71,8 @@ export const RUNNER_CHANNELS = {
   start: "runner:start",
   stop: "runner:stop",
   retry: "runner:retry",
+  runFallback: "runner:run-fallback",
+  skipFallback: "runner:skip-fallback",
   getStatus: "runner:get-status",
   listRuns: "runner:list-runs",
   listStepResults: "runner:list-step-results",
@@ -142,6 +144,8 @@ export interface SemanticAppApi {
   startRun: (input: StartRunInput) => Promise<RunnerSnapshot>;
   stopRun: (runId: string) => Promise<RunnerSnapshot>;
   retryRunStep: (runId: string) => Promise<RunnerSnapshot>;
+  runCurrentFallback: (runId: string) => Promise<RunnerSnapshot>;
+  skipCurrentFallback: (runId: string) => Promise<RunnerSnapshot>;
   getRunnerStatus: (
     projectId: string,
     testId: string,

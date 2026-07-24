@@ -129,6 +129,9 @@ const mapDataset = (row: DatabaseRow): TestDataset => ({
 const mapRun = (row: DatabaseRow): TestRun => {
   const datasetId = optionalText(row, "dataset_id");
   const endedAt = optionalText(row, "ended_at");
+  const warnings = parseJson<JsonValue[]>(
+    optionalText(row, "warnings_json") ?? "[]",
+  );
 
   return {
     id: text(row, "id"),
@@ -141,6 +144,7 @@ const mapRun = (row: DatabaseRow): TestRun => {
     status: text(row, "status") as TestRun["status"],
     browserType: text(row, "browser_type") as BrowserType,
     pageVersionIds: parseJson<string[]>(text(row, "page_version_ids_json")),
+    ...(warnings.length === 0 ? {} : { warnings }),
   };
 };
 
@@ -557,8 +561,8 @@ export class RunRepository {
       .prepare(
         `INSERT INTO runs (
           id, project_id, test_id, test_version, dataset_id, started_at,
-          ended_at, status, browser_type, page_version_ids_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ended_at, status, browser_type, page_version_ids_json, warnings_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         run.id,
@@ -571,6 +575,7 @@ export class RunRepository {
         run.status,
         run.browserType,
         json(run.pageVersionIds),
+        json(run.warnings ?? []),
       );
     return run;
   }
@@ -602,6 +607,18 @@ export class RunRepository {
         .prepare("UPDATE runs SET status = ?, ended_at = ? WHERE id = ?")
         .run(status, endedAt ?? null, id).changes > 0
     );
+  }
+
+  public addWarning(id: string, warning: JsonValue): TestRun {
+    const run = this.findById(id);
+    if (run === undefined) {
+      throw new Error("Rularea nu există.");
+    }
+    const warnings = [...(run.warnings ?? []), warning];
+    this.database
+      .prepare("UPDATE runs SET warnings_json = ? WHERE id = ?")
+      .run(json(warnings), id);
+    return { ...run, warnings };
   }
 
   public delete(id: string): boolean {

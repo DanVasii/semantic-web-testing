@@ -48,8 +48,9 @@ const requireTarget = (step: ActionStep): LocatorDefinition => {
 const resolveTarget = async (
   page: Page,
   step: ActionStep,
+  locatorOverride?: LocatorDefinition,
 ): Promise<{ definition: LocatorDefinition; locator: Locator }> => {
-  const definition = requireTarget(step);
+  const definition = locatorOverride ?? requireTarget(step);
   try {
     return {
       definition,
@@ -122,6 +123,7 @@ const executeAction = async (
   page: Page,
   step: ActionStep,
   dataset: Record<string, string>,
+  locatorOverride?: LocatorDefinition,
 ): Promise<StepExecutionResult> => {
   let locatorUsed: JsonValue | undefined;
   switch (step.actionType) {
@@ -131,31 +133,31 @@ const executeAction = async (
     case "click":
     case "choose_repeated_item":
     case "calendar_select": {
-      const target = await resolveTarget(page, step);
+      const target = await resolveTarget(page, step, locatorOverride);
       locatorUsed = asJson(target.definition);
       await target.locator.click();
       break;
     }
     case "fill": {
-      const target = await resolveTarget(page, step);
+      const target = await resolveTarget(page, step, locatorOverride);
       locatorUsed = asJson(target.definition);
       await target.locator.fill(resolveInputValue(step, dataset));
       break;
     }
     case "select_option": {
-      const target = await resolveTarget(page, step);
+      const target = await resolveTarget(page, step, locatorOverride);
       locatorUsed = asJson(target.definition);
       await target.locator.selectOption(resolveInputValue(step, dataset));
       break;
     }
     case "check": {
-      const target = await resolveTarget(page, step);
+      const target = await resolveTarget(page, step, locatorOverride);
       locatorUsed = asJson(target.definition);
       await target.locator.check();
       break;
     }
     case "uncheck": {
-      const target = await resolveTarget(page, step);
+      const target = await resolveTarget(page, step, locatorOverride);
       locatorUsed = asJson(target.definition);
       await target.locator.uncheck();
       break;
@@ -164,7 +166,7 @@ const executeAction = async (
       if (step.target === undefined) {
         await page.keyboard.press(step.key ?? "");
       } else {
-        const target = await resolveTarget(page, step);
+        const target = await resolveTarget(page, step, locatorOverride);
         locatorUsed = asJson(target.definition);
         await target.locator.press(step.key ?? "");
       }
@@ -173,13 +175,13 @@ const executeAction = async (
       if (step.target === undefined) {
         await page.mouse.wheel(0, 700);
       } else {
-        const target = await resolveTarget(page, step);
+        const target = await resolveTarget(page, step, locatorOverride);
         locatorUsed = asJson(target.definition);
         await target.locator.scrollIntoViewIfNeeded();
       }
       break;
     case "wait_for_element": {
-      const target = await resolveTarget(page, step);
+      const target = await resolveTarget(page, step, locatorOverride);
       locatorUsed = asJson(target.definition);
       await target.locator.waitFor({ state: "visible" });
       break;
@@ -312,8 +314,10 @@ export const executeFlowItem = (
   page: Page,
   item: TestFlowItem,
   dataset: Record<string, string>,
+  locatorOverride?: LocatorDefinition,
 ): Promise<StepExecutionResult> => {
-  if (item.type === "action") return executeAction(page, item, dataset);
+  if (item.type === "action")
+    return executeAction(page, item, dataset, locatorOverride);
   if (item.type === "check") return executeCheck(page, item);
   throw new StepExecutionError(
     "unsupported_step",

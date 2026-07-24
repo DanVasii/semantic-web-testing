@@ -116,8 +116,9 @@ const createHarness = (locator = createLocator()) => {
   const keyboardPress = vi.fn().mockResolvedValue(undefined);
   const mouseWheel = vi.fn().mockResolvedValue(undefined);
   const clearCookies = vi.fn().mockResolvedValue(undefined);
+  const pageLocator = vi.fn().mockReturnValue(locator);
   const page = {
-    locator: vi.fn().mockReturnValue(locator),
+    locator: pageLocator,
     goto,
     waitForURL,
     waitForLoadState: vi.fn().mockResolvedValue(undefined),
@@ -181,6 +182,7 @@ const createHarness = (locator = createLocator()) => {
       goto,
       keyboardPress,
       mouseWheel,
+      pageLocator,
       waitForURL,
     },
   };
@@ -365,5 +367,185 @@ describe("TestRunnerService", () => {
       ).toBe("stopped");
     });
     expect(harness.browser.getStatus().state).toBe("running");
+  });
+
+  it("waits for a fallback decision, runs it and persists the used locator and warning", async () => {
+    const fallbackLocator = {
+      type: "css" as const,
+      operator: "equals" as const,
+      value: "#fallback",
+    };
+    const test = createReadyTest([
+      action("click", "click", {
+        target,
+        fallbacks: [
+          {
+            locator: fallbackLocator,
+            humanDescription: "Buton alternativ",
+            whyExplanation: "Folosit când selectorul principal lipsește.",
+          },
+        ],
+      }),
+    ]);
+    const primary = createLocator();
+    primary.count.mockResolvedValue(0);
+    const fallback = createLocator();
+    const harness = createHarness(primary);
+    harness.spies.pageLocator.mockImplementation((selector: string) =>
+      selector === "#fallback" ? fallback : primary,
+    );
+    const service = createService(harness.browser);
+
+    const started = await service.start({
+      projectId: project.id,
+      testId: test.id,
+    });
+    await vi.waitFor(() => {
+      expect(service.getStatus(project.id, test.id).state).toBe(
+        "waiting_for_fallback_decision",
+      );
+    });
+    expect(service.getStatus(project.id, test.id).fallback).toMatchObject({
+      index: 0,
+      total: 1,
+      humanDescription: "Buton alternativ",
+      locator: fallbackLocator,
+    });
+
+    await service.runCurrentFallback(started.run?.id ?? "");
+    await vi.waitFor(() => {
+      expect(service.getStatus(project.id, test.id).state).toBe("completed");
+    });
+    const completedRun = service.listRuns(project.id, test.id)[0];
+    expect(completedRun).toMatchObject({
+      status: "passed_with_warnings",
+      warnings: [
+        expect.objectContaining({
+          code: "fallback_used",
+          fallbackIndex: 0,
+        }),
+      ],
+    });
+    expect(
+      service.listStepResults(project.id, test.id, started.run?.id ?? "")[0],
+    ).toMatchObject({
+      status: "passed_with_fallback",
+      fallbackIndex: 0,
+      locatorUsed: fallbackLocator,
+    });
+    expect(fallback.click).toHaveBeenCalledOnce();
+  });
+
+  it("skips to the next fallback and fails after all fallbacks are exhausted", async () => {
+    const test = createReadyTest([
+      action("click", "click", {
+        target,
+        fallbacks: [
+          {
+            locator: {
+              type: "css",
+              operator: "equals",
+              value: "#fallback-1",
+            },
+            humanDescription: "Fallback unu",
+            whyExplanation: "Prima alternativă.",
+          },
+          {
+            locator: {
+              type: "css",
+              operator: "equals",
+              value: "#fallback-2",
+            },
+            humanDescription: "Fallback doi",
+            whyExplanation: "A doua alternativă.",
+          },
+        ],
+      }),
+    ]);
+    const missing = createLocator();
+    missing.count.mockResolvedValue(0);
+    const harness = createHarness(missing);
+    const service = createService(harness.browser);
+
+    const started = await service.start({
+      projectId: project.id,
+      testId: test.id,
+    });
+    await vi.waitFor(() => {
+      expect(service.getStatus(project.id, test.id).fallback?.index).toBe(0);
+    });
+    const second = service.skipCurrentFallback(started.run?.id ?? "");
+    expect(second).toMatchObject({
+      state: "waiting_for_fallback_decision",
+      fallback: { index: 1, total: 2 },
+    });
+    const exhausted = service.skipCurrentFallback(started.run?.id ?? "");
+    expect(exhausted).toMatchObject({
+      state: "failed",
+      run: { status: "failed" },
+      canRetry: false,
+    });
+    expect(exhausted.message).toContain(
+      "Toate fallback-urile au fost epuizate",
+    );
+    expect(
+      service.listStepResults(project.id, test.id, started.run?.id ?? "")[0],
+    ).toMatchObject({ status: "failed" });
+  });
+
+  it("automatically offers the next fallback when the current one fails", async () => {
+    const test = createReadyTest([
+      action("click", "click", {
+        target,
+        fallbacks: [
+          {
+            locator: {
+              type: "css",
+              operator: "equals",
+              value: "#missing-fallback",
+            },
+            humanDescription: "Fallback lipsă",
+            whyExplanation: "Prima alternativă.",
+          },
+          {
+            locator: {
+              type: "css",
+              operator: "equals",
+              value: "#working-fallback",
+            },
+            humanDescription: "Fallback funcțional",
+            whyExplanation: "A doua alternativă.",
+          },
+        ],
+      }),
+    ]);
+    const missing = createLocator();
+    missing.count.mockResolvedValue(0);
+    const working = createLocator();
+    const harness = createHarness(missing);
+    harness.spies.pageLocator.mockImplementation((selector: string) =>
+      selector === "#working-fallback" ? working : missing,
+    );
+    const service = createService(harness.browser);
+    const started = await service.start({
+      projectId: project.id,
+      testId: test.id,
+    });
+    await vi.waitFor(() => {
+      expect(service.getStatus(project.id, test.id).fallback?.index).toBe(0);
+    });
+
+    const nextFallback = await service.runCurrentFallback(
+      started.run?.id ?? "",
+    );
+    expect(nextFallback).toMatchObject({
+      state: "waiting_for_fallback_decision",
+      fallback: { index: 1 },
+    });
+    await service.runCurrentFallback(started.run?.id ?? "");
+    await vi.waitFor(() => {
+      expect(service.getStatus(project.id, test.id).state).toBe("completed");
+    });
+    expect(working.click).toHaveBeenCalledOnce();
   });
 });

@@ -69,6 +69,8 @@ const RUNNER_CHANNELS = {
   start: "runner:start",
   stop: "runner:stop",
   retry: "runner:retry",
+  runFallback: "runner:run-fallback",
+  skipFallback: "runner:skip-fallback",
   getStatus: "runner:get-status",
   listRuns: "runner:list-runs",
   listStepResults: "runner:list-step-results",
@@ -842,6 +844,26 @@ const semanticAppApi: SemanticAppApi = {
     );
     if (!isRunnerSnapshot(snapshot)) {
       throw new TypeError("Main process returned invalid runner data.");
+    }
+    return snapshot;
+  },
+  runCurrentFallback: async (runId) => {
+    const snapshot: unknown = await ipcRenderer.invoke(
+      RUNNER_CHANNELS.runFallback,
+      runId,
+    );
+    if (!isRunnerSnapshot(snapshot)) {
+      throw new TypeError("Main process returned invalid fallback data.");
+    }
+    return snapshot;
+  },
+  skipCurrentFallback: async (runId) => {
+    const snapshot: unknown = await ipcRenderer.invoke(
+      RUNNER_CHANNELS.skipFallback,
+      runId,
+    );
+    if (!isRunnerSnapshot(snapshot)) {
+      throw new TypeError("Main process returned invalid fallback data.");
     }
     return snapshot;
   },

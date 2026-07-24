@@ -84,6 +84,8 @@ const createApi = (
   startRun: vi.fn(),
   stopRun: vi.fn(),
   retryRunStep: vi.fn(),
+  runCurrentFallback: vi.fn(),
+  skipCurrentFallback: vi.fn(),
   getRunnerStatus: vi.fn(),
   listTestRuns: vi.fn().mockResolvedValue([]),
   listRunStepResults: vi.fn().mockResolvedValue([]),

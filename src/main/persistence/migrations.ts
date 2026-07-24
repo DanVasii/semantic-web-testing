@@ -252,6 +252,16 @@ export const APPLICATION_MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    version: 12,
+    name: "add_run_warnings",
+    up(database) {
+      database.exec(`
+        ALTER TABLE runs
+        ADD COLUMN warnings_json TEXT NOT NULL DEFAULT '[]';
+      `);
+    },
+  },
 ];
 
 export const assertValidMigrations = (

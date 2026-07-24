@@ -1,4 +1,5 @@
 import type { StepRunResult, TestRun } from "./persistence.js";
+import type { LocatorDefinition } from "./test-model.js";
 
 export const RUNNER_STATES = [
   "idle",
@@ -39,6 +40,14 @@ export interface RunnerErrorDetails {
   stepId?: string;
 }
 
+export interface FallbackDecision {
+  index: number;
+  total: number;
+  humanDescription: string;
+  whyExplanation: string;
+  locator: LocatorDefinition;
+}
+
 export interface RunnerSnapshot {
   state: RunnerState;
   run?: TestRun;
@@ -47,6 +56,7 @@ export interface RunnerSnapshot {
   currentStepId?: string;
   message?: string;
   error?: RunnerErrorDetails;
+  fallback?: FallbackDecision;
   canStop: boolean;
   canRetry: boolean;
 }

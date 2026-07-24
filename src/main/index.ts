@@ -262,6 +262,12 @@ void app
     ipcMain.handle(RUNNER_CHANNELS.retry, (_event, runId: string) =>
       testRunnerService.retry(runId),
     );
+    ipcMain.handle(RUNNER_CHANNELS.runFallback, (_event, runId: string) =>
+      testRunnerService.runCurrentFallback(runId),
+    );
+    ipcMain.handle(RUNNER_CHANNELS.skipFallback, (_event, runId: string) =>
+      testRunnerService.skipCurrentFallback(runId),
+    );
     ipcMain.handle(
       RUNNER_CHANNELS.getStatus,
       (_event, projectId: string, testId: string) =>

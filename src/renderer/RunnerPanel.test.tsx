@@ -158,4 +158,55 @@ describe("RunnerPanel", () => {
     });
     expect(screen.getByText("Rezultate și logs (1)")).not.toBeNull();
   });
+
+  it("shows the current fallback and supports Run and Skip decisions", async () => {
+    const user = userEvent.setup();
+    const fallbackSnapshot = snapshot({
+      state: "waiting_for_fallback_decision",
+      error: {
+        code: "locator_not_found",
+        message: "Locatorul principal nu a găsit elementul.",
+        count: 0,
+      },
+      fallback: {
+        index: 0,
+        total: 2,
+        humanDescription: "Buton alternativ",
+        whyExplanation: "Selector semantic secundar.",
+        locator: {
+          type: "css",
+          operator: "equals",
+          value: "#fallback",
+        },
+      },
+      canStop: true,
+    });
+    const api = {
+      getRunnerStatus: vi.fn().mockResolvedValue(fallbackSnapshot),
+      listTestRuns: vi.fn().mockResolvedValue([]),
+      listRunStepResults: vi.fn().mockResolvedValue([]),
+      onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
+      runCurrentFallback: vi.fn().mockResolvedValue(fallbackSnapshot),
+      skipCurrentFallback: vi.fn().mockResolvedValue(
+        snapshot({
+          ...fallbackSnapshot,
+          fallback: {
+            ...fallbackSnapshot.fallback!,
+            index: 1,
+          },
+        }),
+      ),
+    } as unknown as SemanticAppApi;
+    render(<RunnerPanel api={api} projectId={test.projectId} test={test} />);
+
+    expect(await screen.findByText("Fallback 1 din 2")).not.toBeNull();
+    expect(screen.getByText("Buton alternativ")).not.toBeNull();
+    expect(screen.getByText(/#fallback/)).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "Rulează fallback" }));
+    expect(api.runCurrentFallback).toHaveBeenCalledWith(run.id);
+    await user.click(
+      screen.getByRole("button", { name: "Sari peste fallback" }),
+    );
+    expect(api.skipCurrentFallback).toHaveBeenCalledWith(run.id);
+  });
 });

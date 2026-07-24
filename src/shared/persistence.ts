@@ -104,6 +104,7 @@ export interface TestRun {
   status: "running" | "passed" | "passed_with_warnings" | "failed" | "stopped";
   browserType: BrowserType;
   pageVersionIds: string[];
+  warnings?: JsonValue[];
 }
 
 export interface StepRunResult {

@@ -263,10 +263,18 @@ describe("RunRepository", () => {
     expect(repository.listByProject(project.id)).toEqual([run]);
     expect(repository.listStepResults(run.id)).toEqual([result]);
     expect(repository.updateStatus(run.id, "passed", LATER)).toBe(true);
+    const warning = {
+      code: "fallback_used",
+      message: "Fallback locator selected.",
+    };
+    expect(repository.addWarning(run.id, warning)).toMatchObject({
+      warnings: [warning],
+    });
     expect(repository.findById(run.id)).toEqual({
       ...run,
       endedAt: LATER,
       status: "passed",
+      warnings: [warning],
     });
 
     expect(repository.delete(run.id)).toBe(true);
