@@ -7,6 +7,7 @@ import {
 
 const detectedBrowsers: DetectedBrowser[] = [
   {
+    installationId: "system:chrome",
     id: "chrome",
     displayName: "Google Chrome",
     engine: "chromium",
@@ -17,6 +18,7 @@ const detectedBrowsers: DetectedBrowser[] = [
       "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   },
   {
+    installationId: "system:firefox",
     id: "firefox",
     displayName: "Mozilla Firefox",
     engine: "firefox",
@@ -26,6 +28,7 @@ const detectedBrowsers: DetectedBrowser[] = [
     unavailableReason: "Browserul nu este instalat.",
   },
   {
+    installationId: "system:safari",
     id: "safari",
     displayName: "Safari",
     engine: "webkit",
@@ -35,6 +38,7 @@ const detectedBrowsers: DetectedBrowser[] = [
     unavailableReason: "Safari nu este disponibil pe Windows.",
   },
   {
+    installationId: "system:edge",
     id: "edge",
     displayName: "Microsoft Edge",
     engine: "chromium",

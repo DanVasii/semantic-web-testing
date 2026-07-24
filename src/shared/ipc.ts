@@ -1,4 +1,9 @@
 import type { ProjectInput, ProjectOverview } from "./projects.js";
+import type {
+  BrowserLaunchOptions,
+  BrowserSession,
+  DetectedBrowser,
+} from "./browser-manager.js";
 
 export type AppInfoChannel = "app:get-info";
 
@@ -9,6 +14,11 @@ export const PROJECT_CHANNELS = {
   create: "projects:create",
   update: "projects:update",
   delete: "projects:delete",
+} as const;
+
+export const BROWSER_CHANNELS = {
+  detect: "browsers:detect",
+  launch: "browsers:launch",
 } as const;
 
 export interface AppInfo {
@@ -25,4 +35,6 @@ export interface SemanticAppApi {
     input: ProjectInput,
   ) => Promise<ProjectOverview>;
   deleteProject: (projectId: string) => Promise<boolean>;
+  detectBrowsers: () => Promise<DetectedBrowser[]>;
+  launchBrowser: (options: BrowserLaunchOptions) => Promise<BrowserSession>;
 }

@@ -3,9 +3,15 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { APP_INFO_CHANNEL, PROJECT_CHANNELS } from "../shared/ipc.js";
+import {
+  APP_INFO_CHANNEL,
+  BROWSER_CHANNELS,
+  PROJECT_CHANNELS,
+} from "../shared/ipc.js";
+import type { BrowserLaunchOptions } from "../shared/browser-manager.js";
 import type { ProjectInput } from "../shared/projects.js";
 import { createAppInfo } from "./app-info.js";
+import { PlaywrightBrowserManager } from "./browser/playwright-browser-manager.js";
 import {
   openApplicationDatabase,
   type ApplicationDatabase,
@@ -17,6 +23,7 @@ import { createMainWindowOptions } from "./window-options.js";
 
 let mainWindow: BrowserWindow | null = null;
 let applicationDatabase: ApplicationDatabase | null = null;
+const browserManager = new PlaywrightBrowserManager();
 
 const rendererEntryPath = fileURLToPath(
   new URL("../renderer/index.html", import.meta.url),
@@ -85,6 +92,13 @@ void app
     ipcMain.handle(PROJECT_CHANNELS.delete, (_event, projectId: string) =>
       projectsService.delete(projectId),
     );
+    ipcMain.handle(BROWSER_CHANNELS.detect, () =>
+      browserManager.detectAvailableBrowsers(),
+    );
+    ipcMain.handle(
+      BROWSER_CHANNELS.launch,
+      (_event, options: BrowserLaunchOptions) => browserManager.launch(options),
+    );
 
     createMainWindow();
 
@@ -100,6 +114,7 @@ void app
   });
 
 app.on("before-quit", () => {
+  void browserManager.close();
   applicationDatabase?.close();
   applicationDatabase = null;
 });

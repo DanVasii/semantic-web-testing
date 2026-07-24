@@ -8,6 +8,7 @@ export type BrowserProduct =
 export type BrowserInstallationSource = "playwright" | "system";
 
 export interface DetectedBrowser {
+  installationId: string;
   id: BrowserProduct;
   displayName: string;
   engine: BrowserEngine;
@@ -21,6 +22,7 @@ export interface DetectedBrowser {
 export interface BrowserLaunchOptions {
   projectId: string;
   browser: BrowserProduct;
+  source: BrowserInstallationSource;
   sessionMode: BrowserSessionMode;
   executablePath?: string;
   profilePath?: string;

@@ -1,6 +1,10 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 import type { AppInfo, AppInfoChannel, SemanticAppApi } from "../shared/ipc.js";
+import type {
+  BrowserSession,
+  DetectedBrowser,
+} from "../shared/browser-manager.js";
 import type { ProjectOverview } from "../shared/projects.js";
 
 const APP_INFO_CHANNEL: AppInfoChannel = "app:get-info";
@@ -9,6 +13,10 @@ const PROJECT_CHANNELS = {
   create: "projects:create",
   update: "projects:update",
   delete: "projects:delete",
+} as const;
+const BROWSER_CHANNELS = {
+  detect: "browsers:detect",
+  launch: "browsers:launch",
 } as const;
 
 const isAppInfo = (value: unknown): value is AppInfo => {
@@ -62,6 +70,32 @@ const requireProjectOverview = (value: unknown): ProjectOverview => {
   return value;
 };
 
+const isDetectedBrowser = (value: unknown): value is DetectedBrowser =>
+  typeof value === "object" &&
+  value !== null &&
+  "installationId" in value &&
+  typeof value.installationId === "string" &&
+  "id" in value &&
+  typeof value.id === "string" &&
+  "displayName" in value &&
+  typeof value.displayName === "string" &&
+  "installed" in value &&
+  typeof value.installed === "boolean" &&
+  "supported" in value &&
+  typeof value.supported === "boolean";
+
+const isBrowserSession = (value: unknown): value is BrowserSession =>
+  typeof value === "object" &&
+  value !== null &&
+  "id" in value &&
+  typeof value.id === "string" &&
+  "projectId" in value &&
+  typeof value.projectId === "string" &&
+  "browser" in value &&
+  typeof value.browser === "string" &&
+  "startedAt" in value &&
+  typeof value.startedAt === "string";
+
 const semanticAppApi: SemanticAppApi = {
   getAppInfo: async () => {
     const appInfo: unknown = await ipcRenderer.invoke(APP_INFO_CHANNEL);
@@ -103,6 +137,30 @@ const semanticAppApi: SemanticAppApi = {
     }
 
     return wasDeleted;
+  },
+  detectBrowsers: async () => {
+    const browsers: unknown = await ipcRenderer.invoke(BROWSER_CHANNELS.detect);
+
+    if (
+      !Array.isArray(browsers) ||
+      !browsers.every((browser) => isDetectedBrowser(browser))
+    ) {
+      throw new TypeError("Main process returned invalid browser detections.");
+    }
+
+    return browsers;
+  },
+  launchBrowser: async (options) => {
+    const session: unknown = await ipcRenderer.invoke(
+      BROWSER_CHANNELS.launch,
+      options,
+    );
+
+    if (!isBrowserSession(session)) {
+      throw new TypeError("Main process returned an invalid browser session.");
+    }
+
+    return session;
   },
 };
 
