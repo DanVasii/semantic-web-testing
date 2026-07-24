@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { AppInfo } from "../shared/ipc.js";
-import { DesignSystemShowcase } from "./DesignSystemShowcase.js";
+import { ProjectDashboard } from "./ProjectDashboard.js";
 
 export const App = () => {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
@@ -29,44 +29,32 @@ export const App = () => {
   }, []);
 
   return (
-    <main className="min-h-screen bg-app-canvas px-8 py-10 text-app-ink">
-      <div className="mx-auto max-w-5xl">
-        <span className="inline-flex rounded-full bg-brand-100 px-3 py-1 text-xs font-semibold tracking-[0.14em] text-brand-700 uppercase">
-          Fundație aplicație
-        </span>
-
-        <h1 className="mt-5 text-4xl font-semibold tracking-tight">
-          Semantic Web Testing App
-        </h1>
-        <p className="mt-3 max-w-2xl text-base leading-7 text-app-muted">
-          Renderer-ul React folosește acum Tailwind pentru interfața de testare
-          semantică. Hot reload verificat.
-        </p>
-
-        <section
-          aria-label="Stare fundație"
-          className="mt-8 flex items-center gap-3 rounded-xl border border-app-border bg-app-surface p-5 shadow-sm"
-        >
-          <span
-            aria-hidden="true"
-            className="h-2.5 w-2.5 rounded-full bg-brand-500"
-          />
-          <div>
-            <p className="font-medium">Interfață activă</p>
-            <p className="mt-1 text-sm text-app-muted">
-              Light mode cu accent portocaliu.
-            </p>
-            <p className="mt-1 text-sm text-app-muted">
-              {hasAppInfoError
-                ? "Informațiile aplicației nu sunt disponibile."
-                : appInfo === null
-                  ? "Se încarcă informațiile aplicației."
-                  : `Versiune aplicație ${appInfo.version} · Electron ${appInfo.electronVersion}`}
-            </p>
+    <main className="min-h-screen bg-app-canvas text-app-ink">
+      <header className="border-b border-app-border bg-app-surface">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-6 px-8 py-5">
+          <div className="flex items-center gap-3">
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-brand-600 font-bold text-white shadow-sm">
+              S
+            </span>
+            <div>
+              <h1 className="font-semibold tracking-tight">
+                Semantic Web Testing
+              </h1>
+              <p className="text-xs text-app-muted">Aplicație desktop locală</p>
+            </div>
           </div>
-        </section>
+          <p className="text-xs text-app-muted">
+            {hasAppInfoError
+              ? "Versiunea nu este disponibilă"
+              : appInfo === null
+                ? "Se încarcă..."
+                : `v${appInfo.version} · Electron ${appInfo.electronVersion}`}
+          </p>
+        </div>
+      </header>
 
-        <DesignSystemShowcase />
+      <div className="mx-auto max-w-6xl px-8 pb-12">
+        <ProjectDashboard />
       </div>
     </main>
   );

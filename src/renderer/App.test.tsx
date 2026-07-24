@@ -1,19 +1,31 @@
-import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
 
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type { SemanticAppApi } from "../shared/ipc.js";
 import { App } from "./App.js";
 
-describe("App", () => {
-  it("renders the renderer foundation", () => {
-    const markup = renderToStaticMarkup(<App />);
+afterEach(cleanup);
 
-    expect(markup).toContain("Semantic Web Testing App");
-    expect(markup).toContain("bg-app-canvas");
-    expect(markup).toContain("bg-brand-500");
-    expect(markup).toContain("Light mode cu accent portocaliu.");
-    expect(markup).toContain("Se încarcă informațiile aplicației.");
-    expect(markup).toContain("Componente de bază");
-    expect(markup).toContain("Deschide modal");
-    expect(markup).toContain("Modificările au fost păstrate.");
+describe("App", () => {
+  it("renders the project workspace and application version", async () => {
+    const api: SemanticAppApi = {
+      getAppInfo: vi.fn().mockResolvedValue({
+        version: "0.1.0",
+        electronVersion: "41.7.1",
+      }),
+      listProjects: vi.fn().mockResolvedValue([]),
+      createProject: vi.fn(),
+      updateProject: vi.fn(),
+      deleteProject: vi.fn(),
+    };
+    window.semanticApp = api;
+
+    render(<App />);
+
+    expect(screen.getByText("Semantic Web Testing")).not.toBeNull();
+    expect(await screen.findByText("Creează primul proiect")).not.toBeNull();
+    expect(await screen.findByText("v0.1.0 · Electron 41.7.1")).not.toBeNull();
   });
 });
