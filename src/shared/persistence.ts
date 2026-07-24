@@ -79,7 +79,7 @@ export interface TestDefinition {
   workflowState: TestWorkflowState;
   createdAt: string;
   updatedAt: string;
-  flowItems: JsonValue[];
+  flowItems: TestFlowItem[];
 }
 
 export interface TestVersion {
@@ -91,14 +91,7 @@ export interface TestVersion {
   snapshotFilePath: string;
 }
 
-export interface TestDataset {
-  id: string;
-  testId: string;
-  name: string;
-  values: Record<string, JsonValue>;
-  createdAt: string;
-  updatedAt: string;
-}
+export type TestDataset = DeclarativeTestDataset;
 
 export interface TestRun {
   id: string;
@@ -152,3 +145,7 @@ export interface ProjectSettings {
   settings: Record<string, JsonValue>;
   updatedAt: string;
 }
+import type {
+  TestDataset as DeclarativeTestDataset,
+  TestFlowItem,
+} from "./test-model.js";

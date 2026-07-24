@@ -96,7 +96,25 @@ describe("TestsService", () => {
       ...created,
       status: "valid",
       workflowState: "ready",
-      flowItems: [{ type: "click", target: "checkout" }],
+      flowItems: [
+        {
+          id: "step-1",
+          type: "action",
+          actionType: "click",
+          title: "Deschide checkout",
+          humanDescription: "Apasă butonul de checkout.",
+          whyExplanation: "Butonul continuă scenariul de cumpărare.",
+          target: {
+            primary: {
+              type: "css",
+              operator: "equals",
+              value: "#checkout",
+            },
+          },
+          fallbacks: [],
+          enabled: true,
+        },
+      ],
     });
 
     const updated = service.update(project.id, created.id, {

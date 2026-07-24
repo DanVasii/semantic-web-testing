@@ -1,20 +1,7 @@
-export type SemanticMatchOperator =
-  | "equals"
-  | "contains"
-  | "contains_all_keywords"
-  | "contains_any_keyword"
-  | "starts_with"
-  | "ends_with"
-  | "regex";
+import type { MatchOperator, SimpleLocatorType } from "./test-model.js";
 
-export type SemanticLocatorType =
-  | "css"
-  | "role"
-  | "label"
-  | "text"
-  | "title"
-  | "placeholder"
-  | "data_attribute";
+export type SemanticMatchOperator = MatchOperator;
+export type SemanticLocatorType = SimpleLocatorType;
 
 export interface SemanticLocatorStrategy {
   type: SemanticLocatorType;

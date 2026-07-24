@@ -32,7 +32,13 @@ const optionalNumber = (row: DatabaseRow, key: string): number | undefined => {
   return value === null || value === undefined ? undefined : (value as number);
 };
 const parseJson = <T>(value: string): T => JSON.parse(value) as T;
-const json = (value: JsonValue | JsonValue[]): string => JSON.stringify(value);
+const json = (value: unknown): string => {
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) {
+    throw new Error("Valoarea nu poate fi serializată ca JSON.");
+  }
+  return serialized;
+};
 
 const mapProject = (row: DatabaseRow): Project => {
   const mysqlConfig = optionalText(row, "mysql_config_json");
@@ -96,7 +102,9 @@ const mapTest = (row: DatabaseRow): TestDefinition => {
     ) as TestDefinition["workflowState"],
     createdAt: text(row, "created_at"),
     updatedAt: text(row, "updated_at"),
-    flowItems: parseJson<JsonValue[]>(text(row, "flow_items_json")),
+    flowItems: parseJson<TestDefinition["flowItems"]>(
+      text(row, "flow_items_json"),
+    ),
   };
 };
 
@@ -113,7 +121,7 @@ const mapDataset = (row: DatabaseRow): TestDataset => ({
   id: text(row, "id"),
   testId: text(row, "test_id"),
   name: text(row, "name"),
-  values: parseJson<Record<string, JsonValue>>(text(row, "values_json")),
+  values: parseJson<TestDataset["values"]>(text(row, "values_json")),
   createdAt: text(row, "created_at"),
   updatedAt: text(row, "updated_at"),
 });
@@ -178,7 +186,7 @@ export class ProjectRepository {
         project.normalizedBaseUrl,
         project.createdAt,
         project.updatedAt,
-        json(project.browserConfig as unknown as JsonValue),
+        json(project.browserConfig),
         json(project.aiConfig),
         project.mysqlConfig === undefined ? null : json(project.mysqlConfig),
         json(project.shortcutConfig),
@@ -215,7 +223,7 @@ export class ProjectRepository {
         project.baseUrl,
         project.normalizedBaseUrl,
         project.updatedAt,
-        json(project.browserConfig as unknown as JsonValue),
+        json(project.browserConfig),
         json(project.aiConfig),
         project.mysqlConfig === undefined ? null : json(project.mysqlConfig),
         json(project.shortcutConfig),

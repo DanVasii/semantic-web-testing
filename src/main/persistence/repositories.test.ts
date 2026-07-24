@@ -69,7 +69,25 @@ const testDefinition: TestDefinition = {
   workflowState: "ready",
   createdAt: NOW,
   updatedAt: NOW,
-  flowItems: [{ type: "action", semanticId: "booking_date" }],
+  flowItems: [
+    {
+      id: "step-1",
+      type: "action",
+      actionType: "click",
+      title: "Selectează data",
+      humanDescription: "Selectează data rezervării.",
+      whyExplanation: "Data este identificată semantic.",
+      target: {
+        primary: {
+          type: "css",
+          operator: "equals",
+          value: "#booking-date",
+        },
+      },
+      fallbacks: [],
+      enabled: true,
+    },
+  ],
 };
 
 let temporaryDirectory: string;

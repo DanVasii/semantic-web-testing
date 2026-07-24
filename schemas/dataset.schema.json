@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semantic-web-testing.local/schemas/dataset.schema.json",
+  "title": "Semantic Web Test Dataset",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "testId", "name", "values", "createdAt", "updatedAt"],
+  "properties": {
+    "id": { "$ref": "#/$defs/id" },
+    "testId": { "$ref": "#/$defs/id" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "values": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/fieldId" },
+      "additionalProperties": { "$ref": "#/$defs/datasetValue" },
+      "maxProperties": 1000
+    },
+    "createdAt": { "$ref": "#/$defs/dateTime" },
+    "updatedAt": { "$ref": "#/$defs/dateTime" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    },
+    "fieldId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[a-z_][a-z0-9_]*$"
+    },
+    "dateTime": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "primitive": {
+      "type": ["string", "number", "boolean", "null"]
+    },
+    "fixedValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "value"],
+      "properties": {
+        "type": { "const": "fixed" },
+        "value": { "$ref": "#/$defs/primitive" }
+      }
+    },
+    "timestampValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "strategy"],
+      "properties": {
+        "type": { "const": "generated" },
+        "strategy": { "const": "timestamp" }
+      }
+    },
+    "uuidValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "strategy"],
+      "properties": {
+        "type": { "const": "generated" },
+        "strategy": { "const": "uuid" }
+      }
+    },
+    "randomNumberValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "strategy", "min", "max"],
+      "properties": {
+        "type": { "const": "generated" },
+        "strategy": { "const": "random_number" },
+        "min": { "type": "number" },
+        "max": { "type": "number" }
+      }
+    },
+    "uniqueEmailValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "strategy"],
+      "properties": {
+        "type": { "const": "generated" },
+        "strategy": { "const": "unique_email" },
+        "template": { "type": "string", "maxLength": 1000 }
+      }
+    },
+    "currentDateValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "strategy"],
+      "properties": {
+        "type": { "const": "generated" },
+        "strategy": { "const": "current_date" },
+        "format": { "type": "string", "maxLength": 100 }
+      }
+    },
+    "relativeDateValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "strategy", "days"],
+      "properties": {
+        "type": { "const": "generated" },
+        "strategy": {
+          "enum": ["current_date_plus_days", "current_date_minus_days"]
+        },
+        "days": { "type": "integer", "minimum": 0, "maximum": 36500 },
+        "format": { "type": "string", "maxLength": 100 }
+      }
+    },
+    "randomChoiceValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "strategy", "choices"],
+      "properties": {
+        "type": { "const": "generated" },
+        "strategy": { "const": "random_choice" },
+        "choices": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/primitive" },
+          "minItems": 1,
+          "maxItems": 1000
+        }
+      }
+    },
+    "templateValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "strategy", "template"],
+      "properties": {
+        "type": { "const": "generated" },
+        "strategy": { "const": "template" },
+        "template": { "type": "string", "minLength": 1, "maxLength": 10000 }
+      }
+    },
+    "generatedValue": {
+      "oneOf": [
+        { "$ref": "#/$defs/timestampValue" },
+        { "$ref": "#/$defs/uuidValue" },
+        { "$ref": "#/$defs/randomNumberValue" },
+        { "$ref": "#/$defs/uniqueEmailValue" },
+        { "$ref": "#/$defs/currentDateValue" },
+        { "$ref": "#/$defs/relativeDateValue" },
+        { "$ref": "#/$defs/randomChoiceValue" },
+        { "$ref": "#/$defs/templateValue" }
+      ]
+    },
+    "datasetValue": {
+      "oneOf": [
+        { "$ref": "#/$defs/primitive" },
+        { "$ref": "#/$defs/fixedValue" },
+        { "$ref": "#/$defs/generatedValue" }
+      ]
+    }
+  }
+}
