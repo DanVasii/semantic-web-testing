@@ -65,6 +65,15 @@ const createApi = (): SemanticAppApi => ({
   listProjects: vi.fn(),
   createProject: vi.fn(),
   updateProject: vi.fn(),
+  updateBrowserConfig: vi
+    .fn()
+    .mockImplementation(
+      (_projectId: string, browserConfig: Project["browserConfig"]) =>
+        Promise.resolve({
+          project: { ...project, browserConfig },
+          statistics: { pageCount: 0, testCount: 0, runCount: 0 },
+        }),
+    ),
   deleteProject: vi.fn(),
   detectBrowsers: vi.fn().mockResolvedValue(detections),
   launchBrowser: vi.fn().mockResolvedValue({
@@ -81,6 +90,16 @@ const createApi = (): SemanticAppApi => ({
     url: project.normalizedBaseUrl,
   }),
   closeBrowser: vi.fn().mockResolvedValue(undefined),
+  closeProjectTabs: vi.fn().mockResolvedValue(undefined),
+  recoverBrowserConnection: vi.fn().mockResolvedValue({
+    id: "session-2",
+    projectId: project.id,
+    browser: "chrome",
+    engine: "chromium",
+    sessionMode: "reusable",
+    startedAt: "2026-07-24T12:05:00.000Z",
+  }),
+  selectBrowserProfilePath: vi.fn().mockResolvedValue("D:\\profiles\\semantic"),
   getBrowserStatus: vi.fn().mockResolvedValue({ state: "idle" }),
   onBrowserStatusChange: vi.fn().mockReturnValue(vi.fn()),
 });
@@ -102,6 +121,7 @@ describe("BrowserSelector", () => {
       <BrowserSelector
         api={createApi()}
         browserStatus={idleStatus}
+        onProjectUpdated={vi.fn()}
         project={project}
       />,
     );
@@ -123,6 +143,7 @@ describe("BrowserSelector", () => {
       <BrowserSelector
         api={api}
         browserStatus={idleStatus}
+        onProjectUpdated={vi.fn()}
         project={project}
       />,
     );
@@ -171,6 +192,7 @@ describe("BrowserSelector", () => {
       <BrowserSelector
         api={api}
         browserStatus={runningStatus}
+        onProjectUpdated={vi.fn()}
         project={project}
       />,
     );
@@ -188,9 +210,96 @@ describe("BrowserSelector", () => {
       ),
     ).not.toBeNull();
 
+    await user.click(screen.getByRole("button", { name: "Închide taburile" }));
+    await waitFor(() => {
+      expect(api.closeProjectTabs).toHaveBeenCalledWith("project-1");
+    });
+
     await user.click(screen.getByRole("button", { name: "Închide browserul" }));
     await waitFor(() => {
       expect(api.closeBrowser).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("selects and persists a dedicated Chrome profile for CDP", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    const onProjectUpdated = vi.fn();
+    render(
+      <BrowserSelector
+        api={api}
+        browserStatus={idleStatus}
+        onProjectUpdated={onProjectUpdated}
+        project={project}
+      />,
+    );
+
+    await user.selectOptions(
+      await screen.findByLabelText("Mod sesiune"),
+      "external_chrome_debug",
+    );
+    await waitFor(() => {
+      expect(api.updateBrowserConfig).toHaveBeenCalledWith(
+        "project-1",
+        expect.objectContaining({
+          sessionMode: "external_chrome_debug",
+          remoteDebuggingPort: 9222,
+        }),
+      );
+    });
+    await user.click(
+      screen.getByRole("button", {
+        name: "Alege directorul profilului",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(api.selectBrowserProfilePath).toHaveBeenCalledOnce();
+      expect(api.updateBrowserConfig).toHaveBeenLastCalledWith(
+        "project-1",
+        expect.objectContaining({
+          sessionMode: "external_chrome_debug",
+          profilePath: "D:\\profiles\\semantic",
+          remoteDebuggingPort: 9222,
+        }),
+      );
+    });
+    expect(await screen.findByText("D:\\profiles\\semantic")).not.toBeNull();
+    expect(onProjectUpdated).toHaveBeenCalled();
+  });
+
+  it("recovers a lost connection and reopens the project URL", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    const lostStatus: BrowserManagerStatus = {
+      state: "closed",
+      browser: "chrome",
+      projectId: project.id,
+      sessionId: "session-1",
+      message: "Conexiunea cu browserul a fost pierdută.",
+      canReconnect: true,
+    };
+    render(
+      <BrowserSelector
+        api={api}
+        browserStatus={lostStatus}
+        onProjectUpdated={vi.fn()}
+        project={project}
+      />,
+    );
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Recuperează conexiunea",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(api.recoverBrowserConnection).toHaveBeenCalledOnce();
+      expect(api.openProjectUrl).toHaveBeenCalledWith(
+        "project-1",
+        "https://example.test/",
+      );
     });
   });
 });

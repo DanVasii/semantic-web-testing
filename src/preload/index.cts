@@ -8,12 +8,14 @@ import type {
   DetectedBrowser,
 } from "../shared/browser-manager.js";
 import type { ProjectOverview } from "../shared/projects.js";
+import type { BrowserConfig } from "../shared/persistence.js";
 
 const APP_INFO_CHANNEL: AppInfoChannel = "app:get-info";
 const PROJECT_CHANNELS = {
   list: "projects:list",
   create: "projects:create",
   update: "projects:update",
+  updateBrowserConfig: "projects:update-browser-config",
   delete: "projects:delete",
 } as const;
 const BROWSER_CHANNELS = {
@@ -21,6 +23,9 @@ const BROWSER_CHANNELS = {
   launch: "browsers:launch",
   openProjectUrl: "browsers:open-project-url",
   close: "browsers:close",
+  closeProjectTabs: "browsers:close-project-tabs",
+  recover: "browsers:recover",
+  selectProfilePath: "browsers:select-profile-path",
   getStatus: "browsers:get-status",
   statusChanged: "browsers:status-changed",
 } as const;
@@ -158,6 +163,14 @@ const semanticAppApi: SemanticAppApi = {
     requireProjectOverview(
       await ipcRenderer.invoke(PROJECT_CHANNELS.update, projectId, input),
     ),
+  updateBrowserConfig: async (projectId, config: BrowserConfig) =>
+    requireProjectOverview(
+      await ipcRenderer.invoke(
+        PROJECT_CHANNELS.updateBrowserConfig,
+        projectId,
+        config,
+      ),
+    ),
   deleteProject: async (projectId) => {
     const wasDeleted: unknown = await ipcRenderer.invoke(
       PROJECT_CHANNELS.delete,
@@ -209,6 +222,29 @@ const semanticAppApi: SemanticAppApi = {
   },
   closeBrowser: async () => {
     await ipcRenderer.invoke(BROWSER_CHANNELS.close);
+  },
+  closeProjectTabs: async (projectId) => {
+    await ipcRenderer.invoke(BROWSER_CHANNELS.closeProjectTabs, projectId);
+  },
+  recoverBrowserConnection: async () => {
+    const session: unknown = await ipcRenderer.invoke(BROWSER_CHANNELS.recover);
+
+    if (!isBrowserSession(session)) {
+      throw new TypeError("Main process returned an invalid browser session.");
+    }
+
+    return session;
+  },
+  selectBrowserProfilePath: async () => {
+    const profilePath: unknown = await ipcRenderer.invoke(
+      BROWSER_CHANNELS.selectProfilePath,
+    );
+
+    if (profilePath !== undefined && typeof profilePath !== "string") {
+      throw new TypeError("Main process returned an invalid profile path.");
+    }
+
+    return profilePath;
   },
   getBrowserStatus: async () => {
     const status: unknown = await ipcRenderer.invoke(

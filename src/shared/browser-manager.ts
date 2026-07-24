@@ -42,6 +42,7 @@ export interface BrowserManagerStatus {
   projectId?: string;
   sessionId?: string;
   message?: string;
+  canReconnect?: boolean;
 }
 
 export interface BrowserSession {
@@ -67,6 +68,7 @@ export interface BrowserManager {
   launch: (options: BrowserLaunchOptions) => Promise<BrowserSession>;
   openProjectUrl: (projectId: string, url: string) => Promise<BrowserTab>;
   closeProjectTabs: (projectId: string) => Promise<void>;
+  recoverConnection: () => Promise<BrowserSession>;
   close: () => Promise<void>;
   onStatusChange: (listener: BrowserStatusListener) => () => void;
 }

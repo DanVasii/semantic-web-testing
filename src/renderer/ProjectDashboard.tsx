@@ -105,6 +105,14 @@ export const ProjectDashboard = ({
     [projects, selectedProjectId],
   );
 
+  const updateProjectOverview = useCallback((updated: ProjectOverview) => {
+    setProjects((current) =>
+      current.map((item) =>
+        item.project.id === updated.project.id ? updated : item,
+      ),
+    );
+  }, []);
+
   const openProject = (projectId: string): void => {
     setSelectedProjectId(projectId);
     localStorage.setItem(LAST_PROJECT_STORAGE_KEY, projectId);
@@ -354,6 +362,7 @@ export const ProjectDashboard = ({
             <ProjectOverviewPanel
               api={api}
               browserStatus={browserStatus}
+              onProjectUpdated={updateProjectOverview}
               overview={selectedProject}
             />
           ) : (
@@ -412,10 +421,12 @@ export const ProjectDashboard = ({
 const ProjectOverviewPanel = ({
   api,
   browserStatus,
+  onProjectUpdated,
   overview,
 }: {
   api: SemanticAppApi;
   browserStatus: BrowserManagerStatus;
+  onProjectUpdated: (overview: ProjectOverview) => void;
   overview: ProjectOverview;
 }) => {
   const { project, statistics } = overview;
@@ -482,6 +493,7 @@ const ProjectOverviewPanel = ({
       <BrowserSelector
         api={api}
         browserStatus={browserStatus}
+        onProjectUpdated={onProjectUpdated}
         project={project}
       />
     </article>

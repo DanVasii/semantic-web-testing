@@ -81,6 +81,35 @@ describe("ProjectsService", () => {
     });
   });
 
+  it("persists a valid browser configuration", () => {
+    const created = service.create({
+      name: "Configurare browser",
+      baseUrl: "https://example.test",
+    });
+    clock = new Date("2026-07-24T11:00:00.000Z");
+
+    const updated = service.updateBrowserConfig(created.project.id, {
+      browserType: "chrome",
+      sessionMode: "external_chrome_debug",
+      headless: false,
+      profilePath: "D:\\profiles\\semantic",
+      remoteDebuggingPort: 9333,
+      viewport: { width: 1440, height: 900 },
+    });
+
+    expect(updated.project.browserConfig).toEqual({
+      browserType: "chrome",
+      sessionMode: "external_chrome_debug",
+      headless: false,
+      profilePath: "D:\\profiles\\semantic",
+      remoteDebuggingPort: 9333,
+      viewport: { width: 1440, height: 900 },
+    });
+    expect(service.list()[0]?.project.browserConfig).toEqual(
+      updated.project.browserConfig,
+    );
+  });
+
   it("rejects invalid data and missing projects", () => {
     expect(() => service.create({ name: "", baseUrl: "not-a-url" })).toThrow(
       "Datele proiectului nu sunt valide.",

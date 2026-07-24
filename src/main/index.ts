@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ import {
   PROJECT_CHANNELS,
 } from "../shared/ipc.js";
 import type { BrowserLaunchOptions } from "../shared/browser-manager.js";
+import type { BrowserConfig } from "../shared/persistence.js";
 import type { ProjectInput } from "../shared/projects.js";
 import { createAppInfo } from "./app-info.js";
 import { PlaywrightBrowserManager } from "./browser/playwright-browser-manager.js";
@@ -95,6 +96,11 @@ void app
       (_event, projectId: string, input: ProjectInput) =>
         projectsService.update(projectId, input),
     );
+    ipcMain.handle(
+      PROJECT_CHANNELS.updateBrowserConfig,
+      (_event, projectId: string, config: BrowserConfig) =>
+        projectsService.updateBrowserConfig(projectId, config),
+    );
     ipcMain.handle(PROJECT_CHANNELS.delete, (_event, projectId: string) =>
       projectsService.delete(projectId),
     );
@@ -111,6 +117,20 @@ void app
         browserManager.openProjectUrl(projectId, url),
     );
     ipcMain.handle(BROWSER_CHANNELS.close, () => browserManager.close());
+    ipcMain.handle(
+      BROWSER_CHANNELS.closeProjectTabs,
+      (_event, projectId: string) => browserManager.closeProjectTabs(projectId),
+    );
+    ipcMain.handle(BROWSER_CHANNELS.recover, () =>
+      browserManager.recoverConnection(),
+    );
+    ipcMain.handle(BROWSER_CHANNELS.selectProfilePath, async () => {
+      const selection = await dialog.showOpenDialog({
+        title: "Alege directorul profilului de automatizare",
+        properties: ["openDirectory", "createDirectory"],
+      });
+      return selection.canceled ? undefined : selection.filePaths[0];
+    });
     ipcMain.handle(BROWSER_CHANNELS.getStatus, () =>
       browserManager.getStatus(),
     );
