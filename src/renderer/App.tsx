@@ -10,7 +10,7 @@ export const App = () => (
       </h1>
       <p className="mt-3 max-w-2xl text-base leading-7 text-app-muted">
         Renderer-ul React folosește acum Tailwind pentru interfața de testare
-        semantică.
+        semantică. Hot reload verificat.
       </p>
 
       <section

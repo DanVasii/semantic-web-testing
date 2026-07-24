@@ -11,6 +11,7 @@
   "scripts": {
     "build": "npm run build:main && npm run renderer:build",
     "build:main": "tsc --project tsconfig.build.json",
+    "dev": "npm run build:main && node scripts/dev.mjs",
     "electron:start": "npm run build && electron .",
     "fixture:web": "vite fixtures/web --host 127.0.0.1 --port 4173 --strictPort",
     "fixture:web:build": "vite build fixtures/web --outDir ../../dist/fixture-web --emptyOutDir",
