@@ -19,10 +19,20 @@ npm install
 npm run verify
 ```
 
-Comanda `verify` rulează verificarea TypeScript și build-ul proiectului.
+Comanda `verify` rulează toate verificările locale ale proiectului.
+
+## Verificări locale
+
+```bash
+npm run lint
+npm run typecheck
+npm run build
+```
+
+`npm run verify` rulează toate verificările de mai sus în această ordine.
 
 ## Stadiu
 
-Etapa 0, task A1: workspace TypeScript inițializat. Funcționalitățile Electron,
-React, Tailwind, lint și testare automată vor fi adăugate numai în task-urile
-dedicate.
+Etapa 0: workspace TypeScript și lint TypeScript configurate. Funcționalitățile
+Electron, React, Tailwind, formatarea automată și testarea vor fi adăugate numai
+în task-urile dedicate.
