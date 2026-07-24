@@ -1,21 +1,11 @@
 import { app, BrowserWindow } from "electron";
 
+import { createMainWindowOptions } from "./window-options.js";
+
 let mainWindow: BrowserWindow | null = null;
 
 const createMainWindow = (): void => {
-  mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
-    minWidth: 960,
-    minHeight: 640,
-    backgroundColor: "#f7f5f2",
-    title: "Semantic Web Testing App",
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
+  mainWindow = new BrowserWindow(createMainWindowOptions());
 
   mainWindow.on("closed", () => {
     mainWindow = null;
