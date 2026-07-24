@@ -67,6 +67,8 @@ const createApi = (): SemanticAppApi => ({
   getTest: vi.fn(),
   createTest: vi.fn().mockResolvedValue(testDefinition),
   updateTest: vi.fn().mockResolvedValue(testDefinition),
+  saveTestFlow: vi.fn().mockResolvedValue(testDefinition),
+  listTestVersions: vi.fn().mockResolvedValue([]),
   deleteTest: vi.fn(),
 });
 

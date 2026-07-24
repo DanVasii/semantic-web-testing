@@ -1,4 +1,10 @@
-import type { TestDefinition } from "../shared/persistence.js";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join, relative, resolve } from "node:path";
+
+import type { TestDefinition, TestVersion } from "../shared/persistence.js";
+import { toDeclarativeTestDefinition } from "../shared/test-editor.js";
+import type { TestFlowItem } from "../shared/test-model.js";
+import { validateDeclarativeTest } from "../shared/test-validation.js";
 import {
   hasTestInputErrors,
   normalizeTestStartUrl,
@@ -7,18 +13,21 @@ import {
 } from "../shared/tests.js";
 import {
   ProjectRepository,
+  DatasetRepository,
   TestRepository,
 } from "./persistence/repositories.js";
 
 export interface TestsServiceOptions {
   createId: () => string;
   now: () => Date;
+  snapshotRoot: string;
 }
 
 export class TestsService {
   public constructor(
     private readonly projectRepository: ProjectRepository,
     private readonly testRepository: TestRepository,
+    private readonly datasetRepository: DatasetRepository,
     private readonly options: TestsServiceOptions,
   ) {}
 
@@ -110,6 +119,90 @@ export class TestsService {
   public delete(projectId: string, testId: string): boolean {
     this.get(projectId, testId);
     return this.testRepository.delete(testId);
+  }
+
+  public async saveFlow(
+    projectId: string,
+    testId: string,
+    flowItems: TestFlowItem[],
+  ): Promise<TestDefinition> {
+    const existing = this.get(projectId, testId);
+    const now = this.options.now().toISOString();
+    const updated: TestDefinition = {
+      ...existing,
+      version: existing.version + 1,
+      status: flowItems.length === 0 ? "draft" : "valid",
+      workflowState: flowItems.length === 0 ? "not_recorded" : "ready",
+      updatedAt: now,
+      flowItems,
+    };
+    const snapshot = toDeclarativeTestDefinition(
+      updated,
+      flowItems,
+      this.datasetRepository.listByTest(testId),
+    );
+    const validation = validateDeclarativeTest(snapshot);
+    if (!validation.valid) {
+      throw new Error(
+        `Flow-ul testului nu este valid: ${validation.issues[0]?.message ?? "eroare necunoscută"}`,
+      );
+    }
+
+    const snapshotPath = join(
+      "projects",
+      projectId,
+      "tests",
+      testId,
+      `v${updated.version}`,
+      "test.json",
+    );
+    const absolutePath = this.resolveSnapshotPath(snapshotPath);
+    const temporaryDirectory = `${dirname(absolutePath)}.tmp-${this.options.createId()}`;
+    await mkdir(temporaryDirectory, { recursive: true });
+    await writeFile(
+      join(temporaryDirectory, "test.json"),
+      `${JSON.stringify(validation.data, null, 2)}\n`,
+      "utf8",
+    );
+
+    try {
+      await mkdir(dirname(dirname(absolutePath)), { recursive: true });
+      await rename(temporaryDirectory, dirname(absolutePath));
+      this.testRepository.update(updated);
+      this.testRepository.createVersion({
+        id: this.options.createId(),
+        testId,
+        versionNumber: updated.version,
+        source: "manual",
+        createdAt: now,
+        snapshotFilePath: snapshotPath.replaceAll("\\", "/"),
+      });
+      return updated;
+    } catch (error) {
+      this.testRepository.update(existing);
+      await rm(dirname(absolutePath), { force: true, recursive: true });
+      await rm(temporaryDirectory, { force: true, recursive: true });
+      throw error;
+    }
+  }
+
+  public listVersions(projectId: string, testId: string): TestVersion[] {
+    this.get(projectId, testId);
+    return this.testRepository.listVersions(testId);
+  }
+
+  private resolveSnapshotPath(portablePath: string): string {
+    const root = resolve(this.options.snapshotRoot);
+    const target = resolve(root, portablePath);
+    const pathFromRoot = relative(root, target);
+    if (
+      pathFromRoot.startsWith("..") ||
+      pathFromRoot.length === 0 ||
+      /^[A-Za-z]:/.test(pathFromRoot)
+    ) {
+      throw new Error("Calea snapshot-ului nu este sigură.");
+    }
+    return target;
   }
 
   private requireProject(projectId: string) {

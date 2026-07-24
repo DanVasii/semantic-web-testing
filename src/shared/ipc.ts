@@ -1,5 +1,10 @@
 import type { ProjectInput, ProjectOverview } from "./projects.js";
-import type { BrowserConfig, TestDefinition } from "./persistence.js";
+import type {
+  BrowserConfig,
+  TestDefinition,
+  TestVersion,
+} from "./persistence.js";
+import type { TestFlowItem } from "./test-model.js";
 import type {
   AnalyzedPageSummary,
   PageAnalysisProgress,
@@ -54,6 +59,8 @@ export const TEST_CHANNELS = {
   get: "tests:get",
   create: "tests:create",
   update: "tests:update",
+  saveFlow: "tests:save-flow",
+  listVersions: "tests:list-versions",
   delete: "tests:delete",
 } as const;
 
@@ -109,5 +116,14 @@ export interface SemanticAppApi {
     testId: string,
     input: TestInput,
   ) => Promise<TestDefinition>;
+  saveTestFlow: (
+    projectId: string,
+    testId: string,
+    flowItems: TestFlowItem[],
+  ) => Promise<TestDefinition>;
+  listTestVersions: (
+    projectId: string,
+    testId: string,
+  ) => Promise<TestVersion[]>;
   deleteTest: (projectId: string, testId: string) => Promise<boolean>;
 }

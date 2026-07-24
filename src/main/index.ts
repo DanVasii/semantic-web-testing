@@ -15,6 +15,7 @@ import type {
   BrowserLaunchOptions,
 } from "../shared/browser-manager.js";
 import type { BrowserConfig } from "../shared/persistence.js";
+import type { TestFlowItem } from "../shared/test-model.js";
 import type { ProjectInput } from "../shared/projects.js";
 import type { TestInput } from "../shared/tests.js";
 import { createAppInfo } from "./app-info.js";
@@ -24,6 +25,7 @@ import {
   type ApplicationDatabase,
 } from "./persistence/database.js";
 import {
+  DatasetRepository,
   PageRepository,
   ProjectRepository,
   TestRepository,
@@ -93,6 +95,9 @@ void app
     );
     const pageRepository = new PageRepository(applicationDatabase.connection);
     const testRepository = new TestRepository(applicationDatabase.connection);
+    const datasetRepository = new DatasetRepository(
+      applicationDatabase.connection,
+    );
     const projectsService = new ProjectsService(projectRepository, {
       createId: randomUUID,
       now: () => new Date(),
@@ -107,10 +112,16 @@ void app
         now: () => new Date(),
       },
     );
-    const testsService = new TestsService(projectRepository, testRepository, {
-      createId: randomUUID,
-      now: () => new Date(),
-    });
+    const testsService = new TestsService(
+      projectRepository,
+      testRepository,
+      datasetRepository,
+      {
+        createId: randomUUID,
+        now: () => new Date(),
+        snapshotRoot: join(app.getPath("userData"), "data", "test-versions"),
+      },
+    );
 
     ipcMain.handle(APP_INFO_CHANNEL, () =>
       createAppInfo(app.getVersion(), process.versions.electron),
@@ -204,6 +215,16 @@ void app
       TEST_CHANNELS.update,
       (_event, projectId: string, testId: string, input: TestInput) =>
         testsService.update(projectId, testId, input),
+    );
+    ipcMain.handle(
+      TEST_CHANNELS.saveFlow,
+      (_event, projectId: string, testId: string, flowItems: TestFlowItem[]) =>
+        testsService.saveFlow(projectId, testId, flowItems),
+    );
+    ipcMain.handle(
+      TEST_CHANNELS.listVersions,
+      (_event, projectId: string, testId: string) =>
+        testsService.listVersions(projectId, testId),
     );
     ipcMain.handle(
       TEST_CHANNELS.delete,

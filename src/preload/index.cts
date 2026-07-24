@@ -15,6 +15,7 @@ import type {
   Page,
   PageVersion,
   TestDefinition,
+  TestVersion,
 } from "../shared/persistence.js";
 import type {
   AnalyzedPageSummary,
@@ -57,6 +58,8 @@ const TEST_CHANNELS = {
   get: "tests:get",
   create: "tests:create",
   update: "tests:update",
+  saveFlow: "tests:save-flow",
+  listVersions: "tests:list-versions",
   delete: "tests:delete",
 } as const;
 
@@ -423,6 +426,23 @@ const isTestDefinition = (value: unknown): value is TestDefinition =>
   "flowItems" in value &&
   Array.isArray(value.flowItems);
 
+const isTestVersion = (value: unknown): value is TestVersion =>
+  typeof value === "object" &&
+  value !== null &&
+  "id" in value &&
+  typeof value.id === "string" &&
+  "testId" in value &&
+  typeof value.testId === "string" &&
+  "versionNumber" in value &&
+  typeof value.versionNumber === "number" &&
+  "source" in value &&
+  typeof value.source === "string" &&
+  ["manual", "recorder", "ai", "import"].includes(value.source) &&
+  "createdAt" in value &&
+  typeof value.createdAt === "string" &&
+  "snapshotFilePath" in value &&
+  typeof value.snapshotFilePath === "string";
+
 const semanticAppApi: SemanticAppApi = {
   getAppInfo: async () => {
     const appInfo: unknown = await ipcRenderer.invoke(APP_INFO_CHANNEL);
@@ -681,6 +701,32 @@ const semanticAppApi: SemanticAppApi = {
       throw new TypeError("Main process returned invalid test data.");
     }
     return test;
+  },
+  saveTestFlow: async (projectId, testId, flowItems) => {
+    const test: unknown = await ipcRenderer.invoke(
+      TEST_CHANNELS.saveFlow,
+      projectId,
+      testId,
+      flowItems,
+    );
+    if (!isTestDefinition(test)) {
+      throw new TypeError("Main process returned invalid saved test data.");
+    }
+    return test;
+  },
+  listTestVersions: async (projectId, testId) => {
+    const versions: unknown = await ipcRenderer.invoke(
+      TEST_CHANNELS.listVersions,
+      projectId,
+      testId,
+    );
+    if (
+      !Array.isArray(versions) ||
+      !versions.every((version) => isTestVersion(version))
+    ) {
+      throw new TypeError("Main process returned invalid test versions.");
+    }
+    return versions;
   },
   deleteTest: async (projectId, testId) => {
     const wasDeleted: unknown = await ipcRenderer.invoke(

@@ -5,6 +5,7 @@ import type { Project, TestDefinition } from "../shared/persistence.js";
 import { getTestPrimaryAction, type TestInput } from "../shared/tests.js";
 import { Button } from "./components/Button.js";
 import { TestFormModal } from "./TestFormModal.js";
+import { TestFlowEditor } from "./TestFlowEditor.js";
 
 export interface ProjectTestsPanelProps {
   api: SemanticAppApi;
@@ -395,6 +396,13 @@ export const TestDetailPage = ({
             invalidează captura și declanșează reluarea ei.
           </p>
         </section>
+
+        <TestFlowEditor
+          api={api}
+          projectId={project.id}
+          test={test}
+          onTestSaved={onTestUpdated}
+        />
 
         <div className="mt-6 grid gap-4 lg:grid-cols-2">
           <section className="rounded-xl border border-app-border p-4">

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -9,6 +9,7 @@ import {
   type ApplicationDatabase,
 } from "./persistence/database.js";
 import {
+  DatasetRepository,
   ProjectRepository,
   TestRepository,
 } from "./persistence/repositories.js";
@@ -34,6 +35,7 @@ let directory: string;
 let database: ApplicationDatabase;
 let projectRepository: ProjectRepository;
 let testRepository: TestRepository;
+let datasetRepository: DatasetRepository;
 let service: TestsService;
 
 beforeEach(async () => {
@@ -43,11 +45,18 @@ beforeEach(async () => {
   });
   projectRepository = new ProjectRepository(database.connection);
   testRepository = new TestRepository(database.connection);
+  datasetRepository = new DatasetRepository(database.connection);
   projectRepository.create(project);
-  service = new TestsService(projectRepository, testRepository, {
-    createId: () => "test-1",
-    now: () => new Date("2026-07-24T12:00:00.000Z"),
-  });
+  service = new TestsService(
+    projectRepository,
+    testRepository,
+    datasetRepository,
+    {
+      createId: () => "test-1",
+      now: () => new Date("2026-07-24T12:00:00.000Z"),
+      snapshotRoot: join(directory, "versions"),
+    },
+  );
 });
 
 afterEach(() => {
@@ -140,5 +149,83 @@ describe("TestsService", () => {
 
     expect(service.delete(project.id, created.id)).toBe(true);
     expect(service.list(project.id)).toEqual([]);
+  });
+
+  it("saves a validated flow, creates a version and writes its snapshot", async () => {
+    const created = service.create(project.id, {
+      name: "Checkout",
+      startUrl: "https://example.test/products",
+    });
+    const flowItems = [
+      {
+        id: "step-1",
+        type: "action" as const,
+        actionType: "click" as const,
+        title: "Deschide checkout",
+        humanDescription: "Apasă butonul de checkout.",
+        whyExplanation: "Continuă flow-ul de cumpărare.",
+        target: {
+          primary: {
+            type: "css" as const,
+            operator: "equals" as const,
+            value: "#checkout",
+          },
+        },
+        fallbacks: [],
+        enabled: true,
+      },
+    ];
+
+    const saved = await service.saveFlow(project.id, created.id, flowItems);
+
+    expect(saved).toMatchObject({
+      version: 2,
+      status: "valid",
+      workflowState: "ready",
+      flowItems,
+    });
+    const versions = service.listVersions(project.id, created.id);
+    expect(versions).toHaveLength(1);
+    expect(versions[0]).toMatchObject({
+      versionNumber: 2,
+      source: "manual",
+      snapshotFilePath: "projects/project-1/tests/test-1/v2/test.json",
+    });
+    const snapshotPath = join(
+      directory,
+      "versions",
+      versions[0]?.snapshotFilePath ?? "",
+    );
+    expect(existsSync(snapshotPath)).toBe(true);
+    expect(JSON.parse(readFileSync(snapshotPath, "utf8"))).toMatchObject({
+      schemaVersion: 1,
+      version: 2,
+      flowItems,
+      datasets: [],
+    });
+  });
+
+  it("rejects an invalid flow without creating a version", async () => {
+    const created = service.create(project.id, {
+      name: "Checkout",
+      startUrl: "https://example.test/products",
+    });
+
+    await expect(
+      service.saveFlow(project.id, created.id, [
+        {
+          id: "step-1",
+          type: "action",
+          actionType: "click",
+          title: "",
+          humanDescription: "",
+          whyExplanation: "",
+          fallbacks: [],
+          enabled: true,
+        },
+      ]),
+    ).rejects.toThrow("Flow-ul testului nu este valid");
+    expect(service.get(project.id, created.id)).toEqual(created);
+    expect(service.listVersions(project.id, created.id)).toEqual([]);
   });
 });
