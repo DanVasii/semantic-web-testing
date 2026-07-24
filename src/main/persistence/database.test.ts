@@ -60,7 +60,7 @@ describe("application database", () => {
       "test_versions",
       "tests",
     ]);
-    expect(version.user_version).toBe(10);
+    expect(version.user_version).toBe(11);
     expect(journalCount.count).toBe(APPLICATION_MIGRATIONS.length);
 
     database.close();

@@ -1,11 +1,12 @@
 import type { ProjectInput, ProjectOverview } from "./projects.js";
-import type { BrowserConfig } from "./persistence.js";
+import type { BrowserConfig, TestDefinition } from "./persistence.js";
 import type {
   AnalyzedPageSummary,
   PageAnalysisProgress,
   PageAnalysisResult,
   PageAnalysisTarget,
 } from "./page-analysis.js";
+import type { TestInput } from "./tests.js";
 import type {
   BrowserLaunchOptions,
   BrowserManagerStatus,
@@ -46,6 +47,14 @@ export const PAGE_ANALYSIS_CHANNELS = {
   analyzeCurrent: "pages:analyze-current",
   list: "pages:list-analyses",
   progress: "pages:analysis-progress",
+} as const;
+
+export const TEST_CHANNELS = {
+  list: "tests:list",
+  get: "tests:get",
+  create: "tests:create",
+  update: "tests:update",
+  delete: "tests:delete",
 } as const;
 
 export interface AppInfo {
@@ -92,4 +101,13 @@ export interface SemanticAppApi {
   onPageAnalysisProgress: (
     listener: (progress: PageAnalysisProgress) => void,
   ) => () => void;
+  listTests: (projectId: string) => Promise<TestDefinition[]>;
+  getTest: (projectId: string, testId: string) => Promise<TestDefinition>;
+  createTest: (projectId: string, input: TestInput) => Promise<TestDefinition>;
+  updateTest: (
+    projectId: string,
+    testId: string,
+    input: TestInput,
+  ) => Promise<TestDefinition>;
+  deleteTest: (projectId: string, testId: string) => Promise<boolean>;
 }

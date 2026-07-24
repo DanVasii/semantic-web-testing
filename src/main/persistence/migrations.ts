@@ -219,6 +219,39 @@ export const APPLICATION_MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    version: 11,
+    name: "add_recording_first_test_workflow",
+    up(database) {
+      database.exec(`
+        ALTER TABLE tests ADD COLUMN start_url TEXT NOT NULL DEFAULT '';
+        ALTER TABLE tests ADD COLUMN normalized_start_url TEXT NOT NULL DEFAULT '';
+        ALTER TABLE tests ADD COLUMN workflow_state TEXT NOT NULL DEFAULT 'not_recorded'
+          CHECK(workflow_state IN (
+            'not_recorded', 'recording', 'recorded', 'analyzing_flow',
+            'flow_analyzed', 'ready'
+          ));
+
+        UPDATE tests
+        SET
+          start_url = (
+            SELECT normalized_base_url
+            FROM projects
+            WHERE projects.id = tests.project_id
+          ),
+          normalized_start_url = (
+            SELECT normalized_base_url
+            FROM projects
+            WHERE projects.id = tests.project_id
+          ),
+          workflow_state = CASE
+            WHEN status = 'valid' AND flow_items_json <> '[]' THEN 'ready'
+            WHEN flow_items_json <> '[]' THEN 'recorded'
+            ELSE 'not_recorded'
+          END;
+      `);
+    },
+  },
 ];
 
 export const assertValidMigrations = (

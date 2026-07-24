@@ -145,14 +145,15 @@ export const PageAnalysisPanel = ({
               id={`page-analysis-${project.id}`}
               className="text-base font-semibold"
             >
-              Analiza paginii
+              Motor de captură pagină
             </h4>
             <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-800">
-              Doar local · fără AI
+              Diagnostic local · fără AI
             </span>
           </div>
           <p className="mt-1 text-sm text-app-muted">
-            Capturează pagina deschisă cel mai recent în browserul proiectului.
+            În timpul recorderului, această captură rulează automat după
+            acțiuni. Butonul manual rămâne pentru diagnostic și reanalizare.
           </p>
         </div>
         <Button

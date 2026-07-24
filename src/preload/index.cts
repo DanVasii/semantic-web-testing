@@ -14,6 +14,7 @@ import type {
   BrowserConfig,
   Page,
   PageVersion,
+  TestDefinition,
 } from "../shared/persistence.js";
 import type {
   AnalyzedPageSummary,
@@ -50,6 +51,13 @@ const PAGE_ANALYSIS_CHANNELS = {
   analyzeCurrent: "pages:analyze-current",
   list: "pages:list-analyses",
   progress: "pages:analysis-progress",
+} as const;
+const TEST_CHANNELS = {
+  list: "tests:list",
+  get: "tests:get",
+  create: "tests:create",
+  update: "tests:update",
+  delete: "tests:delete",
 } as const;
 
 const isAppInfo = (value: unknown): value is AppInfo => {
@@ -371,6 +379,49 @@ const isPageAnalysisProgress = (
   "message" in value &&
   typeof value.message === "string";
 
+const testStatuses = new Set(["draft", "valid", "invalidated"]);
+const testWorkflowStates = new Set([
+  "not_recorded",
+  "recording",
+  "recorded",
+  "analyzing_flow",
+  "flow_analyzed",
+  "ready",
+]);
+
+const isTestDefinition = (value: unknown): value is TestDefinition =>
+  typeof value === "object" &&
+  value !== null &&
+  "id" in value &&
+  typeof value.id === "string" &&
+  "projectId" in value &&
+  typeof value.projectId === "string" &&
+  "name" in value &&
+  typeof value.name === "string" &&
+  (!("description" in value) || typeof value.description === "string") &&
+  "status" in value &&
+  typeof value.status === "string" &&
+  testStatuses.has(value.status) &&
+  "version" in value &&
+  typeof value.version === "number" &&
+  "wipeBeforeRun" in value &&
+  typeof value.wipeBeforeRun === "boolean" &&
+  "startMode" in value &&
+  (value.startMode === "base_url" || value.startMode === "current_page") &&
+  "startUrl" in value &&
+  typeof value.startUrl === "string" &&
+  "normalizedStartUrl" in value &&
+  typeof value.normalizedStartUrl === "string" &&
+  "workflowState" in value &&
+  typeof value.workflowState === "string" &&
+  testWorkflowStates.has(value.workflowState) &&
+  "createdAt" in value &&
+  typeof value.createdAt === "string" &&
+  "updatedAt" in value &&
+  typeof value.updatedAt === "string" &&
+  "flowItems" in value &&
+  Array.isArray(value.flowItems);
+
 const semanticAppApi: SemanticAppApi = {
   getAppInfo: async () => {
     const appInfo: unknown = await ipcRenderer.invoke(APP_INFO_CHANNEL);
@@ -582,6 +633,64 @@ const semanticAppApi: SemanticAppApi = {
         handleProgress,
       );
     };
+  },
+  listTests: async (projectId) => {
+    const tests: unknown = await ipcRenderer.invoke(
+      TEST_CHANNELS.list,
+      projectId,
+    );
+    if (
+      !Array.isArray(tests) ||
+      !tests.every((test) => isTestDefinition(test))
+    ) {
+      throw new TypeError("Main process returned an invalid test list.");
+    }
+    return tests;
+  },
+  getTest: async (projectId, testId) => {
+    const test: unknown = await ipcRenderer.invoke(
+      TEST_CHANNELS.get,
+      projectId,
+      testId,
+    );
+    if (!isTestDefinition(test)) {
+      throw new TypeError("Main process returned invalid test data.");
+    }
+    return test;
+  },
+  createTest: async (projectId, input) => {
+    const test: unknown = await ipcRenderer.invoke(
+      TEST_CHANNELS.create,
+      projectId,
+      input,
+    );
+    if (!isTestDefinition(test)) {
+      throw new TypeError("Main process returned invalid test data.");
+    }
+    return test;
+  },
+  updateTest: async (projectId, testId, input) => {
+    const test: unknown = await ipcRenderer.invoke(
+      TEST_CHANNELS.update,
+      projectId,
+      testId,
+      input,
+    );
+    if (!isTestDefinition(test)) {
+      throw new TypeError("Main process returned invalid test data.");
+    }
+    return test;
+  },
+  deleteTest: async (projectId, testId) => {
+    const wasDeleted: unknown = await ipcRenderer.invoke(
+      TEST_CHANNELS.delete,
+      projectId,
+      testId,
+    );
+    if (typeof wasDeleted !== "boolean") {
+      throw new TypeError("Main process returned an invalid delete result.");
+    }
+    return wasDeleted;
   },
 };
 

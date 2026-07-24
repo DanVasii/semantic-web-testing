@@ -57,6 +57,13 @@ export interface PageVersion {
 
 export type TestStatus = "draft" | "valid" | "invalidated";
 export type TestStartMode = "base_url" | "current_page";
+export type TestWorkflowState =
+  | "not_recorded"
+  | "recording"
+  | "recorded"
+  | "analyzing_flow"
+  | "flow_analyzed"
+  | "ready";
 
 export interface TestDefinition {
   id: string;
@@ -67,6 +74,9 @@ export interface TestDefinition {
   version: number;
   wipeBeforeRun: boolean;
   startMode: TestStartMode;
+  startUrl: string;
+  normalizedStartUrl: string;
+  workflowState: TestWorkflowState;
   createdAt: string;
   updatedAt: string;
   flowItems: JsonValue[];

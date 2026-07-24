@@ -8,6 +8,7 @@ import {
   BROWSER_CHANNELS,
   PAGE_ANALYSIS_CHANNELS,
   PROJECT_CHANNELS,
+  TEST_CHANNELS,
 } from "../shared/ipc.js";
 import type {
   BasicAuthCredentials,
@@ -15,6 +16,7 @@ import type {
 } from "../shared/browser-manager.js";
 import type { BrowserConfig } from "../shared/persistence.js";
 import type { ProjectInput } from "../shared/projects.js";
+import type { TestInput } from "../shared/tests.js";
 import { createAppInfo } from "./app-info.js";
 import { PlaywrightBrowserManager } from "./browser/playwright-browser-manager.js";
 import {
@@ -24,9 +26,11 @@ import {
 import {
   PageRepository,
   ProjectRepository,
+  TestRepository,
 } from "./persistence/repositories.js";
 import { PageAnalysisService } from "./page-analysis/page-analysis-service.js";
 import { ProjectsService } from "./projects-service.js";
+import { TestsService } from "./tests-service.js";
 import { resolveRendererTarget } from "./renderer-target.js";
 import { createMainWindowOptions } from "./window-options.js";
 
@@ -88,6 +92,7 @@ void app
       applicationDatabase.connection,
     );
     const pageRepository = new PageRepository(applicationDatabase.connection);
+    const testRepository = new TestRepository(applicationDatabase.connection);
     const projectsService = new ProjectsService(projectRepository, {
       createId: randomUUID,
       now: () => new Date(),
@@ -102,6 +107,10 @@ void app
         now: () => new Date(),
       },
     );
+    const testsService = new TestsService(projectRepository, testRepository, {
+      createId: randomUUID,
+      now: () => new Date(),
+    });
 
     ipcMain.handle(APP_INFO_CHANNEL, () =>
       createAppInfo(app.getVersion(), process.versions.electron),
@@ -177,6 +186,29 @@ void app
     );
     ipcMain.handle(PAGE_ANALYSIS_CHANNELS.list, (_event, projectId: string) =>
       pageAnalysisService.listAnalyzedPages(projectId),
+    );
+    ipcMain.handle(TEST_CHANNELS.list, (_event, projectId: string) =>
+      testsService.list(projectId),
+    );
+    ipcMain.handle(
+      TEST_CHANNELS.get,
+      (_event, projectId: string, testId: string) =>
+        testsService.get(projectId, testId),
+    );
+    ipcMain.handle(
+      TEST_CHANNELS.create,
+      (_event, projectId: string, input: TestInput) =>
+        testsService.create(projectId, input),
+    );
+    ipcMain.handle(
+      TEST_CHANNELS.update,
+      (_event, projectId: string, testId: string, input: TestInput) =>
+        testsService.update(projectId, testId, input),
+    );
+    ipcMain.handle(
+      TEST_CHANNELS.delete,
+      (_event, projectId: string, testId: string) =>
+        testsService.delete(projectId, testId),
     );
 
     createMainWindow();

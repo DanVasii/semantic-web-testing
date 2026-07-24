@@ -111,6 +111,11 @@ const createApi = (): SemanticAppApi => ({
   analyzeCurrentPage: vi.fn(),
   listAnalyzedPages: vi.fn().mockResolvedValue([]),
   onPageAnalysisProgress: vi.fn().mockReturnValue(vi.fn()),
+  listTests: vi.fn().mockResolvedValue([]),
+  getTest: vi.fn(),
+  createTest: vi.fn(),
+  updateTest: vi.fn(),
+  deleteTest: vi.fn(),
 });
 
 const idleStatus: BrowserManagerStatus = { state: "idle" };

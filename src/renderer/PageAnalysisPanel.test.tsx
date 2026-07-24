@@ -109,6 +109,11 @@ const createApi = (): {
       progressListener = listener;
       return vi.fn();
     },
+    listTests: vi.fn().mockResolvedValue([]),
+    getTest: vi.fn(),
+    createTest: vi.fn(),
+    updateTest: vi.fn(),
+    deleteTest: vi.fn(),
   };
   return {
     api,

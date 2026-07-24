@@ -88,6 +88,12 @@ const mapTest = (row: DatabaseRow): TestDefinition => {
     version: number(row, "version"),
     wipeBeforeRun: number(row, "wipe_before_run") === 1,
     startMode: text(row, "start_mode") as TestDefinition["startMode"],
+    startUrl: text(row, "start_url"),
+    normalizedStartUrl: text(row, "normalized_start_url"),
+    workflowState: text(
+      row,
+      "workflow_state",
+    ) as TestDefinition["workflowState"],
     createdAt: text(row, "created_at"),
     updatedAt: text(row, "updated_at"),
     flowItems: parseJson<JsonValue[]>(text(row, "flow_items_json")),
@@ -375,8 +381,9 @@ export class TestRepository {
       .prepare(
         `INSERT INTO tests (
           id, project_id, name, description, status, version,
-          wipe_before_run, start_mode, created_at, updated_at, flow_items_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          wipe_before_run, start_mode, start_url, normalized_start_url,
+          workflow_state, created_at, updated_at, flow_items_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         test.id,
@@ -387,6 +394,9 @@ export class TestRepository {
         test.version,
         test.wipeBeforeRun ? 1 : 0,
         test.startMode,
+        test.startUrl,
+        test.normalizedStartUrl,
+        test.workflowState,
         test.createdAt,
         test.updatedAt,
         json(test.flowItems),
@@ -416,7 +426,8 @@ export class TestRepository {
       .prepare(
         `UPDATE tests SET
           name = ?, description = ?, status = ?, version = ?,
-          wipe_before_run = ?, start_mode = ?, updated_at = ?,
+          wipe_before_run = ?, start_mode = ?, start_url = ?,
+          normalized_start_url = ?, workflow_state = ?, updated_at = ?,
           flow_items_json = ?
         WHERE id = ?`,
       )
@@ -427,6 +438,9 @@ export class TestRepository {
         test.version,
         test.wipeBeforeRun ? 1 : 0,
         test.startMode,
+        test.startUrl,
+        test.normalizedStartUrl,
+        test.workflowState,
         test.updatedAt,
         json(test.flowItems),
         test.id,

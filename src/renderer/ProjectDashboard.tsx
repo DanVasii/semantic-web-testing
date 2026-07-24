@@ -5,6 +5,7 @@ import type {
   BasicAuthCredentials,
   BrowserManagerStatus,
 } from "../shared/browser-manager.js";
+import type { TestDefinition } from "../shared/persistence.js";
 import type { ProjectInput, ProjectOverview } from "../shared/projects.js";
 import { Button } from "./components/Button.js";
 import { ConfirmDialog } from "./components/ConfirmDialog.js";
@@ -13,6 +14,7 @@ import { BrowserSelector } from "./BrowserSelector.js";
 import { BasicAuthDialog } from "./BasicAuthDialog.js";
 import { ProjectFormModal } from "./ProjectFormModal.js";
 import { PageAnalysisPanel } from "./PageAnalysisPanel.js";
+import { ProjectTestsPanel, TestDetailPage } from "./TestWorkspace.js";
 
 const LAST_PROJECT_STORAGE_KEY = "semantic-app:last-project-id";
 
@@ -42,6 +44,7 @@ export const ProjectDashboard = ({
 }: ProjectDashboardProps) => {
   const [projects, setProjects] = useState<ProjectOverview[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>();
+  const [selectedTest, setSelectedTest] = useState<TestDefinition>();
   const [editingProject, setEditingProject] = useState<ProjectOverview>();
   const [deletingProject, setDeletingProject] = useState<ProjectOverview>();
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -179,7 +182,14 @@ export const ProjectDashboard = ({
 
   const openProject = (projectId: string): void => {
     setSelectedProjectId(projectId);
+    setSelectedTest(undefined);
     localStorage.setItem(LAST_PROJECT_STORAGE_KEY, projectId);
+  };
+
+  const closeProject = (): void => {
+    setSelectedProjectId(undefined);
+    setSelectedTest(undefined);
+    localStorage.removeItem(LAST_PROJECT_STORAGE_KEY);
   };
 
   const saveProject = async (input: ProjectInput): Promise<void> => {
@@ -246,6 +256,7 @@ export const ProjectDashboard = ({
 
       if (selectedProjectId === projectId) {
         setSelectedProjectId(undefined);
+        setSelectedTest(undefined);
         localStorage.removeItem(LAST_PROJECT_STORAGE_KEY);
       }
 
@@ -265,6 +276,139 @@ export const ProjectDashboard = ({
       setIsDeleting(false);
     }
   };
+
+  if (selectedProject && selectedTest) {
+    return (
+      <>
+        <TestDetailPage
+          api={api}
+          project={selectedProject.project}
+          test={selectedTest}
+          onTestUpdated={setSelectedTest}
+          onBackToProject={() => {
+            setSelectedTest(undefined);
+          }}
+          onBackToProjects={closeProject}
+        />
+        <BasicAuthDialog
+          open={
+            browserStatus.state === "waiting_for_basic_auth" &&
+            browserStatus.basicAuthChallenge !== undefined
+          }
+          {...(browserStatus.basicAuthChallenge === undefined
+            ? {}
+            : { challenge: browserStatus.basicAuthChallenge })}
+          isSubmitting={isSubmittingBasicAuth}
+          onCancel={() => {
+            void cancelBasicAuth();
+          }}
+          onSubmit={submitBasicAuth}
+        />
+      </>
+    );
+  }
+
+  if (selectedProject) {
+    return (
+      <section className="mt-8" aria-labelledby="project-page-title">
+        <nav aria-label="Navigare proiect" className="text-sm">
+          <button
+            type="button"
+            className="text-brand-700 hover:underline"
+            onClick={closeProject}
+          >
+            ← Proiecte
+          </button>
+        </nav>
+
+        <div className="mt-5 flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-semibold tracking-[0.14em] text-brand-700 uppercase">
+              Proiect
+            </p>
+            <h2
+              id="project-page-title"
+              className="mt-2 text-3xl font-semibold tracking-tight"
+            >
+              {selectedProject.project.name}
+            </h2>
+            <p className="mt-2 break-all text-sm text-app-muted">
+              {selectedProject.project.normalizedBaseUrl}
+            </p>
+          </div>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setEditingProject(selectedProject);
+              setIsFormOpen(true);
+            }}
+          >
+            Editează proiectul
+          </Button>
+        </div>
+
+        {notification ? (
+          <div className="mt-6">
+            <Toast
+              {...notification}
+              onDismiss={() => {
+                setNotification(undefined);
+              }}
+            />
+          </div>
+        ) : null}
+
+        <ProjectTestsPanel
+          api={api}
+          project={selectedProject.project}
+          onOpenTest={setSelectedTest}
+          onTestsChanged={() => {
+            void refreshProjectOverview(selectedProject.project.id);
+          }}
+        />
+
+        <div className="mt-6">
+          <ProjectOverviewPanel
+            api={api}
+            browserStatus={browserStatus}
+            onPageAnalyzed={() => {
+              void refreshProjectOverview(selectedProject.project.id);
+            }}
+            onProjectUpdated={updateProjectOverview}
+            overview={selectedProject}
+          />
+        </div>
+
+        <ProjectFormModal
+          open={isFormOpen}
+          project={selectedProject.project}
+          isSaving={isSaving}
+          onClose={() => {
+            if (!isSaving) {
+              setIsFormOpen(false);
+              setEditingProject(undefined);
+            }
+          }}
+          onSave={saveProject}
+        />
+
+        <BasicAuthDialog
+          open={
+            browserStatus.state === "waiting_for_basic_auth" &&
+            browserStatus.basicAuthChallenge !== undefined
+          }
+          {...(browserStatus.basicAuthChallenge === undefined
+            ? {}
+            : { challenge: browserStatus.basicAuthChallenge })}
+          isSubmitting={isSubmittingBasicAuth}
+          onCancel={() => {
+            void cancelBasicAuth();
+          }}
+          onSubmit={submitBasicAuth}
+        />
+      </section>
+    );
+  }
 
   return (
     <section className="mt-8" aria-labelledby="projects-title">
@@ -353,20 +497,13 @@ export const ProjectDashboard = ({
           </Button>
         </div>
       ) : (
-        <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(280px,0.8fr)_minmax(0,1.2fr)]">
-          <div className="grid content-start gap-3">
+        <div className="mt-6">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {projects.map((overview) => {
-              const isSelected =
-                overview.project.id === selectedProject?.project.id;
-
               return (
                 <article
                   key={overview.project.id}
-                  className={`rounded-xl border bg-app-surface p-4 shadow-sm transition ${
-                    isSelected
-                      ? "border-brand-500 ring-2 ring-brand-100"
-                      : "border-app-border hover:border-brand-500"
-                  }`}
+                  className="rounded-xl border border-app-border bg-app-surface p-4 shadow-sm transition hover:border-brand-500"
                 >
                   <button
                     type="button"
@@ -421,28 +558,6 @@ export const ProjectDashboard = ({
               );
             })}
           </div>
-
-          {selectedProject ? (
-            <ProjectOverviewPanel
-              api={api}
-              browserStatus={browserStatus}
-              onPageAnalyzed={() => {
-                void refreshProjectOverview(selectedProject.project.id);
-              }}
-              onProjectUpdated={updateProjectOverview}
-              overview={selectedProject}
-            />
-          ) : (
-            <div className="grid min-h-72 place-items-center rounded-2xl border border-app-border bg-app-surface p-8 text-center shadow-sm">
-              <div>
-                <p className="text-lg font-semibold">Selectează un proiect</p>
-                <p className="mt-2 text-sm text-app-muted">
-                  Deschide un proiect pentru a vedea configurația și
-                  statisticile sale.
-                </p>
-              </div>
-            </div>
-          )}
         </div>
       )}
 

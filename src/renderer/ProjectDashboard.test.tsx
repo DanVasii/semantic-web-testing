@@ -74,6 +74,11 @@ const createApi = (
   analyzeCurrentPage: vi.fn(),
   listAnalyzedPages: vi.fn().mockResolvedValue([]),
   onPageAnalysisProgress: vi.fn().mockReturnValue(vi.fn()),
+  listTests: vi.fn().mockResolvedValue([]),
+  getTest: vi.fn(),
+  createTest: vi.fn(),
+  updateTest: vi.fn(),
+  deleteTest: vi.fn(),
 });
 
 beforeEach(() => {
@@ -86,6 +91,25 @@ afterEach(() => {
 });
 
 describe("ProjectDashboard", () => {
+  it("opens a project as a separate page and returns to the project list", async () => {
+    const user = userEvent.setup();
+    render(<ProjectDashboard api={createApi()} />);
+
+    await screen.findByText("Magazin demo");
+    await user.click(screen.getByRole("button", { name: "Deschide" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Testele proiectului" }),
+    ).not.toBeNull();
+    expect(screen.getByRole("button", { name: "← Proiecte" })).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "← Proiecte" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Proiecte" }),
+    ).not.toBeNull();
+    expect(screen.queryByText("Testele proiectului")).toBeNull();
+  });
+
   it("restores the last opened project and displays its statistics", async () => {
     localStorage.setItem("semantic-app:last-project-id", overview.project.id);
     render(<ProjectDashboard api={createApi()} />);
