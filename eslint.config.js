@@ -7,10 +7,7 @@ import tseslint from "typescript-eslint";
 export default defineConfig({
   name: "typescript-source",
   files: ["src/**/*.ts"],
-  extends: [
-    js.configs.recommended,
-    tseslint.configs.recommendedTypeChecked,
-  ],
+  extends: [js.configs.recommended, tseslint.configs.recommendedTypeChecked],
   languageOptions: {
     parserOptions: {
       projectService: true,
@@ -27,4 +24,3 @@ export default defineConfig({
     "@typescript-eslint/no-misused-promises": "error",
   },
 });
-

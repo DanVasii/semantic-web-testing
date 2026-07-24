@@ -24,6 +24,7 @@ Comanda `verify` rulează toate verificările locale ale proiectului.
 ## Verificări locale
 
 ```bash
+npm run format:check
 npm run lint
 npm run typecheck
 npm run build
@@ -31,8 +32,14 @@ npm run build
 
 `npm run verify` rulează toate verificările de mai sus în această ordine.
 
+Pentru aplicarea automată a formatării:
+
+```bash
+npm run format
+```
+
 ## Stadiu
 
-Etapa 0: workspace TypeScript și lint TypeScript configurate. Funcționalitățile
-Electron, React, Tailwind, formatarea automată și testarea vor fi adăugate numai
-în task-urile dedicate.
+Etapa 0: workspace TypeScript, lint și formatare automată configurate.
+Funcționalitățile Electron, React, Tailwind și testarea vor fi adăugate numai în
+task-urile dedicate.

@@ -1,0 +1,23 @@
+# Dependencies and generated output
+node_modules/
+dist/
+out/
+build/
+release/
+
+# Test output
+coverage/
+playwright-report/
+test-results/
+blob-report/
+
+# Runtime and temporary data
+data/
+runtime/
+tmp/
+temp/
+logs/
+
+# Binary project documentation
+*.pdf
+
