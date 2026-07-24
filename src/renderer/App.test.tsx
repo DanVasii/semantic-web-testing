@@ -7,7 +7,9 @@ describe("App", () => {
   it("renders the renderer foundation", () => {
     const markup = renderToStaticMarkup(<App />);
 
-    expect(markup).toContain("<h1>Semantic Web Testing App</h1>");
-    expect(markup).toContain("Fundația renderer-ului React este activă.");
+    expect(markup).toContain("Semantic Web Testing App");
+    expect(markup).toContain("bg-app-canvas");
+    expect(markup).toContain("bg-brand-500");
+    expect(markup).toContain("Light mode cu accent portocaliu.");
   });
 });
