@@ -12,5 +12,8 @@ describe("App", () => {
     expect(markup).toContain("bg-brand-500");
     expect(markup).toContain("Light mode cu accent portocaliu.");
     expect(markup).toContain("Se încarcă informațiile aplicației.");
+    expect(markup).toContain("Componente de bază");
+    expect(markup).toContain("Deschide modal");
+    expect(markup).toContain("Modificările au fost păstrate.");
   });
 });

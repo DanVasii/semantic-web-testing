@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { AppInfo } from "../shared/ipc.js";
+import { DesignSystemShowcase } from "./DesignSystemShowcase.js";
 
 export const App = () => {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
@@ -64,6 +65,8 @@ export const App = () => {
             </p>
           </div>
         </section>
+
+        <DesignSystemShowcase />
       </div>
     </main>
   );
