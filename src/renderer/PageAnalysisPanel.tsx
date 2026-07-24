@@ -108,7 +108,7 @@ export const PageAnalysisPanel = ({
       projectId: project.id,
       stage: "preparing",
       completedSteps: 0,
-      totalSteps: 8,
+      totalSteps: 9,
       message: "Se pregătește analiza paginii curente.",
     });
 
@@ -270,7 +270,8 @@ export const PageAnalysisPanel = ({
               {result.artifactDirectory}
             </p>
             <p className="mt-1">
-              dom.html · styles.css · accessibility.json · analysis.json
+              dom.html · styles.css · accessibility.json · analysis.json ·
+              semantic-analysis.json
             </p>
           </div>
           {result.inaccessibleStylesheets.length > 0 ? (

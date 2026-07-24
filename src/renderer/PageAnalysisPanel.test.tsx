@@ -159,7 +159,7 @@ describe("PageAnalysisPanel", () => {
         projectId: project.id,
         stage: "capturing_styles",
         completedSteps: 5,
-        totalSteps: 8,
+        totalSteps: 9,
         message: "Se capturează stilurile paginii.",
       });
     });
@@ -171,7 +171,7 @@ describe("PageAnalysisPanel", () => {
       screen
         .getByRole("progressbar", { name: "Progres analiză" })
         .getAttribute("aria-valuenow"),
-    ).toBe("63");
+    ).toBe("56");
     act(() => {
       resolveAnalysis?.(result);
     });
@@ -183,7 +183,7 @@ describe("PageAnalysisPanel", () => {
     );
     expect(
       screen.getByText(
-        "dom.html · styles.css · accessibility.json · analysis.json",
+        "dom.html · styles.css · accessibility.json · analysis.json · semantic-analysis.json",
       ),
     ).not.toBeNull();
     expect(onAnalysisCompleted).toHaveBeenCalledOnce();

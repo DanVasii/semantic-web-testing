@@ -96,6 +96,71 @@
           <button type="button" disabled>Acțiune indisponibilă</button>
         </form>
       </section>
+
+      <section
+        class="target-card"
+        aria-labelledby="fixture-products-title"
+        data-testid="fixture-repeated-products"
+      >
+        <h2 id="fixture-products-title">Produse repetitive</h2>
+        <div class="product-grid">
+          <article class="product-card" data-component="product-card">
+            <h3 class="product-title">Masaj Relaxare</h3>
+            <p class="product-price">150 lei</p>
+            <button type="button" class="add-to-cart">Adaugă în coș</button>
+          </article>
+          <article class="product-card" data-component="product-card">
+            <h3 class="product-title">Masaj Premium</h3>
+            <p class="product-price">220 lei</p>
+            <button type="button" class="add-to-cart">Adaugă în coș</button>
+          </article>
+          <article class="product-card" data-component="product-card">
+            <h3 class="product-title">Masaj Sportiv</h3>
+            <p class="product-price">190 lei</p>
+            <button type="button" class="add-to-cart">Adaugă în coș</button>
+          </article>
+        </div>
+      </section>
+
+      <section
+        class="target-card"
+        aria-labelledby="fixture-booking-title"
+        data-testid="fixture-booking"
+      >
+        <h2 id="fixture-booking-title">Programare semantică</h2>
+        <div
+          class="booking-calendar"
+          role="grid"
+          aria-label="Calendar programare"
+        >
+          <button role="gridcell" class="calendar-day" aria-label="24 iulie">
+            24
+          </button>
+          <button role="gridcell" class="calendar-day" aria-label="25 iulie">
+            25
+          </button>
+          <button role="gridcell" class="calendar-day" aria-label="26 iulie">
+            26
+          </button>
+          <button role="gridcell" class="calendar-day" aria-label="27 iulie">
+            27
+          </button>
+          <button role="gridcell" class="calendar-day" aria-label="28 iulie">
+            28
+          </button>
+          <button role="gridcell" class="calendar-day" aria-label="29 iulie">
+            29
+          </button>
+          <button role="gridcell" class="calendar-day" aria-label="30 iulie">
+            30
+          </button>
+        </div>
+        <div class="time-slot-list" aria-label="Ore disponibile">
+          <button type="button" class="time-slot">09:00</button>
+          <button type="button" class="time-slot">10:30</button>
+          <button type="button" class="time-slot">12:00</button>
+        </div>
+      </section>
     </main>
 
     <footer>

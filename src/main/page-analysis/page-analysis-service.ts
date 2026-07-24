@@ -10,6 +10,7 @@ import type {
 } from "../../shared/page-analysis.js";
 import { normalizeAnalyzedPageUrl } from "../../shared/page-analysis.js";
 import type { Page, PageVersion } from "../../shared/persistence.js";
+import type { SemanticAnalysis } from "../../shared/semantic-analysis.js";
 import {
   PageRepository,
   ProjectRepository,
@@ -20,6 +21,7 @@ import {
   type PageCaptureProgressListener,
   toPageAnalysisProgress,
 } from "./page-capture.js";
+import { analyzePageSemantics } from "./semantic-analyzer.js";
 
 export interface CurrentPageMetadata {
   tabId: string;
@@ -43,7 +45,7 @@ export interface PageAnalysisServiceOptions {
 }
 
 interface StoredAnalysisArtifact {
-  schemaVersion: 1;
+  schemaVersion: 2;
   projectId: string;
   pageId: string;
   pageVersionId: string;
@@ -70,6 +72,9 @@ interface StoredAnalysisArtifact {
   styleTags: PageCapture["styleTags"];
   stylesheets: PageCapture["stylesheets"];
   shadowRoots: PageCapture["shadowRoots"];
+  allElements: PageCapture["allElements"];
+  semanticAnalysisFilePath: string;
+  semanticAnalysis: SemanticAnalysis;
 }
 
 const emptyCounts = (): PageAnalysisResult["counts"] => ({
@@ -212,6 +217,19 @@ export class PageAnalysisService {
         .update("\0")
         .update(capture.accessibilitySnapshot)
         .digest("hex");
+      onProgress?.(
+        toPageAnalysisProgress(
+          projectId,
+          "analyzing_semantics",
+          6,
+          "Se construiește modelul semantic local.",
+        ),
+      );
+      const semanticAnalysis = analyzePageSemantics(capture, {
+        generatedAt: capturedAt,
+        url: capture.url,
+      });
+      const semanticAnalysisFilePath = `${portableDirectory}/semantic-analysis.json`;
       const version: PageVersion = {
         id: pageVersionId,
         pageId,
@@ -225,7 +243,7 @@ export class PageAnalysisService {
         semanticHash,
       };
       const analysisArtifact: StoredAnalysisArtifact = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         projectId,
         pageId,
         pageVersionId,
@@ -252,13 +270,16 @@ export class PageAnalysisService {
         styleTags: capture.styleTags,
         stylesheets: capture.stylesheets,
         shadowRoots: capture.shadowRoots,
+        allElements: capture.allElements,
+        semanticAnalysisFilePath,
+        semanticAnalysis,
       };
 
       onProgress?.(
         toPageAnalysisProgress(
           projectId,
           "saving_artifacts",
-          6,
+          7,
           "Se salvează artefactele locale.",
         ),
       );
@@ -291,6 +312,11 @@ export class PageAnalysisService {
             serializeJson(analysisArtifact),
             "utf8",
           ),
+          writeFile(
+            join(temporaryDirectory, "semantic-analysis.json"),
+            serializeJson(semanticAnalysis),
+            "utf8",
+          ),
         ]);
         await rename(temporaryDirectory, finalDirectory);
       } catch (error) {
@@ -302,7 +328,7 @@ export class PageAnalysisService {
         toPageAnalysisProgress(
           projectId,
           "creating_version",
-          7,
+          8,
           `Se creează versiunea ${versionNumber} a paginii.`,
         ),
       );

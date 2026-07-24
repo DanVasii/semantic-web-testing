@@ -191,6 +191,45 @@ button:disabled {
   min-height: auto;
 }
 
+.product-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.product-card {
+  padding: 18px;
+  border: 1px solid #ded8d1;
+  border-radius: 14px;
+  background: #fffaf6;
+}
+
+.product-title {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.product-price {
+  color: #655d57;
+}
+
+.booking-calendar,
+.time-slot-list {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.time-slot-list {
+  margin-top: 18px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.calendar-day,
+.time-slot {
+  padding-inline: 4px;
+}
+
 footer {
   display: flex;
   justify-content: space-between;
@@ -213,5 +252,10 @@ footer code {
 
   main {
     padding-block: 40px;
+  }
+
+  .product-grid,
+  .booking-calendar {
+    grid-template-columns: 1fr;
   }
 }

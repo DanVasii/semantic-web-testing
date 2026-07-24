@@ -357,6 +357,7 @@ const pageAnalysisStages = new Set([
   "capturing_accessibility",
   "capturing_elements",
   "capturing_styles",
+  "analyzing_semantics",
   "saving_artifacts",
   "creating_version",
   "completed",

@@ -329,6 +329,7 @@ describe("PlaywrightBrowserManager navigation and lifecycle", () => {
     engines.chromium.page.evaluate
       .mockResolvedValueOnce({
         serializedDom: "<html><body><button>Continuă</button></body></html>",
+        allElements: [],
         visibleTexts: [
           { path: "/html[1]/body[1]/button[1]", text: "Continuă" },
         ],

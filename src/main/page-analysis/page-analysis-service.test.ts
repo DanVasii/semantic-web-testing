@@ -61,6 +61,7 @@ const createCapture = (overrides: Partial<PageCapture> = {}): PageCapture => ({
   serializedDom:
     "<html><head></head><body><button>Cumpără</button></body></html>",
   accessibilitySnapshot: '- button "Cumpără"',
+  allElements: [element],
   visibleTexts: [
     {
       path: "/html[1]/body[1]/button[1]",
@@ -193,7 +194,7 @@ describe("PageAnalysisService", () => {
     expect(progress).toHaveBeenLastCalledWith(
       expect.objectContaining({
         stage: "completed",
-        completedSteps: 8,
+        completedSteps: 9,
       }),
     );
 
@@ -216,18 +217,36 @@ describe("PageAnalysisService", () => {
       format: "playwright-aria-snapshot-yaml",
       snapshot: capture.accessibilitySnapshot,
     });
-    expect(
-      JSON.parse(
-        readFileSync(join(artifactDirectory, "analysis.json"), "utf8"),
-      ),
-    ).toMatchObject({
-      schemaVersion: 1,
+    const analysisJson: unknown = JSON.parse(
+      readFileSync(join(artifactDirectory, "analysis.json"), "utf8"),
+    );
+    expect(analysisJson).toMatchObject({
+      schemaVersion: 2,
       title: "Produse",
       counts: capture.counts,
       buttons: [expect.objectContaining({ text: "Cumpără" })],
       ariaElements: [expect.objectContaining({ tag: "button" })],
       dataElements: [expect.objectContaining({ tag: "button" })],
     });
+    expect(analysisJson).toHaveProperty(
+      "semanticAnalysis.elements.0.accessibleName",
+      "Cumpără produsul",
+    );
+    expect(analysisJson).toHaveProperty(
+      "semanticAnalysis.elements.0.role",
+      "button",
+    );
+    const semanticJson: unknown = JSON.parse(
+      readFileSync(join(artifactDirectory, "semantic-analysis.json"), "utf8"),
+    );
+    expect(semanticJson).toMatchObject({
+      schemaVersion: 1,
+    });
+    expect(semanticJson).toHaveProperty(
+      "elements.0.accessibleName",
+      "Cumpără produsul",
+    );
+    expect(semanticJson).toHaveProperty("elements.0.role", "button");
     expect(projectRepository.getStatistics(project.id).pageCount).toBe(1);
     const summaries = await service.listAnalyzedPages(project.id);
     expect(summaries).toHaveLength(1);

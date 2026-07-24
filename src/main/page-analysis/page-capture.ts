@@ -71,6 +71,7 @@ export interface PageCapture {
   html: string;
   serializedDom: string;
   accessibilitySnapshot: string;
+  allElements: CapturedElement[];
   visibleTexts: CapturedVisibleText[];
   interactiveElements: CapturedElement[];
   ariaElements: CapturedElement[];
@@ -98,6 +99,7 @@ export type PageCaptureProgressListener = (
 
 interface DomCapture {
   serializedDom: string;
+  allElements: CapturedElement[];
   visibleTexts: CapturedVisibleText[];
   interactiveElements: CapturedElement[];
   ariaElements: CapturedElement[];
@@ -117,7 +119,7 @@ interface StyleCapture {
   stylesheets: CapturedStylesheet[];
 }
 
-const TOTAL_CAPTURE_STEPS = 8;
+const TOTAL_CAPTURE_STEPS = 9;
 
 const emit = (
   listener: PageCaptureProgressListener | undefined,
@@ -411,6 +413,7 @@ const captureDom = async (page: Page): Promise<DomCapture> =>
 
     return {
       serializedDom: document.documentElement.outerHTML,
+      allElements: allElements.map(snapshot),
       visibleTexts,
       interactiveElements: interactiveElements.map(snapshot),
       ariaElements: ariaElements.map(snapshot),
