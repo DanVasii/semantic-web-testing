@@ -1,0 +1,19 @@
+{
+  "name": "semantic-web-testing-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Aplicație desktop pentru testare web semantică end-to-end.",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "verify": "npm run typecheck && npm run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
+
