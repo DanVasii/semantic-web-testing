@@ -71,6 +71,15 @@
           />
           <small id="email-help">Adresă folosită doar în fixture.</small>
 
+          <label for="customer-password">Parolă client</label>
+          <input
+            id="customer-password"
+            name="customer_password"
+            type="password"
+            autocomplete="off"
+            data-field="customer_password"
+          />
+
           <label class="fixture-checkbox">
             <input
               name="newsletter"
@@ -80,6 +89,28 @@
             />
             Primește noutăți
           </label>
+
+          <fieldset>
+            <legend>Plan client</legend>
+            <label class="fixture-checkbox">
+              <input
+                name="customer_plan"
+                type="radio"
+                value="standard"
+                data-field="customer_plan"
+              />
+              Standard
+            </label>
+            <label class="fixture-checkbox">
+              <input
+                name="customer_plan"
+                type="radio"
+                value="premium"
+                data-field="customer_plan"
+              />
+              Premium
+            </label>
+          </fieldset>
 
           <select name="service" aria-label="Serviciu" data-field="service">
             <option value="">Alege serviciul</option>

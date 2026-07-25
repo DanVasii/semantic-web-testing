@@ -29,6 +29,12 @@ const createId = (): string =>
 const fieldClass =
   "mt-1 min-h-10 w-full rounded-lg border border-app-border bg-app-surface px-3 py-2 text-sm focus:border-brand-500 focus:outline-none";
 const labelClass = "block text-xs font-semibold text-app-muted";
+const DATA_INPUT_ACTION_TYPES = new Set<ActionStep["actionType"]>([
+  "fill",
+  "select_option",
+  "check",
+  "uncheck",
+]);
 
 interface LocatorEditorProps {
   locator: LocatorDefinition;
@@ -697,10 +703,14 @@ export const TestFlowEditor = ({
                         className={fieldClass}
                         value={item.actionType}
                         onChange={(event) => {
+                          const actionType = event.target
+                            .value as ActionStep["actionType"];
                           updateItem(index, {
                             ...item,
-                            actionType: event.target
-                              .value as ActionStep["actionType"],
+                            actionType,
+                            ...(DATA_INPUT_ACTION_TYPES.has(actionType)
+                              ? { valueStrategy: "dataset" as const }
+                              : {}),
                           });
                         }}
                       >
@@ -711,6 +721,70 @@ export const TestFlowEditor = ({
                         ))}
                       </select>
                     </label>
+                    {DATA_INPUT_ACTION_TYPES.has(item.actionType) ? (
+                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                        <label className={labelClass}>
+                          ID semantic câmp
+                          <input
+                            className={fieldClass}
+                            value={item.inputFieldId ?? ""}
+                            placeholder="ex. customer_email"
+                            onChange={(event) => {
+                              const previousFieldId = item.inputFieldId;
+                              const inputFieldId =
+                                event.target.value.trim() || undefined;
+                              const nextValueKey =
+                                item.valueKey === undefined ||
+                                item.valueKey === previousFieldId
+                                  ? inputFieldId
+                                  : item.valueKey;
+                              const nextItem: ActionStep = { ...item };
+                              delete nextItem.inputFieldId;
+                              delete nextItem.valueKey;
+                              if (inputFieldId !== undefined) {
+                                nextItem.inputFieldId = inputFieldId;
+                              }
+                              if (nextValueKey !== undefined) {
+                                nextItem.valueKey = nextValueKey;
+                              }
+                              nextItem.valueStrategy = "dataset";
+                              if (item.target !== undefined) {
+                                nextItem.target = { ...item.target };
+                                delete nextItem.target.fieldId;
+                                if (inputFieldId !== undefined) {
+                                  nextItem.target.fieldId = inputFieldId;
+                                }
+                              }
+                              updateItem(index, nextItem);
+                            }}
+                          />
+                        </label>
+                        <label className={labelClass}>
+                          Cheie dataset
+                          <input
+                            className={fieldClass}
+                            value={item.valueKey ?? ""}
+                            placeholder="ex. customer_email"
+                            onChange={(event) => {
+                              const valueKey =
+                                event.target.value.trim() || undefined;
+                              const nextItem: ActionStep = { ...item };
+                              delete nextItem.valueKey;
+                              if (valueKey !== undefined) {
+                                nextItem.valueKey = valueKey;
+                              }
+                              nextItem.valueStrategy = "dataset";
+                              updateItem(index, nextItem);
+                            }}
+                          />
+                        </label>
+                        <p className="text-xs text-app-muted sm:col-span-2">
+                          Valoarea este citită din datasetul rulării. Dacă cheia
+                          lipsește, rularea se oprește pentru completare manuală
+                          în browser.
+                        </p>
+                      </div>
+                    ) : null}
                     {item.target !== undefined ? (
                       <LocatorEditor
                         label="Locator principal"

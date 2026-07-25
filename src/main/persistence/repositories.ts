@@ -587,6 +587,14 @@ export class RunRepository {
     return row === undefined ? undefined : mapRun(row);
   }
 
+  public assignDataset(runId: string, datasetId: string): boolean {
+    return (
+      this.database
+        .prepare("UPDATE runs SET dataset_id = ? WHERE id = ?")
+        .run(datasetId, runId).changes > 0
+    );
+  }
+
   public listByProject(projectId: string): TestRun[] {
     return asRows(
       this.database

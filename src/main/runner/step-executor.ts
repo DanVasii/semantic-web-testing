@@ -84,6 +84,17 @@ const resolveInputValue = (
   return dataset[key] ?? "";
 };
 
+const hasDatasetInput = (step: ActionStep): boolean =>
+  step.valueStrategy !== undefined || step.valueKey !== undefined;
+
+const booleanInputValue = (
+  step: ActionStep,
+  dataset: Record<string, string>,
+): boolean =>
+  !["", "0", "false", "no", "off"].includes(
+    resolveInputValue(step, dataset).trim().toLowerCase(),
+  );
+
 const applyWait = async (
   page: Page,
   wait: WaitDefinition | undefined,
@@ -153,13 +164,21 @@ const executeAction = async (
     case "check": {
       const target = await resolveTarget(page, step, locatorOverride);
       locatorUsed = asJson(target.definition);
-      await target.locator.check();
+      if (hasDatasetInput(step) && !booleanInputValue(step, dataset)) {
+        await target.locator.uncheck();
+      } else {
+        await target.locator.check();
+      }
       break;
     }
     case "uncheck": {
       const target = await resolveTarget(page, step, locatorOverride);
       locatorUsed = asJson(target.definition);
-      await target.locator.uncheck();
+      if (hasDatasetInput(step) && booleanInputValue(step, dataset)) {
+        await target.locator.check();
+      } else {
+        await target.locator.uncheck();
+      }
       break;
     }
     case "press_key":

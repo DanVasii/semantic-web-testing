@@ -100,6 +100,12 @@ const createLocator = () => {
     press: vi.fn().mockResolvedValue(undefined),
     scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
     waitFor: vi.fn().mockResolvedValue(undefined),
+    evaluate: vi.fn().mockResolvedValue({
+      tagName: "input",
+      type: "text",
+    }),
+    inputValue: vi.fn().mockResolvedValue("manual-value"),
+    isChecked: vi.fn().mockResolvedValue(false),
     filter: vi.fn(),
     locator: vi.fn(),
     and: vi.fn(),
@@ -582,7 +588,7 @@ describe("TestRunnerService", () => {
     });
     expect(harness.spies.mouseWheel).not.toHaveBeenCalled();
 
-    service.continueExecution(started.run?.id ?? "");
+    await service.continueExecution(started.run?.id ?? "");
     await vi.waitFor(() => {
       expect(service.getStatus(project.id, test.id).state).toBe("completed");
     });
@@ -620,7 +626,7 @@ describe("TestRunnerService", () => {
     });
     expect(harness.spies.mouseWheel).toHaveBeenCalledOnce();
 
-    service.continueExecution(started.run?.id ?? "");
+    await service.continueExecution(started.run?.id ?? "");
     await vi.waitFor(() => {
       expect(service.getStatus(project.id, test.id).state).toBe("completed");
     });
@@ -645,7 +651,7 @@ describe("TestRunnerService", () => {
       },
     });
     expect(harness.spies.mouseWheel).not.toHaveBeenCalled();
-    service.continueExecution(started.run?.id ?? "");
+    await service.continueExecution(started.run?.id ?? "");
     await vi.waitFor(() => {
       expect(service.getStatus(project.id, test.id).state).toBe("completed");
     });

@@ -130,6 +130,46 @@ describe("TestFlowEditor", () => {
     expect(screen.getByText(/repeated_component/)).not.toBeNull();
   });
 
+  it("configures dataset keys for input actions", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    render(
+      <TestFlowEditor
+        api={api}
+        projectId={test.projectId}
+        test={test}
+        onTestSaved={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "+ Adaugă pas" }));
+    await user.selectOptions(screen.getByLabelText("Tip acțiune"), "fill");
+    await user.type(
+      screen.getByLabelText("ID semantic câmp"),
+      "customer_email",
+    );
+    expect(screen.getByLabelText("Cheie dataset").getAttribute("value")).toBe(
+      "customer_email",
+    );
+    await user.clear(screen.getByLabelText("Cheie dataset"));
+    await user.type(screen.getByLabelText("Cheie dataset"), "contact_email");
+    await user.click(
+      screen.getByRole("button", { name: "Salvează flow-ul testului" }),
+    );
+
+    await waitFor(() => {
+      expect(api.saveTestFlow).toHaveBeenCalledOnce();
+    });
+    const savedItem = vi.mocked(api.saveTestFlow).mock.calls[0]?.[2][0];
+    expect(savedItem).toMatchObject({
+      actionType: "fill",
+      inputFieldId: "customer_email",
+      valueKey: "contact_email",
+      valueStrategy: "dataset",
+      target: { fieldId: "customer_email" },
+    });
+  });
+
   it("adds, reorders and disables breakpoints as flow items", async () => {
     const user = userEvent.setup();
     const api = createApi();

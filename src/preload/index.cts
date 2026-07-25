@@ -576,6 +576,28 @@ const isStepRunResult = (value: unknown): value is StepRunResult =>
   "logs" in value &&
   Array.isArray(value.logs);
 
+const missingDataInputKinds = new Set([
+  "text",
+  "password",
+  "checkbox",
+  "select",
+  "radio",
+]);
+
+const isMissingDataDetails = (value: unknown): boolean =>
+  typeof value === "object" &&
+  value !== null &&
+  "fieldId" in value &&
+  typeof value.fieldId === "string" &&
+  "valueKey" in value &&
+  typeof value.valueKey === "string" &&
+  "inputKind" in value &&
+  typeof value.inputKind === "string" &&
+  missingDataInputKinds.has(value.inputKind) &&
+  "locator" in value &&
+  typeof value.locator === "object" &&
+  value.locator !== null;
+
 const isRunnerSnapshot = (value: unknown): value is RunnerSnapshot =>
   typeof value === "object" &&
   value !== null &&
@@ -590,6 +612,9 @@ const isRunnerSnapshot = (value: unknown): value is RunnerSnapshot =>
   typeof value.canStop === "boolean" &&
   "canRetry" in value &&
   typeof value.canRetry === "boolean" &&
+  (!("missingData" in value) ||
+    value.missingData === undefined ||
+    isMissingDataDetails(value.missingData)) &&
   (!("run" in value) || isTestRun(value.run));
 
 const semanticAppApi: SemanticAppApi = {

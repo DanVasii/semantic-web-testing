@@ -17,6 +17,7 @@ import type {
 } from "../../shared/persistence.js";
 import {
   RUN_MODES,
+  type MissingDataDetails,
   type RunnerErrorDetails,
   type RunMode,
   type RunnerSnapshot,
@@ -41,6 +42,7 @@ import {
   TestRepository,
 } from "../persistence/repositories.js";
 import { materializeDataset } from "./dataset-values.js";
+import { inspectMissingInput, readManualInputValue } from "./missing-data.js";
 import {
   executeFlowItem,
   StepExecutionError,
@@ -78,6 +80,7 @@ interface RunnerSession {
   stopRequested: boolean;
   mode: RunMode;
   pendingFallback?: PendingFallback;
+  pendingMissingData?: PendingMissingData;
 }
 
 interface PendingFallback {
@@ -86,6 +89,12 @@ interface PendingFallback {
   startedAt: string;
   primaryError: RunnerErrorDetails;
   logs: JsonValue[];
+}
+
+interface PendingMissingData {
+  item: ActionStep;
+  startedAt: string;
+  details: MissingDataDetails;
 }
 
 const activeBrowserStates = new Set([
@@ -105,6 +114,14 @@ const copySnapshot = (snapshot: RunnerSnapshot): RunnerSnapshot => ({
         fallback: {
           ...snapshot.fallback,
           locator: structuredClone(snapshot.fallback.locator),
+        },
+      }),
+  ...(snapshot.missingData === undefined
+    ? {}
+    : {
+        missingData: {
+          ...snapshot.missingData,
+          locator: structuredClone(snapshot.missingData.locator),
         },
       }),
 });
@@ -274,7 +291,9 @@ export class TestRunnerService {
     delete snapshotWithoutError.error;
     delete snapshotWithoutError.fallback;
     delete snapshotWithoutError.pause;
+    delete snapshotWithoutError.missingData;
     delete session.pendingFallback;
+    delete session.pendingMissingData;
     this.publish(session, {
       ...snapshotWithoutError,
       state: "stopped",
@@ -310,8 +329,11 @@ export class TestRunnerService {
     return copySnapshot(session.snapshot);
   }
 
-  public continueExecution(runId: string): RunnerSnapshot {
+  public async continueExecution(runId: string): Promise<RunnerSnapshot> {
     const session = this.requireSession(runId);
+    if (session.snapshot.state === "waiting_for_missing_data") {
+      return this.continueMissingData(session);
+    }
     if (
       ![
         "waiting_for_start",
@@ -606,7 +628,34 @@ export class TestRunnerService {
         session.snapshot.currentStepIndex += 1;
         if (this.pauseAfterStep(session, item)) return;
       } catch (error) {
-        const details = this.toRunnerError(error, item.id);
+        let details = this.toRunnerError(error, item.id);
+        if (details.code === "missing_data" && item.type === "action") {
+          try {
+            const missingData = await inspectMissingInput(session.page, item);
+            session.pendingMissingData = {
+              item,
+              startedAt: stepStartedAt,
+              details: missingData,
+            };
+            const waitingSnapshot = { ...session.snapshot };
+            delete waitingSnapshot.pause;
+            delete waitingSnapshot.fallback;
+            this.publish(session, {
+              ...waitingSnapshot,
+              state: "waiting_for_missing_data",
+              run: session.run,
+              message:
+                "Completează valoarea direct în browser, apoi apasă Continue.",
+              error: details,
+              missingData,
+              canStop: true,
+              canRetry: false,
+            });
+            return;
+          } catch (inspectionError) {
+            details = this.toRunnerError(inspectionError, item.id);
+          }
+        }
         if (
           item.type === "action" &&
           item.fallbacks.length > 0 &&
@@ -640,10 +689,7 @@ export class TestRunnerService {
         this.runRepository.updateStatus(session.run.id, "failed", endedAt);
         this.publish(session, {
           ...session.snapshot,
-          state:
-            details.code === "missing_data"
-              ? "waiting_for_missing_data"
-              : "paused_on_error",
+          state: "paused_on_error",
           run: session.run,
           message: details.message,
           error: details,
@@ -666,6 +712,7 @@ export class TestRunnerService {
     delete completedSnapshot.currentStepId;
     delete completedSnapshot.error;
     delete completedSnapshot.pause;
+    delete completedSnapshot.missingData;
     this.publish(session, {
       ...completedSnapshot,
       state: "completed",
@@ -673,7 +720,7 @@ export class TestRunnerService {
       currentStepIndex: session.test.flowItems.length,
       message:
         finalStatus === "passed_with_warnings"
-          ? "Testul a trecut cu fallback-uri."
+          ? "Testul a trecut cu warning-uri."
           : "Testul a trecut.",
       canStop: false,
       canRetry: false,
@@ -704,6 +751,107 @@ export class TestRunnerService {
       ...(fallbackIndex === undefined ? {} : { fallbackIndex }),
       logs: execution.logs,
     });
+  }
+
+  private async continueMissingData(
+    session: RunnerSession,
+  ): Promise<RunnerSnapshot> {
+    const pending = session.pendingMissingData;
+    if (pending === undefined) {
+      throw new Error("Nu există date lipsă în așteptare.");
+    }
+
+    let value: string | number | boolean | null;
+    try {
+      value = await readManualInputValue(session.page, pending.details);
+    } catch (error) {
+      const details = this.toRunnerError(error, pending.item.id);
+      this.publish(session, {
+        ...session.snapshot,
+        state: "waiting_for_missing_data",
+        message: details.message,
+        error: details,
+        canStop: true,
+        canRetry: false,
+      });
+      return copySnapshot(session.snapshot);
+    }
+
+    this.persistManualValue(session, pending.details.valueKey, value);
+    const warningMessage =
+      pending.details.inputKind === "password"
+        ? `Valoarea pentru ${pending.details.fieldId} a fost colectată manual și salvată local în clar.`
+        : `Valoarea pentru ${pending.details.fieldId} a fost colectată manual.`;
+    session.run = this.runRepository.addWarning(session.run.id, {
+      code: "manual_data_collected",
+      stepId: pending.item.id,
+      fieldId: pending.details.fieldId,
+      message: warningMessage,
+    });
+    this.saveStepResult(
+      session,
+      pending.item,
+      "passed",
+      {
+        locatorUsed: JSON.parse(
+          JSON.stringify(pending.details.locator),
+        ) as JsonValue,
+        logs: [{ level: "warning", message: warningMessage }],
+      },
+      pending.startedAt,
+    );
+    session.snapshot.currentStepIndex += 1;
+    delete session.pendingMissingData;
+    const resumedSnapshot = { ...session.snapshot };
+    delete resumedSnapshot.error;
+    delete resumedSnapshot.missingData;
+    this.publish(session, {
+      ...resumedSnapshot,
+      state: "running",
+      run: session.run,
+      message: "Valoarea manuală a fost salvată. Rularea continuă.",
+      canStop: true,
+      canRetry: false,
+    });
+    if (this.pauseAfterStep(session, pending.item)) {
+      return copySnapshot(session.snapshot);
+    }
+    void this.continueRun(session);
+    return copySnapshot(session.snapshot);
+  }
+
+  private persistManualValue(
+    session: RunnerSession,
+    valueKey: string,
+    value: string | number | boolean | null,
+  ): void {
+    const now = this.options.now();
+    let dataset = session.dataset;
+    if (dataset === undefined) {
+      dataset = {
+        id: this.options.createId(),
+        testId: session.test.id,
+        name: `Run ${now.toISOString().slice(0, 16).replace("T", " ")}`,
+        values: {},
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+      };
+      this.datasetRepository.create(dataset);
+      this.runRepository.assignDataset(session.run.id, dataset.id);
+      session.run = { ...session.run, datasetId: dataset.id };
+    }
+
+    const updated: TestDataset = {
+      ...dataset,
+      values: {
+        ...dataset.values,
+        [valueKey]: { type: "fixed", value },
+      },
+      updatedAt: now.toISOString(),
+    };
+    this.datasetRepository.update(updated);
+    session.dataset = updated;
+    session.datasetValues[valueKey] = value === null ? "" : String(value);
   }
 
   private pauseAfterStep(session: RunnerSession, item: TestFlowItem): boolean {
@@ -913,7 +1061,7 @@ export class TestRunnerService {
     datasets: TestDataset[],
     datasetId: string | undefined,
   ): TestDataset | undefined {
-    if (datasetId === undefined) return datasets[0];
+    if (datasetId === undefined) return undefined;
     const dataset = datasets.find((candidate) => candidate.id === datasetId);
     if (dataset === undefined) {
       throw new StepExecutionError(

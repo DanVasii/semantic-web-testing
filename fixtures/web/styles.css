@@ -156,6 +156,15 @@ form {
   gap: 12px;
 }
 
+form fieldset {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #ded8d1;
+  border-radius: 10px;
+}
+
 label {
   font-weight: 700;
 }

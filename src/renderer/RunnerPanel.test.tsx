@@ -96,6 +96,7 @@ describe("RunnerPanel", () => {
         canRetry: false,
       }),
       listTestRuns: vi.fn().mockResolvedValue([]),
+      listDatasets: vi.fn().mockResolvedValue([]),
       listRunStepResults: vi.fn().mockResolvedValue([]),
       onRunnerStatusChange: vi.fn(
         (callback: (next: RunnerSnapshot) => void) => {
@@ -118,6 +119,7 @@ describe("RunnerPanel", () => {
     await user.click(
       await screen.findByRole("button", { name: "Rulează testul" }),
     );
+    await user.click(screen.getByRole("button", { name: "Pornește rularea" }));
     expect(api.startRun).toHaveBeenCalledWith({
       projectId: test.projectId,
       testId: test.id,
@@ -162,6 +164,7 @@ describe("RunnerPanel", () => {
         }),
       ),
       listTestRuns: vi.fn().mockResolvedValue([{ ...run, status: "passed" }]),
+      listDatasets: vi.fn().mockResolvedValue([]),
       listRunStepResults: vi.fn().mockResolvedValue([
         {
           id: "result-1",
@@ -206,6 +209,7 @@ describe("RunnerPanel", () => {
     const api = {
       getRunnerStatus: vi.fn().mockResolvedValue(fallbackSnapshot),
       listTestRuns: vi.fn().mockResolvedValue([]),
+      listDatasets: vi.fn().mockResolvedValue([]),
       listRunStepResults: vi.fn().mockResolvedValue([]),
       onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
       runCurrentFallback: vi.fn().mockResolvedValue(fallbackSnapshot),
@@ -243,6 +247,7 @@ describe("RunnerPanel", () => {
         canRetry: false,
       }),
       listTestRuns: vi.fn().mockResolvedValue([]),
+      listDatasets: vi.fn().mockResolvedValue([]),
       listRunStepResults: vi.fn().mockResolvedValue([]),
       onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
       startRun: vi.fn().mockResolvedValue(snapshot()),
@@ -265,6 +270,7 @@ describe("RunnerPanel", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "Rulează testul" }));
+    await user.click(screen.getByRole("button", { name: "Pornește rularea" }));
     expect(api.startRun).toHaveBeenCalledWith({
       projectId: project.id,
       testId: test.id,
@@ -288,6 +294,7 @@ describe("RunnerPanel", () => {
     const api = {
       getRunnerStatus: vi.fn().mockResolvedValue(waiting),
       listTestRuns: vi.fn().mockResolvedValue([]),
+      listDatasets: vi.fn().mockResolvedValue([]),
       listRunStepResults: vi.fn().mockResolvedValue([]),
       onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
       continueRun: vi.fn().mockResolvedValue(waiting),
@@ -303,5 +310,86 @@ describe("RunnerPanel", () => {
       screen.getByRole("button", { name: "Continuă (Ctrl+Enter)" }),
     );
     expect(api.continueRun).toHaveBeenCalledTimes(2);
+  });
+
+  it("selects a dataset or no dataset and shows the missing-data prompt", async () => {
+    const user = userEvent.setup();
+    let statusListener: ((next: RunnerSnapshot) => void) | undefined;
+    const waiting = snapshot({
+      state: "waiting_for_missing_data",
+      error: {
+        code: "missing_data",
+        message: "Valoarea lipsește.",
+        stepId: "step-1",
+      },
+      missingData: {
+        fieldId: "customer_password",
+        valueKey: "customer_password",
+        inputKind: "password",
+        locator: {
+          type: "css",
+          operator: "equals",
+          value: "#password",
+        },
+      },
+      canStop: true,
+      canRetry: false,
+    });
+    const api = {
+      getRunnerStatus: vi.fn().mockResolvedValue({
+        state: "idle",
+        currentStepIndex: -1,
+        totalSteps: 0,
+        canStop: false,
+        canRetry: false,
+      }),
+      listTestRuns: vi.fn().mockResolvedValue([]),
+      listDatasets: vi.fn().mockResolvedValue([
+        {
+          id: "dataset-1",
+          testId: test.id,
+          name: "Client standard",
+          values: {},
+          createdAt: "2026-07-24T10:00:00.000Z",
+          updatedAt: "2026-07-24T10:00:00.000Z",
+        },
+      ]),
+      listRunStepResults: vi.fn().mockResolvedValue([]),
+      onRunnerStatusChange: vi.fn(
+        (callback: (next: RunnerSnapshot) => void) => {
+          statusListener = callback;
+          return vi.fn();
+        },
+      ),
+      startRun: vi.fn().mockResolvedValue(snapshot()),
+      continueRun: vi.fn().mockResolvedValue(waiting),
+    } as unknown as SemanticAppApi;
+    render(<RunnerPanel api={api} project={project} test={test} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Rulează testul" }),
+    );
+    const datasetSelect = screen.getByLabelText("Dataset");
+    expect(screen.getByRole("option", { name: "Fără dataset" })).not.toBeNull();
+    await user.selectOptions(datasetSelect, "dataset-1");
+    await user.click(screen.getByRole("button", { name: "Pornește rularea" }));
+    expect(api.startRun).toHaveBeenCalledWith({
+      projectId: project.id,
+      testId: test.id,
+      datasetId: "dataset-1",
+      mode: "automatic",
+      waitBeforeStart: false,
+    });
+
+    act(() => {
+      statusListener?.(waiting);
+    });
+    expect(screen.getByText("customer_password")).not.toBeNull();
+    expect(screen.getByText("password")).not.toBeNull();
+    expect(screen.getByText(/#password/)).not.toBeNull();
+    expect(screen.getByText(/salvată local în clar/)).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Continuă (Ctrl+Enter)" }),
+    ).not.toBeNull();
   });
 });

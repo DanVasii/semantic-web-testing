@@ -4,12 +4,14 @@ import type { SemanticAppApi } from "../shared/ipc.js";
 import type {
   Project,
   StepRunResult,
+  TestDataset,
   TestDefinition,
   TestRun,
 } from "../shared/persistence.js";
 import type { RunnerSnapshot, RunMode } from "../shared/runner.js";
 import { getContinueShortcut, matchesShortcut } from "../shared/shortcuts.js";
 import { Button } from "./components/Button.js";
+import { Modal } from "./components/Modal.js";
 
 const idleSnapshot: RunnerSnapshot = {
   state: "idle",
@@ -50,6 +52,9 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
   const [snapshot, setSnapshot] = useState<RunnerSnapshot>(idleSnapshot);
   const [runs, setRuns] = useState<TestRun[]>([]);
   const [stepResults, setStepResults] = useState<StepRunResult[]>([]);
+  const [datasets, setDatasets] = useState<TestDataset[]>([]);
+  const [selectedDatasetId, setSelectedDatasetId] = useState("");
+  const [runDialogOpen, setRunDialogOpen] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [isFallbackBusy, setIsFallbackBusy] = useState(false);
   const [runMode, setRunMode] = useState<RunMode>("automatic");
@@ -72,16 +77,23 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
     }
   }, [api, projectId, test.id]);
 
+  const loadDatasets = useCallback(async () => {
+    setDatasets(await api.listDatasets(projectId, test.id));
+  }, [api, projectId, test.id]);
+
   useEffect(() => {
     let active = true;
+    setSelectedDatasetId("");
     void Promise.all([
       api.getRunnerStatus(projectId, test.id),
       api.listTestRuns(projectId, test.id),
+      api.listDatasets(projectId, test.id),
     ])
-      .then(async ([status, loadedRuns]) => {
+      .then(async ([status, loadedRuns, loadedDatasets]) => {
         if (!active) return;
         setSnapshot(status);
         setRuns(loadedRuns);
+        setDatasets(loadedDatasets);
         const latest = loadedRuns[0];
         if (latest !== undefined) {
           const results = await api.listRunStepResults(
@@ -109,13 +121,14 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
         )
       ) {
         void loadHistory();
+        void loadDatasets();
       }
     });
     return () => {
       active = false;
       unsubscribe();
     };
-  }, [api, loadHistory, projectId, test.id]);
+  }, [api, loadDatasets, loadHistory, projectId, test.id]);
 
   const start = async (): Promise<void> => {
     setIsStarting(true);
@@ -133,10 +146,14 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
         await api.startRun({
           projectId,
           testId: test.id,
+          ...(selectedDatasetId.length === 0
+            ? {}
+            : { datasetId: selectedDatasetId }),
           mode: runMode,
           waitBeforeStart,
         }),
       );
+      setRunDialogOpen(false);
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
@@ -194,6 +211,7 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
           "waiting_for_start",
           "waiting_at_breakpoint",
           "waiting_after_step",
+          "waiting_for_missing_data",
         ].includes(snapshot.state) &&
         matchesShortcut(event, shortcut)
       ) {
@@ -264,6 +282,7 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
     "waiting_for_start",
     "waiting_at_breakpoint",
     "waiting_after_step",
+    "waiting_for_missing_data",
   ].includes(snapshot.state);
   const progress =
     snapshot.totalSteps === 0
@@ -293,7 +312,7 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
             <Button
               disabled={!canStart}
               onClick={() => {
-                void start();
+                setRunDialogOpen(true);
               }}
             >
               {isStarting ? "Se pornește..." : "Rulează testul"}
@@ -441,6 +460,50 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
         </section>
       ) : null}
 
+      {snapshot.state === "waiting_for_missing_data" &&
+      snapshot.missingData !== undefined ? (
+        <section className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4">
+          <p className="text-xs font-semibold tracking-wide text-amber-800 uppercase">
+            Date lipsă
+          </p>
+          <h4 className="mt-1 font-semibold text-amber-950">
+            Completează câmpul în browser
+          </h4>
+          <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+            <div>
+              <dt className="text-amber-800">fieldId</dt>
+              <dd className="font-mono font-semibold text-amber-950">
+                {snapshot.missingData.fieldId}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-amber-800">Tip input</dt>
+              <dd className="font-semibold text-amber-950">
+                {snapshot.missingData.inputKind}
+              </dd>
+            </div>
+          </dl>
+          <p className="mt-3 text-sm text-amber-900">
+            Introdu valoarea direct în browser. Pentru checkbox și radio,
+            setează starea dorită; pentru select, alege opțiunea. Apoi folosește
+            Continue ({shortcut}).
+          </p>
+          {snapshot.missingData.inputKind === "password" ? (
+            <p className="mt-2 text-sm font-semibold text-red-800">
+              Atenție: parola va fi salvată local în clar în dataset.
+            </p>
+          ) : null}
+          <details className="mt-3">
+            <summary className="cursor-pointer text-sm font-semibold text-amber-950">
+              Selectorul inputului
+            </summary>
+            <pre className="mt-2 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-100">
+              {JSON.stringify(snapshot.missingData.locator, null, 2)}
+            </pre>
+          </details>
+        </section>
+      ) : null}
+
       {snapshot.state === "waiting_for_fallback_decision" &&
       snapshot.fallback !== undefined ? (
         <section className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4">
@@ -530,6 +593,65 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
           </ol>
         </details>
       ) : null}
+
+      <Modal
+        open={runDialogOpen}
+        title="Configurează rularea"
+        onClose={() => {
+          if (!isStarting) setRunDialogOpen(false);
+        }}
+      >
+        <dl className="grid gap-2 rounded-lg border border-app-border bg-app-canvas p-3 text-sm">
+          <div>
+            <dt className="text-app-muted">Test</dt>
+            <dd className="font-semibold text-app-ink">{test.name}</dd>
+          </div>
+          <div>
+            <dt className="text-app-muted">Mod</dt>
+            <dd className="font-semibold text-app-ink">{runMode}</dd>
+          </div>
+        </dl>
+        <label className="mt-4 grid gap-1.5 text-sm font-semibold text-app-ink">
+          Dataset
+          <select
+            className="min-h-10 w-full rounded-lg border border-app-border bg-app-surface px-3 text-sm"
+            value={selectedDatasetId}
+            onChange={(event) => {
+              setSelectedDatasetId(event.target.value);
+            }}
+          >
+            <option value="">Fără dataset</option>
+            {datasets.map((dataset) => (
+              <option key={dataset.id} value={dataset.id}>
+                {dataset.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          Fără dataset, valorile lipsă vor fi colectate manual și salvate local
+          în clar într-un dataset creat automat.
+        </p>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button
+            variant="secondary"
+            disabled={isStarting}
+            onClick={() => {
+              setRunDialogOpen(false);
+            }}
+          >
+            Anulează
+          </Button>
+          <Button
+            disabled={isStarting}
+            onClick={() => {
+              void start();
+            }}
+          >
+            {isStarting ? "Se pornește..." : "Pornește rularea"}
+          </Button>
+        </div>
+      </Modal>
     </section>
   );
 };

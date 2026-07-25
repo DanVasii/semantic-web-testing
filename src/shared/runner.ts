@@ -59,6 +59,16 @@ export interface RunnerPauseDetails {
   nextStepId?: string;
 }
 
+export type MissingDataInputKind =
+  "text" | "password" | "checkbox" | "select" | "radio";
+
+export interface MissingDataDetails {
+  fieldId: string;
+  valueKey: string;
+  inputKind: MissingDataInputKind;
+  locator: LocatorDefinition;
+}
+
 export interface RunnerSnapshot {
   state: RunnerState;
   run?: TestRun;
@@ -69,6 +79,7 @@ export interface RunnerSnapshot {
   error?: RunnerErrorDetails;
   fallback?: FallbackDecision;
   pause?: RunnerPauseDetails;
+  missingData?: MissingDataDetails;
   canStop: boolean;
   canRetry: boolean;
 }
