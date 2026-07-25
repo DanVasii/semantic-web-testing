@@ -192,7 +192,7 @@ const executeAction = async (
       break;
     case "scroll":
       if (step.target === undefined) {
-        await page.mouse.wheel(0, 700);
+        await page.mouse.wheel(step.scrollX ?? 0, step.scrollY ?? 700);
       } else {
         const target = await resolveTarget(page, step, locatorOverride);
         locatorUsed = asJson(target.definition);

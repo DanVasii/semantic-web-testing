@@ -133,6 +133,8 @@ export interface ActionStep {
   valueStrategy?: DatasetValueStrategy;
   url?: string;
   key?: string;
+  scrollX?: number;
+  scrollY?: number;
   waitAfter?: WaitDefinition;
   fallbacks: LocatorFallback[];
   enabled: boolean;

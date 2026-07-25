@@ -9,6 +9,7 @@ import {
   DATASET_CHANNELS,
   PAGE_ANALYSIS_CHANNELS,
   PROJECT_CHANNELS,
+  RECORDER_CHANNELS,
   RUNNER_CHANNELS,
   TEST_CHANNELS,
 } from "../shared/ipc.js";
@@ -24,6 +25,7 @@ import type {
 } from "../shared/datasets.js";
 import type { TestFlowItem } from "../shared/test-model.js";
 import type { StartRunInput } from "../shared/runner.js";
+import type { RecorderStepDraft } from "../shared/recorder.js";
 import type { ProjectInput } from "../shared/projects.js";
 import type { TestInput } from "../shared/tests.js";
 import { createAppInfo } from "./app-info.js";
@@ -44,6 +46,7 @@ import { ProjectsService } from "./projects-service.js";
 import { DatasetsService } from "./datasets-service.js";
 import { TestsService } from "./tests-service.js";
 import { TestRunnerService } from "./runner/test-runner-service.js";
+import { RecorderService } from "./recorder/recorder-service.js";
 import { resolveRendererTarget } from "./renderer-target.js";
 import { createMainWindowOptions } from "./window-options.js";
 
@@ -156,9 +159,26 @@ void app
         now: () => new Date(),
       },
     );
+    const recorderService = new RecorderService(
+      projectRepository,
+      testRepository,
+      datasetRepository,
+      testsService,
+      browserManager,
+      pageAnalysisService,
+      {
+        createId: randomUUID,
+        now: () => new Date(),
+      },
+    );
     testRunnerService.onStatusChange((snapshot) => {
       for (const window of BrowserWindow.getAllWindows()) {
         window.webContents.send(RUNNER_CHANNELS.statusChanged, snapshot);
+      }
+    });
+    recorderService.onStatusChange((snapshot) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        window.webContents.send(RECORDER_CHANNELS.statusChanged, snapshot);
       }
     });
 
@@ -346,6 +366,45 @@ void app
       RUNNER_CHANNELS.listStepResults,
       (_event, projectId: string, testId: string, runId: string) =>
         testRunnerService.listStepResults(projectId, testId, runId),
+    );
+    ipcMain.handle(
+      RECORDER_CHANNELS.start,
+      (_event, projectId: string, testId: string) =>
+        recorderService.start(projectId, testId),
+    );
+    ipcMain.handle(
+      RECORDER_CHANNELS.stop,
+      (_event, projectId: string, testId: string) =>
+        recorderService.stop(projectId, testId),
+    );
+    ipcMain.handle(
+      RECORDER_CHANNELS.addStep,
+      (
+        _event,
+        projectId: string,
+        testId: string,
+        draft: RecorderStepDraft,
+      ) => recorderService.addStep(projectId, testId, draft),
+    );
+    ipcMain.handle(
+      RECORDER_CHANNELS.discardStep,
+      (_event, projectId: string, testId: string) =>
+        recorderService.discardStep(projectId, testId),
+    );
+    ipcMain.handle(
+      RECORDER_CHANNELS.retry,
+      (_event, projectId: string, testId: string) =>
+        recorderService.retry(projectId, testId),
+    );
+    ipcMain.handle(
+      RECORDER_CHANNELS.ignoreError,
+      (_event, projectId: string, testId: string) =>
+        recorderService.ignoreError(projectId, testId),
+    );
+    ipcMain.handle(
+      RECORDER_CHANNELS.getStatus,
+      (_event, projectId: string, testId: string) =>
+        recorderService.getStatus(projectId, testId),
     );
 
     createMainWindow();

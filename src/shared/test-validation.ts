@@ -684,6 +684,8 @@ const validateActionStep = (
     "valueStrategy",
     "url",
     "key",
+    "scrollX",
+    "scrollY",
     "waitAfter",
     "fallbacks",
     "enabled",
@@ -751,6 +753,20 @@ const validateActionStep = (
     validateString(action.key, `${path}.key`, context, {
       min: 1,
       max: 100,
+    });
+  }
+  if (action.scrollX !== undefined) {
+    validateNumber(action.scrollX, `${path}.scrollX`, context, {
+      integer: true,
+      min: -100000,
+      max: 100000,
+    });
+  }
+  if (action.scrollY !== undefined) {
+    validateNumber(action.scrollY, `${path}.scrollY`, context, {
+      integer: true,
+      min: -100000,
+      max: 100000,
     });
   }
   if (action.waitAfter !== undefined) {

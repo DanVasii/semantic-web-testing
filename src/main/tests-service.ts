@@ -137,9 +137,101 @@ export class TestsService {
       updatedAt: now,
       flowItems,
     };
+    return this.persistFlowVersion(existing, updated, "manual");
+  }
+
+  public beginRecording(
+    projectId: string,
+    testId: string,
+  ): TestDefinition {
+    const existing = this.get(projectId, testId);
+    if (
+      existing.workflowState !== "not_recorded" &&
+      existing.workflowState !== "recorded"
+    ) {
+      throw new Error("Testul nu poate porni recorderul în starea curentă.");
+    }
+    return this.testRepository.update({
+      ...existing,
+      status: "draft",
+      workflowState: "recording",
+      updatedAt: this.options.now().toISOString(),
+      flowItems: [],
+    });
+  }
+
+  public appendRecordedStep(
+    projectId: string,
+    testId: string,
+    step: TestFlowItem,
+  ): TestDefinition {
+    const existing = this.get(projectId, testId);
+    if (existing.workflowState !== "recording") {
+      throw new Error("Recorderul testului nu este activ.");
+    }
+    const flowItems = [...existing.flowItems, step];
+    const validation = validateDeclarativeTest(
+      toDeclarativeTestDefinition(
+        { ...existing, flowItems },
+        flowItems,
+        this.datasetRepository.listByTest(testId),
+      ),
+    );
+    if (!validation.valid) {
+      throw new Error(
+        `Pasul recorder nu este valid: ${validation.issues[0]?.message ?? "eroare necunoscută"}`,
+      );
+    }
+    return this.testRepository.update({
+      ...existing,
+      flowItems,
+      updatedAt: this.options.now().toISOString(),
+    });
+  }
+
+  public async completeRecording(
+    projectId: string,
+    testId: string,
+  ): Promise<TestDefinition> {
+    const existing = this.get(projectId, testId);
+    if (existing.workflowState !== "recording") {
+      throw new Error("Recorderul testului nu este activ.");
+    }
+    if (existing.flowItems.length === 0) {
+      throw new Error("Înregistrarea nu conține niciun pas.");
+    }
+    const updated: TestDefinition = {
+      ...existing,
+      version: existing.version + 1,
+      status: "draft",
+      workflowState: "flow_analyzed",
+      updatedAt: this.options.now().toISOString(),
+    };
+    return this.persistFlowVersion(existing, updated, "recorder");
+  }
+
+  public markRecordingIncomplete(
+    projectId: string,
+    testId: string,
+  ): TestDefinition {
+    const existing = this.get(projectId, testId);
+    if (existing.workflowState !== "recording") return existing;
+    return this.testRepository.update({
+      ...existing,
+      workflowState: "recorded",
+      updatedAt: this.options.now().toISOString(),
+    });
+  }
+
+  private async persistFlowVersion(
+    existing: TestDefinition,
+    updated: TestDefinition,
+    source: TestVersion["source"],
+  ): Promise<TestDefinition> {
+    const { id: testId, projectId } = updated;
     const snapshot = toDeclarativeTestDefinition(
       updated,
-      flowItems,
+      updated.flowItems,
       this.datasetRepository.listByTest(testId),
     );
     const validation = validateDeclarativeTest(snapshot);
@@ -174,8 +266,8 @@ export class TestsService {
         id: this.options.createId(),
         testId,
         versionNumber: updated.version,
-        source: "manual",
-        createdAt: now,
+        source,
+        createdAt: updated.updatedAt,
         snapshotFilePath: snapshotPath.replaceAll("\\", "/"),
       });
       return updated;

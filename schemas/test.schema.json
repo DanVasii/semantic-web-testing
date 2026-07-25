@@ -289,6 +289,16 @@
           "maxLength": 4096
         },
         "key": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "scrollX": {
+          "type": "integer",
+          "minimum": -100000,
+          "maximum": 100000
+        },
+        "scrollY": {
+          "type": "integer",
+          "minimum": -100000,
+          "maximum": 100000
+        },
         "waitAfter": { "$ref": "#/$defs/wait" },
         "fallbacks": {
           "type": "array",

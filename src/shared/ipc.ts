@@ -8,6 +8,7 @@ import type {
   TestVersion,
 } from "./persistence.js";
 import type { RunnerSnapshot, StartRunInput } from "./runner.js";
+import type { RecorderSnapshot, RecorderStepDraft } from "./recorder.js";
 import type { TestFlowItem } from "./test-model.js";
 import type {
   AnalyzedPageSummary,
@@ -89,6 +90,17 @@ export const RUNNER_CHANNELS = {
   listRuns: "runner:list-runs",
   listStepResults: "runner:list-step-results",
   statusChanged: "runner:status-changed",
+} as const;
+
+export const RECORDER_CHANNELS = {
+  start: "recorder:start",
+  stop: "recorder:stop",
+  addStep: "recorder:add-step",
+  discardStep: "recorder:discard-step",
+  retry: "recorder:retry",
+  ignoreError: "recorder:ignore-error",
+  getStatus: "recorder:get-status",
+  statusChanged: "recorder:status-changed",
 } as const;
 
 export interface AppInfo {
@@ -175,5 +187,37 @@ export interface SemanticAppApi extends DatasetCrudApi {
   ) => Promise<StepRunResult[]>;
   onRunnerStatusChange: (
     listener: (snapshot: RunnerSnapshot) => void,
+  ) => () => void;
+  startRecorder: (
+    projectId: string,
+    testId: string,
+  ) => Promise<RecorderSnapshot>;
+  stopRecorder: (
+    projectId: string,
+    testId: string,
+  ) => Promise<RecorderSnapshot>;
+  addRecorderStep: (
+    projectId: string,
+    testId: string,
+    draft: RecorderStepDraft,
+  ) => Promise<RecorderSnapshot>;
+  discardRecorderStep: (
+    projectId: string,
+    testId: string,
+  ) => Promise<RecorderSnapshot>;
+  retryRecorderAnalysis: (
+    projectId: string,
+    testId: string,
+  ) => Promise<RecorderSnapshot>;
+  ignoreRecorderAnalysisError: (
+    projectId: string,
+    testId: string,
+  ) => Promise<RecorderSnapshot>;
+  getRecorderStatus: (
+    projectId: string,
+    testId: string,
+  ) => Promise<RecorderSnapshot>;
+  onRecorderStatusChange: (
+    listener: (snapshot: RecorderSnapshot) => void,
   ) => () => void;
 }
