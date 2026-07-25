@@ -46,11 +46,13 @@ export const materializeDatasetValue = (
         value.min + Math.floor(options.random() * (value.max - value.min + 1))
       );
     case "unique_email": {
-      const unique = `${options.now().getTime()}-${options.createId()}`;
-      return (value.template ?? "test+{{unique}}@example.test").replaceAll(
-        "{{unique}}",
-        unique,
-      );
+      const timestamp = String(options.now().getTime());
+      const uuid = options.createId();
+      const unique = `${timestamp}-${uuid}`;
+      return (value.template ?? "test+{{unique}}@example.test")
+        .replaceAll("{{unique}}", unique)
+        .replaceAll("{{timestamp}}", timestamp)
+        .replaceAll("{{uuid}}", uuid);
     }
     case "current_date":
       return formatDate(options.now(), value.format);

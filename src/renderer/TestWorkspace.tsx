@@ -4,6 +4,8 @@ import type { SemanticAppApi } from "../shared/ipc.js";
 import type { Project, TestDefinition } from "../shared/persistence.js";
 import { getTestPrimaryAction, type TestInput } from "../shared/tests.js";
 import { Button } from "./components/Button.js";
+import { Tabs } from "./components/Tabs.js";
+import { DatasetsPanel } from "./DatasetsPanel.js";
 import { TestFormModal } from "./TestFormModal.js";
 import { TestFlowEditor } from "./TestFlowEditor.js";
 import { RunnerPanel } from "./RunnerPanel.js";
@@ -400,14 +402,39 @@ export const TestDetailPage = ({
           </p>
         </section>
 
-        <TestFlowEditor
-          api={api}
-          projectId={project.id}
-          test={test}
-          onTestSaved={onTestUpdated}
-        />
-
-        <RunnerPanel api={api} project={project} test={test} />
+        <div className="mt-6">
+          <Tabs
+            label="Spațiul testului"
+            tabs={[
+              {
+                id: "flow",
+                label: "Flow și rulare",
+                content: (
+                  <>
+                    <TestFlowEditor
+                      api={api}
+                      projectId={project.id}
+                      test={test}
+                      onTestSaved={onTestUpdated}
+                    />
+                    <RunnerPanel api={api} project={project} test={test} />
+                  </>
+                ),
+              },
+              {
+                id: "datasets",
+                label: "Datasets",
+                content: (
+                  <DatasetsPanel
+                    api={api}
+                    projectId={project.id}
+                    testId={test.id}
+                  />
+                ),
+              },
+            ]}
+          />
+        </div>
 
         <div className="mt-6 grid gap-4 lg:grid-cols-2">
           <section className="rounded-xl border border-app-border p-4">

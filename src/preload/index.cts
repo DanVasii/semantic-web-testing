@@ -15,6 +15,7 @@ import type {
   Page,
   PageVersion,
   StepRunResult,
+  TestDataset,
   TestDefinition,
   TestRun,
   TestVersion,
@@ -64,6 +65,14 @@ const TEST_CHANNELS = {
   saveFlow: "tests:save-flow",
   listVersions: "tests:list-versions",
   delete: "tests:delete",
+} as const;
+const DATASET_CHANNELS = {
+  list: "datasets:list",
+  create: "datasets:create",
+  duplicate: "datasets:duplicate",
+  save: "datasets:save",
+  delete: "datasets:delete",
+  previewValue: "datasets:preview-value",
 } as const;
 const RUNNER_CHANNELS = {
   start: "runner:start",
@@ -459,6 +468,66 @@ const isTestVersion = (value: unknown): value is TestVersion =>
   "snapshotFilePath" in value &&
   typeof value.snapshotFilePath === "string";
 
+const isDatasetPrimitive = (
+  value: unknown,
+): value is string | number | boolean | null =>
+  value === null ||
+  typeof value === "string" ||
+  typeof value === "boolean" ||
+  (typeof value === "number" && Number.isFinite(value));
+
+const isDatasetValue = (value: unknown): boolean => {
+  if (isDatasetPrimitive(value)) {
+    return true;
+  }
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("type" in value) ||
+    typeof value.type !== "string"
+  ) {
+    return false;
+  }
+  if (value.type === "fixed") {
+    return "value" in value && isDatasetPrimitive(value.value);
+  }
+  return (
+    value.type === "generated" &&
+    "strategy" in value &&
+    typeof value.strategy === "string" &&
+    [
+      "timestamp",
+      "uuid",
+      "random_number",
+      "unique_email",
+      "current_date",
+      "current_date_plus_days",
+      "current_date_minus_days",
+      "random_choice",
+      "template",
+    ].includes(value.strategy)
+  );
+};
+
+const isTestDataset = (value: unknown): value is TestDataset =>
+  typeof value === "object" &&
+  value !== null &&
+  "id" in value &&
+  typeof value.id === "string" &&
+  "testId" in value &&
+  typeof value.testId === "string" &&
+  "name" in value &&
+  typeof value.name === "string" &&
+  "values" in value &&
+  typeof value.values === "object" &&
+  value.values !== null &&
+  !Array.isArray(value.values) &&
+  Object.values(value.values).every(isDatasetValue) &&
+  "createdAt" in value &&
+  typeof value.createdAt === "string" &&
+  "updatedAt" in value &&
+  typeof value.updatedAt === "string";
+
 const runnerStates = new Set<RunnerState>([
   "idle",
   "preparing",
@@ -818,6 +887,83 @@ const semanticAppApi: SemanticAppApi = {
       throw new TypeError("Main process returned an invalid delete result.");
     }
     return wasDeleted;
+  },
+  listDatasets: async (projectId, testId) => {
+    const datasets: unknown = await ipcRenderer.invoke(
+      DATASET_CHANNELS.list,
+      projectId,
+      testId,
+    );
+    if (
+      !Array.isArray(datasets) ||
+      !datasets.every((dataset) => isTestDataset(dataset))
+    ) {
+      throw new TypeError("Main process returned an invalid dataset list.");
+    }
+    return datasets;
+  },
+  createDataset: async (projectId, testId, input) => {
+    const dataset: unknown = await ipcRenderer.invoke(
+      DATASET_CHANNELS.create,
+      projectId,
+      testId,
+      input,
+    );
+    if (!isTestDataset(dataset)) {
+      throw new TypeError("Main process returned invalid dataset data.");
+    }
+    return dataset;
+  },
+  duplicateDataset: async (projectId, testId, datasetId) => {
+    const dataset: unknown = await ipcRenderer.invoke(
+      DATASET_CHANNELS.duplicate,
+      projectId,
+      testId,
+      datasetId,
+    );
+    if (!isTestDataset(dataset)) {
+      throw new TypeError("Main process returned invalid dataset data.");
+    }
+    return dataset;
+  },
+  saveDataset: async (projectId, testId, datasetId, input) => {
+    const dataset: unknown = await ipcRenderer.invoke(
+      DATASET_CHANNELS.save,
+      projectId,
+      testId,
+      datasetId,
+      input,
+    );
+    if (!isTestDataset(dataset)) {
+      throw new TypeError("Main process returned invalid dataset data.");
+    }
+    return dataset;
+  },
+  deleteDataset: async (projectId, testId, datasetId) => {
+    const wasDeleted: unknown = await ipcRenderer.invoke(
+      DATASET_CHANNELS.delete,
+      projectId,
+      testId,
+      datasetId,
+    );
+    if (typeof wasDeleted !== "boolean") {
+      throw new TypeError("Main process returned an invalid delete result.");
+    }
+    return wasDeleted;
+  },
+  previewDatasetValue: async (projectId, testId, input) => {
+    const preview: unknown = await ipcRenderer.invoke(
+      DATASET_CHANNELS.previewValue,
+      projectId,
+      testId,
+      input,
+    );
+    if (!isDatasetPrimitive(preview)) {
+      throw new TypeError(
+        "Main process returned invalid dataset preview data.",
+      );
+    }
+    return preview;
   },
   startRun: async (input) => {
     const snapshot: unknown = await ipcRenderer.invoke(

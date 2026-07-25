@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import {
   APP_INFO_CHANNEL,
   BROWSER_CHANNELS,
+  DATASET_CHANNELS,
   PAGE_ANALYSIS_CHANNELS,
   PROJECT_CHANNELS,
   RUNNER_CHANNELS,
@@ -16,6 +17,11 @@ import type {
   BrowserLaunchOptions,
 } from "../shared/browser-manager.js";
 import type { BrowserConfig } from "../shared/persistence.js";
+import type {
+  CreateDatasetInput,
+  PreviewDatasetValueInput,
+  SaveDatasetInput,
+} from "../shared/datasets.js";
 import type { TestFlowItem } from "../shared/test-model.js";
 import type { StartRunInput } from "../shared/runner.js";
 import type { ProjectInput } from "../shared/projects.js";
@@ -35,6 +41,7 @@ import {
 } from "./persistence/repositories.js";
 import { PageAnalysisService } from "./page-analysis/page-analysis-service.js";
 import { ProjectsService } from "./projects-service.js";
+import { DatasetsService } from "./datasets-service.js";
 import { TestsService } from "./tests-service.js";
 import { TestRunnerService } from "./runner/test-runner-service.js";
 import { resolveRendererTarget } from "./renderer-target.js";
@@ -125,6 +132,16 @@ void app
         createId: randomUUID,
         now: () => new Date(),
         snapshotRoot: join(app.getPath("userData"), "data", "test-versions"),
+      },
+    );
+    const datasetsService = new DatasetsService(
+      projectRepository,
+      testRepository,
+      datasetRepository,
+      {
+        createId: randomUUID,
+        now: () => new Date(),
+        random: Math.random,
       },
     );
     const testRunnerService = new TestRunnerService(
@@ -252,6 +269,45 @@ void app
       TEST_CHANNELS.delete,
       (_event, projectId: string, testId: string) =>
         testsService.delete(projectId, testId),
+    );
+    ipcMain.handle(
+      DATASET_CHANNELS.list,
+      (_event, projectId: string, testId: string) =>
+        datasetsService.list(projectId, testId),
+    );
+    ipcMain.handle(
+      DATASET_CHANNELS.create,
+      (_event, projectId: string, testId: string, input: CreateDatasetInput) =>
+        datasetsService.create(projectId, testId, input),
+    );
+    ipcMain.handle(
+      DATASET_CHANNELS.duplicate,
+      (_event, projectId: string, testId: string, datasetId: string) =>
+        datasetsService.duplicate(projectId, testId, datasetId),
+    );
+    ipcMain.handle(
+      DATASET_CHANNELS.save,
+      (
+        _event,
+        projectId: string,
+        testId: string,
+        datasetId: string,
+        input: SaveDatasetInput,
+      ) => datasetsService.save(projectId, testId, datasetId, input),
+    );
+    ipcMain.handle(
+      DATASET_CHANNELS.delete,
+      (_event, projectId: string, testId: string, datasetId: string) =>
+        datasetsService.delete(projectId, testId, datasetId),
+    );
+    ipcMain.handle(
+      DATASET_CHANNELS.previewValue,
+      (
+        _event,
+        projectId: string,
+        testId: string,
+        input: PreviewDatasetValueInput,
+      ) => datasetsService.preview(projectId, testId, input),
     );
     ipcMain.handle(RUNNER_CHANNELS.start, (_event, input: StartRunInput) =>
       testRunnerService.start(input),

@@ -1,4 +1,5 @@
 import type { ProjectInput, ProjectOverview } from "./projects.js";
+import type { DatasetCrudApi } from "./datasets.js";
 import type {
   BrowserConfig,
   StepRunResult,
@@ -67,6 +68,15 @@ export const TEST_CHANNELS = {
   delete: "tests:delete",
 } as const;
 
+export const DATASET_CHANNELS = {
+  list: "datasets:list",
+  create: "datasets:create",
+  duplicate: "datasets:duplicate",
+  save: "datasets:save",
+  delete: "datasets:delete",
+  previewValue: "datasets:preview-value",
+} as const;
+
 export const RUNNER_CHANNELS = {
   start: "runner:start",
   stop: "runner:stop",
@@ -86,7 +96,7 @@ export interface AppInfo {
   electronVersion: string;
 }
 
-export interface SemanticAppApi {
+export interface SemanticAppApi extends DatasetCrudApi {
   getAppInfo: () => Promise<AppInfo>;
   listProjects: () => Promise<ProjectOverview[]>;
   createProject: (input: ProjectInput) => Promise<ProjectOverview>;
