@@ -48,7 +48,7 @@ try {
   await page.waitForTimeout(50);
   assert.equal(events.length, 0, "fill must not emit for every input event");
   await email.fill("final@example.test");
-  await email.press("Enter");
+  await email.press("Tab");
   await waitUntilReady();
 
   await page.locator('select[name="service"]').selectOption("");
@@ -64,6 +64,12 @@ try {
     .nth(1)
     .getByRole("button")
     .press("Escape");
+  await waitUntilReady();
+  await page.locator('[data-testid="calendar-year"]').selectOption("2027");
+  await waitUntilReady();
+  await page.locator('[data-testid="calendar-next-month"]').click();
+  await waitUntilReady();
+  await page.locator('[data-testid="calendar-day-2027-08-15"]').click();
   await waitUntilReady();
 
   await page.evaluate(() => {
@@ -93,6 +99,9 @@ try {
     "radio",
     "click",
     "press_key",
+    "select",
+    "click",
+    "click",
     "scroll",
   ]);
   assert.equal(events[0]?.value, "final@example.test");
@@ -105,7 +114,29 @@ try {
     "Masaj Premium",
   );
   assert.equal(events[5]?.key, "Escape");
-  assert.ok(Math.abs(events[6]?.scrollY ?? 0) >= 120);
+  assert.ok(
+    !events.some((event) => event.type === "press_key" && event.key === "Tab"),
+    "Tab must move focus without becoming a recorded step",
+  );
+  assert.equal(events[6]?.value, "2027");
+  assert.equal(
+    events[7]?.target?.dataAttributes?.["data-testid"],
+    "calendar-next-month",
+  );
+  assert.equal(
+    events[8]?.target?.dataAttributes?.["data-testid"],
+    "calendar-day-2027-08-15",
+  );
+  assert.ok(Math.abs(events[9]?.scrollY ?? 0) >= 120);
+  assert.equal(
+    await page.locator("#appointment-date").inputValue(),
+    "2027-08-15",
+  );
+  await assert.doesNotReject(async () => {
+    await page
+      .getByText("Data selectată: 15 august 2027 (2027-08-15)")
+      .waitFor();
+  });
 
   await stopRecorderCapture(page, bindingName);
   process.stdout.write(

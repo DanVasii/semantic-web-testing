@@ -1,4 +1,4 @@
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 
 import type { TestDefinition, TestVersion } from "../shared/persistence.js";
@@ -67,6 +67,7 @@ export class TestsService {
         : { description }),
       status: "draft",
       version: 1,
+      testMode: input.testMode ?? "recorded",
       wipeBeforeRun: input.wipeBeforeRun ?? false,
       startMode: "base_url",
       startUrl,
@@ -103,6 +104,7 @@ export class TestsService {
         : { description }),
       status: startUrlChanged ? "draft" : existing.status,
       version: existing.version + 1,
+      testMode: input.testMode ?? existing.testMode,
       wipeBeforeRun: input.wipeBeforeRun ?? existing.wipeBeforeRun,
       startUrl: input.startUrl.trim(),
       normalizedStartUrl,
@@ -127,6 +129,74 @@ export class TestsService {
     testId: string,
     flowItems: TestFlowItem[],
   ): Promise<TestDefinition> {
+    return this.saveVersionedFlow(projectId, testId, flowItems, "manual");
+  }
+
+  public async saveAiFlow(
+    projectId: string,
+    testId: string,
+    flowItems: TestFlowItem[],
+  ): Promise<TestDefinition> {
+    return this.saveVersionedFlow(projectId, testId, flowItems, "ai");
+  }
+
+  public async undoAiFlow(
+    projectId: string,
+    testId: string,
+    aiVersion: number,
+  ): Promise<TestDefinition> {
+    const existing = this.get(projectId, testId);
+    if (existing.version !== aiVersion) {
+      throw new Error(
+        "Undo AI nu poate fi aplicat deoarece testul are modificări mai noi.",
+      );
+    }
+    const versions = this.testRepository.listVersions(testId);
+    const aiSnapshot = versions.find(
+      (version) => version.versionNumber === aiVersion,
+    );
+    if (aiSnapshot?.source !== "ai") {
+      throw new Error("Versiunea indicată nu este o modificare AI.");
+    }
+    const previous = versions
+      .filter((version) => version.versionNumber < aiVersion)
+      .sort((left, right) => right.versionNumber - left.versionNumber)[0];
+    if (previous === undefined) {
+      throw new Error("Nu există o versiune anterioară pentru Undo AI.");
+    }
+    let snapshot: unknown;
+    try {
+      snapshot = JSON.parse(
+        await readFile(
+          this.resolveSnapshotPath(previous.snapshotFilePath),
+          "utf8",
+        ),
+      );
+    } catch {
+      throw new Error("Versiunea anterioară nu a putut fi citită.");
+    }
+    const validation = validateDeclarativeTest(snapshot);
+    if (!validation.valid) {
+      throw new Error("Versiunea anterioară nu mai este validă.");
+    }
+    const restored = validation.data.flowItems;
+    const updated: TestDefinition = {
+      ...existing,
+      version: existing.version + 1,
+      status: restored.length === 0 ? "draft" : "valid",
+      workflowState: restored.length === 0 ? "not_recorded" : "ready",
+      updatedAt: this.options.now().toISOString(),
+      flowItems: restored,
+    };
+    return this.persistFlowVersion(existing, updated, "manual");
+  }
+
+  private async saveVersionedFlow(
+    projectId: string,
+    testId: string,
+    flowItems: TestFlowItem[],
+    source: TestVersion["source"],
+  ): Promise<TestDefinition> {
     const existing = this.get(projectId, testId);
     const now = this.options.now().toISOString();
     const updated: TestDefinition = {
@@ -137,7 +207,7 @@ export class TestsService {
       updatedAt: now,
       flowItems,
     };
-    return this.persistFlowVersion(existing, updated, "manual");
+    return this.persistFlowVersion(existing, updated, source);
   }
 
   public beginRecording(projectId: string, testId: string): TestDefinition {

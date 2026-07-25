@@ -169,6 +169,45 @@ describe("AI providers", () => {
     ).toThrow("cod arbitrar");
   });
 
+  it("validates strict step edits and rejects arbitrary downstream fields", () => {
+    const editOutput = {
+      summary: "Clarifică pașii calendarului.",
+      currentStepChange: {
+        stepId: "step-2",
+        patch: {
+          title: "Alege ziua 15",
+          primaryLocator: {
+            type: "data_attribute",
+            operator: "equals",
+            value: "calendar-day-15",
+            attribute: "data-testid",
+          },
+        },
+        rationale: "Ziua devine explicită.",
+      },
+      downstreamChanges: [
+        {
+          stepId: "step-3",
+          patch: { humanDescription: "Alege ora disponibilă." },
+          rationale: "Păstrează pasul următor coerent.",
+        },
+      ],
+    };
+
+    expect(validateAiOutput("edit_step", editOutput)).toEqual(editOutput);
+    expect(() =>
+      validateAiOutput("edit_step", {
+        ...editOutput,
+        downstreamChanges: [
+          {
+            ...editOutput.downstreamChanges[0],
+            patch: { command: "powershell.exe" },
+          },
+        ],
+      }),
+    ).toThrow("cod arbitrar");
+  });
+
   it("keeps None as a provider that never performs generation", async () => {
     const provider = new NoneAIProvider();
     await expect(provider.generate()).rejects.toThrow(

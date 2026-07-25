@@ -159,32 +159,73 @@
         data-testid="fixture-booking"
       >
         <h2 id="fixture-booking-title">Programare semantică</h2>
-        <div
-          class="booking-calendar"
-          role="grid"
-          aria-label="Calendar programare"
-        >
-          <button role="gridcell" class="calendar-day" aria-label="24 iulie">
-            24
-          </button>
-          <button role="gridcell" class="calendar-day" aria-label="25 iulie">
-            25
-          </button>
-          <button role="gridcell" class="calendar-day" aria-label="26 iulie">
-            26
-          </button>
-          <button role="gridcell" class="calendar-day" aria-label="27 iulie">
-            27
-          </button>
-          <button role="gridcell" class="calendar-day" aria-label="28 iulie">
-            28
-          </button>
-          <button role="gridcell" class="calendar-day" aria-label="29 iulie">
-            29
-          </button>
-          <button role="gridcell" class="calendar-day" aria-label="30 iulie">
-            30
-          </button>
+        <p class="calendar-help">
+          Calendar custom, randat local, pentru testarea navigării între luni,
+          selectării anului și alegerii unei zile.
+        </p>
+        <div class="calendar-shell" data-testid="fixture-custom-calendar">
+          <div class="calendar-toolbar">
+            <button
+              type="button"
+              id="calendar-previous-month"
+              data-testid="calendar-previous-month"
+              aria-label="Luna anterioară"
+            >
+              ← Luna anterioară
+            </button>
+            <h3 id="calendar-heading" aria-live="polite"></h3>
+            <button
+              type="button"
+              id="calendar-next-month"
+              data-testid="calendar-next-month"
+              aria-label="Luna următoare"
+            >
+              Luna următoare →
+            </button>
+          </div>
+          <label class="calendar-year-control" for="calendar-year">
+            Anul programării
+            <select
+              id="calendar-year"
+              name="calendar_year"
+              data-testid="calendar-year"
+            >
+              <option value="2024">2024</option>
+              <option value="2025">2025</option>
+              <option value="2026">2026</option>
+              <option value="2027">2027</option>
+              <option value="2028">2028</option>
+              <option value="2029">2029</option>
+              <option value="2030">2030</option>
+              <option value="2031">2031</option>
+              <option value="2032">2032</option>
+            </select>
+          </label>
+          <div class="calendar-weekdays" aria-hidden="true">
+            <span>Lu</span>
+            <span>Ma</span>
+            <span>Mi</span>
+            <span>Jo</span>
+            <span>Vi</span>
+            <span>Sâ</span>
+            <span>Du</span>
+          </div>
+          <div
+            id="booking-calendar"
+            class="booking-calendar"
+            role="grid"
+            aria-labelledby="calendar-heading"
+          ></div>
+          <input id="appointment-date" name="appointment_date" type="hidden" />
+          <p
+            id="calendar-selection"
+            class="calendar-selection"
+            data-testid="calendar-selection"
+            role="status"
+            aria-live="polite"
+          >
+            Nicio zi selectată
+          </p>
         </div>
         <div class="time-slot-list" aria-label="Ore disponibile">
           <button type="button" class="time-slot">09:00</button>
@@ -226,6 +267,7 @@ se încarcă...</pre>
       <span>Origin local controlat</span>
       <code>http://127.0.0.1:4173</code>
     </footer>
+    <script type="module" src="/fixture-calendar.js"></script>
     <script type="module" src="/fixture-storage.js"></script>
   </body>
 </html>

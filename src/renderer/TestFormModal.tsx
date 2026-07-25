@@ -36,6 +36,9 @@ export const TestFormModal = ({
   const [wipeBeforeRun, setWipeBeforeRun] = useState(
     test?.wipeBeforeRun ?? false,
   );
+  const [testMode, setTestMode] = useState<NonNullable<TestInput["testMode"]>>(
+    test?.testMode ?? "recorded",
+  );
   const [errors, setErrors] = useState<TestInputErrors>({});
 
   useEffect(() => {
@@ -44,6 +47,7 @@ export const TestFormModal = ({
       setDescription(test?.description ?? "");
       setStartUrl(test?.normalizedStartUrl ?? project.normalizedBaseUrl);
       setWipeBeforeRun(test?.wipeBeforeRun ?? false);
+      setTestMode(test?.testMode ?? "recorded");
       setErrors({});
     }
   }, [
@@ -52,6 +56,7 @@ export const TestFormModal = ({
     test?.description,
     test?.name,
     test?.normalizedStartUrl,
+    test?.testMode,
     test?.wipeBeforeRun,
   ]);
 
@@ -60,6 +65,7 @@ export const TestFormModal = ({
       name,
       ...(description.trim().length === 0 ? {} : { description }),
       startUrl,
+      testMode,
       wipeBeforeRun,
     };
     const nextErrors = validateTestInput(input, project);
@@ -92,6 +98,33 @@ export const TestFormModal = ({
             setName(event.target.value);
           }}
         />
+        <label className="grid gap-1.5">
+          <span className="text-sm font-medium text-app-ink">
+            Tipul testului
+          </span>
+          <select
+            className="min-h-10 rounded-lg border border-app-border bg-app-surface px-3 py-2 text-sm text-app-ink"
+            value={testMode}
+            disabled={isSaving}
+            onChange={(event) => {
+              setTestMode(
+                event.target.value as NonNullable<TestInput["testMode"]>,
+              );
+            }}
+          >
+            <option value="recorded">Înregistrat · urmează exact pașii</option>
+            <option value="dynamic_ai">
+              Dinamic · permite editare asistată de AI
+            </option>
+          </select>
+          <span className="text-sm text-app-muted">
+            Chiar și pentru testele dinamice, datele sunt trimise la AI numai
+            când apeși explicit butonul din editorul unui pas.
+          </span>
+          {errors.testMode ? (
+            <span className="text-sm text-red-700">{errors.testMode}</span>
+          ) : null}
+        </label>
         <label className="rounded-lg border border-app-border bg-app-canvas p-3">
           <span className="flex items-center gap-2 text-sm font-semibold text-app-ink">
             <input

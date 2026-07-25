@@ -253,6 +253,20 @@ describe("PageAnalysisService", () => {
     expect(summaries[0]?.title).toBe("Produse");
     expect(summaries[0]?.counts).toEqual(capture.counts);
     expect(summaries[0]?.latestVersion.versionNumber).toBe(1);
+    const aiContext = await service.getAiSemanticContext(project.id, [
+      result.page.id,
+      "unknown-page",
+    ]);
+    expect(aiContext).toHaveLength(1);
+    expect(aiContext[0]).toMatchObject({
+      pageId: result.page.id,
+      pageVersionId: result.version.id,
+      versionNumber: 1,
+      title: "Produse",
+    });
+    expect(JSON.stringify(aiContext[0])).toContain('"schemaVersion":1');
+    expect(JSON.stringify(aiContext)).not.toContain(capture.html);
+    expect(JSON.stringify(aiContext)).not.toContain(capture.css);
   });
 
   it("creates a new version for the same normalized URL", async () => {

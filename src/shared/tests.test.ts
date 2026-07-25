@@ -31,6 +31,7 @@ const test = (
   name: "Cumpără produs",
   status: "draft",
   version: 1,
+  testMode: "recorded",
   wipeBeforeRun: false,
   startMode: "base_url",
   startUrl: "https://example.test/products?category=10#list",

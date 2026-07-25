@@ -34,6 +34,7 @@ const test: TestDefinition = {
   name: "Checkout",
   status: "draft",
   version: 1,
+  testMode: "recorded",
   wipeBeforeRun: false,
   startMode: "base_url",
   startUrl: "https://example.test/checkout",

@@ -294,6 +294,17 @@ export const APPLICATION_MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    version: 15,
+    name: "add_test_mode",
+    up(database) {
+      database.exec(`
+        ALTER TABLE tests
+        ADD COLUMN test_mode TEXT NOT NULL DEFAULT 'recorded'
+        CHECK(test_mode IN ('recorded', 'dynamic_ai'));
+      `);
+    },
+  },
 ];
 
 export const assertValidMigrations = (

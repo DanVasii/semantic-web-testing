@@ -308,7 +308,7 @@ export const TestDetailPage = ({
           </p>
         ) : null}
 
-        <dl className="mt-6 grid gap-3 rounded-xl border border-app-border bg-app-canvas p-4 sm:grid-cols-2">
+        <dl className="mt-6 grid gap-3 rounded-xl border border-app-border bg-app-canvas p-4 sm:grid-cols-3">
           <div>
             <dt className="text-xs text-app-muted">URL de start</dt>
             <dd className="mt-1 break-all text-sm font-medium">
@@ -319,6 +319,14 @@ export const TestDetailPage = ({
             <dt className="text-xs text-app-muted">Stare</dt>
             <dd className="mt-1 text-sm font-medium">
               {workflowLabels[test.workflowState]}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-app-muted">Tip test</dt>
+            <dd className="mt-1 text-sm font-medium">
+              {test.testMode === "dynamic_ai"
+                ? "Dinamic · AI la cerere"
+                : "Înregistrat · pași exacți"}
             </dd>
           </div>
         </dl>

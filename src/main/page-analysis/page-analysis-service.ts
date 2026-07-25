@@ -10,6 +10,7 @@ import type {
 } from "../../shared/page-analysis.js";
 import { normalizeAnalyzedPageUrl } from "../../shared/page-analysis.js";
 import type { Page, PageVersion } from "../../shared/persistence.js";
+import type { JsonValue } from "../../shared/persistence.js";
 import type { SemanticAnalysis } from "../../shared/semantic-analysis.js";
 import {
   PageRepository,
@@ -416,6 +417,45 @@ export class PageAnalysisService {
     );
     return summaries.filter(
       (summary): summary is AnalyzedPageSummary => summary !== undefined,
+    );
+  }
+
+  public async getAiSemanticContext(
+    projectId: string,
+    pageIds: string[],
+  ): Promise<JsonValue[]> {
+    this.requireProject(projectId);
+    const uniquePageIds = [...new Set(pageIds)].slice(0, 10);
+    const contexts = await Promise.all(
+      uniquePageIds.map(async (pageId): Promise<JsonValue | undefined> => {
+        const page = this.pageRepository.findById(pageId);
+        if (page === undefined || page.projectId !== projectId) {
+          return undefined;
+        }
+        const version = this.pageRepository.findLatestVersion(pageId);
+        if (version === undefined) return undefined;
+        try {
+          const artifact = JSON.parse(
+            await readFile(
+              this.resolveArtifactPath(version.analysisFilePath),
+              "utf8",
+            ),
+          ) as StoredAnalysisArtifact;
+          return {
+            pageId,
+            pageVersionId: version.id,
+            versionNumber: version.versionNumber,
+            title: artifact.title,
+            normalizedUrl: version.normalizedUrl,
+            semanticAnalysis: artifact.semanticAnalysis as unknown as JsonValue,
+          };
+        } catch {
+          return undefined;
+        }
+      }),
+    );
+    return contexts.filter(
+      (context): context is JsonValue => context !== undefined,
     );
   }
 

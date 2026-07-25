@@ -286,6 +286,7 @@ const createReadyTest = (
     name: "Checkout",
     status: "valid",
     version: 2,
+    testMode: "recorded",
     wipeBeforeRun,
     startMode: "base_url",
     startUrl: "https://example.test/products",

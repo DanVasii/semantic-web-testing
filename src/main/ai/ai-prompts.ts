@@ -77,6 +77,8 @@ const limitContext = (source: JsonValue): ContextLimitResult => {
 const taskInstructions: Record<AiTask, string> = {
   analyze_step:
     "Analizează un singur pas înregistrat și propune doar denumiri și explicații semantice. Nu executa nimic.",
+  edit_step:
+    "Editează declarativ pasul selectat conform instrucțiunii utilizatorului. Propune schimbarea pasului curent și numai schimbările downstream strict necesare. Folosește exact ID-urile de pas din context, nu modifica pașii anteriori și nu genera cod.",
   generate_test:
     "Transformă înregistrarea furnizată într-o propunere declarativă de pași de test. Nu genera cod și nu inventa date confidențiale.",
   repair_locator:

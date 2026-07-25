@@ -31,6 +31,7 @@ const testDefinition: TestDefinition = {
   description: "Produse până la checkout",
   status: "draft",
   version: 1,
+  testMode: "recorded",
   wipeBeforeRun: false,
   startMode: "base_url",
   startUrl: "https://example.test/products?category=10#list",
@@ -47,6 +48,10 @@ const createApi = (): SemanticAppApi => ({
   saveAiSettings: vi.fn(),
   testAiConnection: vi.fn(),
   previewAiRequest: vi.fn(),
+  previewAiStepEdit: vi.fn(),
+  generateAiStepEdit: vi.fn(),
+  applyAiStepChanges: vi.fn(),
+  undoAiStepChange: vi.fn(),
   listProjects: vi.fn(),
   createProject: vi.fn(),
   updateProject: vi.fn(),
@@ -165,6 +170,7 @@ describe("ProjectTestsPanel", () => {
       expect(api.createTest).toHaveBeenCalledWith(project.id, {
         name: "Cumpără produs",
         startUrl: "https://example.test/products?category=10#list",
+        testMode: "recorded",
         wipeBeforeRun: true,
       });
     });
@@ -249,6 +255,7 @@ describe("TestDetailPage", () => {
           name: testDefinition.name,
           description: testDefinition.description,
           startUrl: "https://example.test/cart?coupon=10#summary",
+          testMode: "recorded",
           wipeBeforeRun: true,
         },
       );

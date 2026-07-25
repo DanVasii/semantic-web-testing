@@ -57,6 +57,7 @@ export interface PageVersion {
 
 export type TestStatus = "draft" | "valid" | "invalidated";
 export type TestStartMode = "base_url" | "current_page";
+export type TestMode = "recorded" | "dynamic_ai";
 export type TestWorkflowState =
   | "not_recorded"
   | "recording"
@@ -72,6 +73,7 @@ export interface TestDefinition {
   description?: string;
   status: TestStatus;
   version: number;
+  testMode: TestMode;
   wipeBeforeRun: boolean;
   startMode: TestStartMode;
   startUrl: string;

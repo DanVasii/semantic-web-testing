@@ -19,11 +19,17 @@ import type {
 import type { TestInput } from "./tests.js";
 import type {
   AiConnectionTestResult,
+  AiStepEditInput,
+  AiStepEditPreview,
+  AiStepEditResult,
   AiProviderId,
   AiRequestPreview,
   AiSettingsSummary,
+  ApplyAiStepChangesInput,
+  ApplyAiStepChangesResult,
   CreateAiRequestPreviewInput,
   SaveAiSettingsInput,
+  UndoAiStepChangeInput,
 } from "./ai.js";
 import type {
   BrowserLaunchOptions,
@@ -121,6 +127,10 @@ export const AI_CHANNELS = {
   saveSettings: "ai:save-settings",
   testConnection: "ai:test-connection",
   previewRequest: "ai:preview-request",
+  previewStepEdit: "ai:preview-step-edit",
+  generateStepEdit: "ai:generate-step-edit",
+  applyStepChanges: "ai:apply-step-changes",
+  undoStepChange: "ai:undo-step-change",
 } as const;
 
 export interface AppInfo {
@@ -154,6 +164,12 @@ export interface SemanticAppApi extends DatasetCrudApi {
   previewAiRequest: (
     input: CreateAiRequestPreviewInput,
   ) => Promise<AiRequestPreview>;
+  previewAiStepEdit: (input: AiStepEditInput) => Promise<AiStepEditPreview>;
+  generateAiStepEdit: (input: AiStepEditInput) => Promise<AiStepEditResult>;
+  applyAiStepChanges: (
+    input: ApplyAiStepChangesInput,
+  ) => Promise<ApplyAiStepChangesResult>;
+  undoAiStepChange: (input: UndoAiStepChangeInput) => Promise<TestDefinition>;
   deleteProject: (projectId: string) => Promise<boolean>;
   detectBrowsers: () => Promise<DetectedBrowser[]>;
   launchBrowser: (options: BrowserLaunchOptions) => Promise<BrowserSession>;

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { Project } from "../shared/persistence.js";
+import type { TestFlowItem } from "../shared/test-model.js";
 import {
   openApplicationDatabase,
   type ApplicationDatabase,
@@ -37,6 +38,7 @@ let projectRepository: ProjectRepository;
 let testRepository: TestRepository;
 let datasetRepository: DatasetRepository;
 let service: TestsService;
+let idCounter: number;
 
 beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), "semantic-tests-service-"));
@@ -47,12 +49,16 @@ beforeEach(async () => {
   testRepository = new TestRepository(database.connection);
   datasetRepository = new DatasetRepository(database.connection);
   projectRepository.create(project);
+  idCounter = 0;
   service = new TestsService(
     projectRepository,
     testRepository,
     datasetRepository,
     {
-      createId: () => "test-1",
+      createId: () => {
+        idCounter += 1;
+        return idCounter === 1 ? "test-1" : `generated-${idCounter}`;
+      },
       now: () => new Date("2026-07-24T12:00:00.000Z"),
       snapshotRoot: join(directory, "versions"),
     },
@@ -80,6 +86,7 @@ describe("TestsService", () => {
       description: "Produse până la checkout",
       startUrl: "https://example.test/products?category=10#list",
       normalizedStartUrl: "https://example.test/products?category=10#list",
+      testMode: "recorded",
       wipeBeforeRun: true,
       workflowState: "not_recorded",
       flowItems: [],
@@ -96,6 +103,17 @@ describe("TestsService", () => {
         startUrl: "https://other.test",
       }),
     ).toThrow("Datele testului nu sunt valide.");
+  });
+
+  it("persists the dynamic AI test type selected by the user", () => {
+    const created = service.create(project.id, {
+      name: "Calendar dinamic",
+      startUrl: "https://example.test/booking",
+      testMode: "dynamic_ai",
+    });
+
+    expect(created.testMode).toBe("dynamic_ai");
+    expect(service.get(project.id, created.id).testMode).toBe("dynamic_ai");
   });
 
   it("invalidates a recorded flow when the start URL changes", () => {
@@ -231,5 +249,57 @@ describe("TestsService", () => {
     ).rejects.toThrow("Flow-ul testului nu este valid");
     expect(service.get(project.id, created.id)).toEqual(created);
     expect(service.listVersions(project.id, created.id)).toEqual([]);
+  });
+
+  it("creates an AI version and restores the prior snapshot with Undo AI", async () => {
+    const created = service.create(project.id, {
+      name: "Calendar",
+      startUrl: "https://example.test/booking",
+    });
+    const originalStep: TestFlowItem = {
+      id: "step-1",
+      type: "action",
+      actionType: "click",
+      title: "Alege ziua",
+      humanDescription: "Apasă ziua disponibilă.",
+      whyExplanation: "Selectează data programării.",
+      target: {
+        primary: {
+          type: "data_attribute",
+          operator: "equals",
+          value: "calendar-day-15",
+          attribute: "data-testid",
+        },
+      },
+      fallbacks: [],
+      enabled: true,
+    };
+    const originalFlow = [originalStep];
+    const manual = await service.saveFlow(project.id, created.id, originalFlow);
+    const ai = await service.saveAiFlow(project.id, created.id, [
+      {
+        ...originalStep,
+        title: "Alege ziua 15 din calendar",
+      },
+    ]);
+
+    expect(ai.version).toBe(manual.version + 1);
+    expect(service.listVersions(project.id, created.id)[0]).toMatchObject({
+      versionNumber: ai.version,
+      source: "ai",
+    });
+
+    const restored = await service.undoAiFlow(
+      project.id,
+      created.id,
+      ai.version,
+    );
+
+    expect(restored.version).toBe(ai.version + 1);
+    expect(restored.flowItems).toEqual(originalFlow);
+    expect(service.listVersions(project.id, created.id)[0]).toMatchObject({
+      versionNumber: restored.version,
+      source: "manual",
+    });
   });
 });

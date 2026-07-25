@@ -62,6 +62,7 @@ const testDefinition: TestDefinition = {
   description: "Flux semantic principal",
   status: "valid",
   version: 1,
+  testMode: "recorded",
   wipeBeforeRun: true,
   startMode: "base_url",
   startUrl: "https://example.test/booking?service=10",

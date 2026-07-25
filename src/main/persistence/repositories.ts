@@ -92,6 +92,7 @@ const mapTest = (row: DatabaseRow): TestDefinition => {
     ...(description === undefined ? {} : { description }),
     status: text(row, "status") as TestStatus,
     version: number(row, "version"),
+    testMode: text(row, "test_mode") as TestDefinition["testMode"],
     wipeBeforeRun: number(row, "wipe_before_run") === 1,
     startMode: text(row, "start_mode") as TestDefinition["startMode"],
     startUrl: text(row, "start_url"),
@@ -514,10 +515,10 @@ export class TestRepository {
     this.database
       .prepare(
         `INSERT INTO tests (
-          id, project_id, name, description, status, version,
+          id, project_id, name, description, status, version, test_mode,
           wipe_before_run, start_mode, start_url, normalized_start_url,
           workflow_state, created_at, updated_at, flow_items_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         test.id,
@@ -526,6 +527,7 @@ export class TestRepository {
         test.description ?? null,
         test.status,
         test.version,
+        test.testMode,
         test.wipeBeforeRun ? 1 : 0,
         test.startMode,
         test.startUrl,
@@ -560,7 +562,7 @@ export class TestRepository {
       .prepare(
         `UPDATE tests SET
           name = ?, description = ?, status = ?, version = ?,
-          wipe_before_run = ?, start_mode = ?, start_url = ?,
+          test_mode = ?, wipe_before_run = ?, start_mode = ?, start_url = ?,
           normalized_start_url = ?, workflow_state = ?, updated_at = ?,
           flow_items_json = ?
         WHERE id = ?`,
@@ -570,6 +572,7 @@ export class TestRepository {
         test.description ?? null,
         test.status,
         test.version,
+        test.testMode,
         test.wipeBeforeRun ? 1 : 0,
         test.startMode,
         test.startUrl,

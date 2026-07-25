@@ -6,6 +6,10 @@ import type {
   AiModelInfo,
   AiRequestPreview,
   AiSettingsSummary,
+  AiStepEditPreview,
+  AiStepEditProposal,
+  AiStepEditResult,
+  ApplyAiStepChangesResult,
 } from "../shared/ai.js";
 import type {
   BasicAuthChallenge,
@@ -48,6 +52,10 @@ const AI_CHANNELS = {
   saveSettings: "ai:save-settings",
   testConnection: "ai:test-connection",
   previewRequest: "ai:preview-request",
+  previewStepEdit: "ai:preview-step-edit",
+  generateStepEdit: "ai:generate-step-edit",
+  applyStepChanges: "ai:apply-step-changes",
+  undoStepChange: "ai:undo-step-change",
 } as const;
 const PROJECT_CHANNELS = {
   list: "projects:list",
@@ -211,7 +219,7 @@ const isAiRequestPreview = (value: unknown): value is AiRequestPreview =>
   typeof value === "object" &&
   value !== null &&
   "task" in value &&
-  ["analyze_step", "generate_test", "repair_locator"].includes(
+  ["analyze_step", "edit_step", "generate_test", "repair_locator"].includes(
     String(value.task),
   ) &&
   "provider" in value &&
@@ -235,6 +243,93 @@ const isAiRequestPreview = (value: unknown): value is AiRequestPreview =>
   "omittedPaths" in value &&
   Array.isArray(value.omittedPaths) &&
   value.omittedPaths.every((path) => typeof path === "string");
+
+const isAiStepChangeProposal = (value: unknown): boolean =>
+  typeof value === "object" &&
+  value !== null &&
+  "stepId" in value &&
+  typeof value.stepId === "string" &&
+  "patch" in value &&
+  typeof value.patch === "object" &&
+  value.patch !== null &&
+  "rationale" in value &&
+  typeof value.rationale === "string";
+
+const isAiStepEditProposal = (value: unknown): value is AiStepEditProposal => {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("summary" in value) ||
+    typeof value.summary !== "string" ||
+    !("currentStepChange" in value) ||
+    typeof value.currentStepChange !== "object" ||
+    value.currentStepChange === null ||
+    !("stepId" in value.currentStepChange) ||
+    typeof value.currentStepChange.stepId !== "string" ||
+    !("patch" in value.currentStepChange) ||
+    typeof value.currentStepChange.patch !== "object" ||
+    value.currentStepChange.patch === null ||
+    !("rationale" in value.currentStepChange) ||
+    typeof value.currentStepChange.rationale !== "string" ||
+    !("downstreamChanges" in value) ||
+    !Array.isArray(value.downstreamChanges)
+  ) {
+    return false;
+  }
+  return value.downstreamChanges.every(isAiStepChangeProposal);
+};
+
+const isAiStepEditPreview = (value: unknown): value is AiStepEditPreview =>
+  typeof value === "object" &&
+  value !== null &&
+  "request" in value &&
+  isAiRequestPreview(value.request) &&
+  "context" in value &&
+  typeof value.context === "object" &&
+  value.context !== null &&
+  "selectedStepId" in value.context &&
+  typeof value.context.selectedStepId === "string" &&
+  "previousStepIds" in value.context &&
+  Array.isArray(value.context.previousStepIds) &&
+  value.context.previousStepIds.every((id) => typeof id === "string") &&
+  "nextStepIds" in value.context &&
+  Array.isArray(value.context.nextStepIds) &&
+  value.context.nextStepIds.every((id) => typeof id === "string") &&
+  "pageIds" in value.context &&
+  Array.isArray(value.context.pageIds) &&
+  value.context.pageIds.every((id) => typeof id === "string");
+
+const isAiStepFieldDiff = (value: unknown): boolean =>
+  typeof value === "object" &&
+  value !== null &&
+  "stepId" in value &&
+  typeof value.stepId === "string" &&
+  "field" in value &&
+  typeof value.field === "string" &&
+  "after" in value &&
+  isJsonValue(value.after);
+
+const isAiStepEditResult = (value: unknown): value is AiStepEditResult =>
+  typeof value === "object" &&
+  value !== null &&
+  "provider" in value &&
+  (value.provider === "gemini" || value.provider === "ollama") &&
+  "model" in value &&
+  typeof value.model === "string" &&
+  "proposal" in value &&
+  isAiStepEditProposal(value.proposal) &&
+  "diffs" in value &&
+  Array.isArray(value.diffs) &&
+  value.diffs.every(isAiStepFieldDiff) &&
+  "usage" in value &&
+  typeof value.usage === "object" &&
+  value.usage !== null &&
+  "inputTokens" in value.usage &&
+  typeof value.usage.inputTokens === "number" &&
+  "outputTokens" in value.usage &&
+  typeof value.usage.outputTokens === "number" &&
+  "totalTokens" in value.usage &&
+  typeof value.usage.totalTokens === "number";
 
 const isProjectOverview = (value: unknown): value is ProjectOverview => {
   if (typeof value !== "object" || value === null) {
@@ -588,6 +683,8 @@ const isTestDefinition = (value: unknown): value is TestDefinition =>
   testStatuses.has(value.status) &&
   "version" in value &&
   typeof value.version === "number" &&
+  "testMode" in value &&
+  (value.testMode === "recorded" || value.testMode === "dynamic_ai") &&
   "wipeBeforeRun" in value &&
   typeof value.wipeBeforeRun === "boolean" &&
   "startMode" in value &&
@@ -926,6 +1023,56 @@ const semanticAppApi: SemanticAppApi = {
       );
     }
     return preview;
+  },
+  previewAiStepEdit: async (input) => {
+    const preview: unknown = await ipcRenderer.invoke(
+      AI_CHANNELS.previewStepEdit,
+      input,
+    );
+    if (!isAiStepEditPreview(preview)) {
+      throw new TypeError("Main process returned an invalid AI step preview.");
+    }
+    return preview;
+  },
+  generateAiStepEdit: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      AI_CHANNELS.generateStepEdit,
+      input,
+    );
+    if (!isAiStepEditResult(result)) {
+      throw new TypeError("Main process returned an invalid AI step result.");
+    }
+    return result;
+  },
+  applyAiStepChanges: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      AI_CHANNELS.applyStepChanges,
+      input,
+    );
+    if (
+      typeof result !== "object" ||
+      result === null ||
+      !("test" in result) ||
+      !isTestDefinition(result.test) ||
+      !("appliedStepIds" in result) ||
+      !Array.isArray(result.appliedStepIds) ||
+      !result.appliedStepIds.every((id) => typeof id === "string") ||
+      !("aiVersion" in result) ||
+      typeof result.aiVersion !== "number"
+    ) {
+      throw new TypeError("Main process returned an invalid AI apply result.");
+    }
+    return result as ApplyAiStepChangesResult;
+  },
+  undoAiStepChange: async (input) => {
+    const test: unknown = await ipcRenderer.invoke(
+      AI_CHANNELS.undoStepChange,
+      input,
+    );
+    if (!isTestDefinition(test)) {
+      throw new TypeError("Main process returned invalid AI undo data.");
+    }
+    return test;
   },
   listProjects: async () => {
     const projects: unknown = await ipcRenderer.invoke(PROJECT_CHANNELS.list);

@@ -52,6 +52,7 @@ const testDefinition = (): TestDefinition => ({
   name: "Checkout",
   status: "valid",
   version: 2,
+  testMode: "recorded",
   wipeBeforeRun: false,
   startMode: "base_url",
   startUrl: "https://example.test/checkout",

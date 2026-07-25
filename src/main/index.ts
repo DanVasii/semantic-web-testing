@@ -15,9 +15,12 @@ import {
   TEST_CHANNELS,
 } from "../shared/ipc.js";
 import type {
+  AiStepEditInput,
+  ApplyAiStepChangesInput,
   AiProviderId,
   CreateAiRequestPreviewInput,
   SaveAiSettingsInput,
+  UndoAiStepChangeInput,
 } from "../shared/ai.js";
 import type {
   BasicAuthCredentials,
@@ -58,6 +61,7 @@ import { TestRunnerService } from "./runner/test-runner-service.js";
 import { RecorderService } from "./recorder/recorder-service.js";
 import { ProjectBasicAuthService } from "./project-basic-auth-service.js";
 import { AiSettingsService } from "./ai/ai-settings-service.js";
+import { AiStepEditingService } from "./ai/ai-step-editing-service.js";
 import { resolveRendererTarget } from "./renderer-target.js";
 import { createMainWindowOptions } from "./window-options.js";
 
@@ -185,6 +189,11 @@ void app
         snapshotRoot: join(app.getPath("userData"), "data", "test-versions"),
       },
     );
+    const aiStepEditingService = new AiStepEditingService(
+      aiSettingsService,
+      testsService,
+      pageAnalysisService,
+    );
     const datasetsService = new DatasetsService(
       projectRepository,
       testRepository,
@@ -247,6 +256,24 @@ void app
       AI_CHANNELS.previewRequest,
       (_event, input: CreateAiRequestPreviewInput) =>
         aiSettingsService.preview(input),
+    );
+    ipcMain.handle(
+      AI_CHANNELS.previewStepEdit,
+      (_event, input: AiStepEditInput) => aiStepEditingService.preview(input),
+    );
+    ipcMain.handle(
+      AI_CHANNELS.generateStepEdit,
+      (_event, input: AiStepEditInput) => aiStepEditingService.generate(input),
+    );
+    ipcMain.handle(
+      AI_CHANNELS.applyStepChanges,
+      (_event, input: ApplyAiStepChangesInput) =>
+        aiStepEditingService.apply(input),
+    );
+    ipcMain.handle(
+      AI_CHANNELS.undoStepChange,
+      (_event, input: UndoAiStepChangeInput) =>
+        aiStepEditingService.undo(input),
     );
     ipcMain.handle(PROJECT_CHANNELS.list, () => projectsService.list());
     ipcMain.handle(PROJECT_CHANNELS.create, (_event, input: ProjectInput) =>

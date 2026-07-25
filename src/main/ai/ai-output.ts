@@ -1,4 +1,4 @@
-import type { AiTask } from "../../shared/ai.js";
+import type { AiStepEditProposal, AiTask } from "../../shared/ai.js";
 import type { JsonValue } from "../../shared/persistence.js";
 import {
   ACTION_TYPES,
@@ -25,6 +25,29 @@ const simpleLocatorSchema: JsonValue = {
   required: ["type", "operator", "value"],
 };
 
+const editableStepPatchSchema: JsonValue = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    title: { type: "string" },
+    humanDescription: { type: "string" },
+    whyExplanation: { type: "string" },
+    instructions: { type: "string" },
+    primaryLocator: simpleLocatorSchema,
+  },
+};
+
+const stepChangeSchema: JsonValue = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    stepId: { type: "string" },
+    patch: editableStepPatchSchema,
+    rationale: { type: "string" },
+  },
+  required: ["stepId", "patch", "rationale"],
+};
+
 export const AI_OUTPUT_SCHEMAS: Record<AiTask, JsonValue> = {
   analyze_step: {
     type: "object",
@@ -43,6 +66,20 @@ export const AI_OUTPUT_SCHEMAS: Record<AiTask, JsonValue> = {
       "whyExplanation",
       "downstreamSuggestions",
     ],
+  },
+  edit_step: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      summary: { type: "string" },
+      currentStepChange: stepChangeSchema,
+      downstreamChanges: {
+        type: "array",
+        maxItems: 10,
+        items: stepChangeSchema,
+      },
+    },
+    required: ["summary", "currentStepChange", "downstreamChanges"],
   },
   generate_test: {
     type: "object",
@@ -198,6 +235,69 @@ const validateSimpleLocator = (value: JsonValue | undefined): void => {
   }
 };
 
+const editablePatchKeys = [
+  "title",
+  "humanDescription",
+  "whyExplanation",
+  "instructions",
+  "primaryLocator",
+] as const;
+
+const validateStepChange = (value: JsonValue | undefined): void => {
+  if (!isObject(value)) {
+    throw new Error("Output-ul AI conține o schimbare de pas invalidă.");
+  }
+  requireExactKeys(value, ["stepId", "patch", "rationale"]);
+  requireString(value.stepId, "ID pas", 200);
+  requireString(value.rationale, "motivație");
+  if (!isObject(value.patch)) {
+    throw new Error("Output-ul AI conține un patch de pas invalid.");
+  }
+  requireExactKeys(value.patch, [], editablePatchKeys);
+  if (Object.keys(value.patch).length === 0) {
+    throw new Error("Output-ul AI conține un patch gol.");
+  }
+  if (value.patch.title !== undefined) {
+    requireString(value.patch.title, "titlu", 300);
+  }
+  if (value.patch.humanDescription !== undefined) {
+    requireString(value.patch.humanDescription, "descriere");
+  }
+  if (value.patch.whyExplanation !== undefined) {
+    requireString(value.patch.whyExplanation, "explicație");
+  }
+  if (value.patch.instructions !== undefined) {
+    requireString(value.patch.instructions, "instrucțiuni");
+  }
+  if (value.patch.primaryLocator !== undefined) {
+    validateSimpleLocator(value.patch.primaryLocator);
+  }
+};
+
+export const validateAiStepEditProposal = (
+  value: unknown,
+): AiStepEditProposal => {
+  if (!isObject(value)) {
+    throw new Error("Output-ul AI trebuie să fie un obiect JSON.");
+  }
+  assertNoArbitraryCode(value);
+  requireExactKeys(value, [
+    "summary",
+    "currentStepChange",
+    "downstreamChanges",
+  ]);
+  requireString(value.summary, "rezumat");
+  validateStepChange(value.currentStepChange);
+  if (
+    !Array.isArray(value.downstreamChanges) ||
+    value.downstreamChanges.length > 10
+  ) {
+    throw new Error("Output-ul AI conține schimbări downstream invalide.");
+  }
+  value.downstreamChanges.forEach(validateStepChange);
+  return value as unknown as AiStepEditProposal;
+};
+
 export const validateAiOutput = (task: AiTask, value: unknown): JsonValue => {
   if (!isObject(value)) {
     throw new Error("Output-ul AI trebuie să fie un obiect JSON.");
@@ -218,6 +318,10 @@ export const validateAiOutput = (task: AiTask, value: unknown): JsonValue => {
     requireString(value.whyExplanation, "explicație");
     requireStringArray(value.downstreamSuggestions, "sugestii", 10);
     return value;
+  }
+
+  if (task === "edit_step") {
+    return validateAiStepEditProposal(value) as unknown as JsonValue;
   }
 
   if (task === "generate_test") {

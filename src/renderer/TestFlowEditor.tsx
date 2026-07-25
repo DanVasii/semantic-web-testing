@@ -18,6 +18,7 @@ import {
   type TestFlowItem,
 } from "../shared/test-model.js";
 import { validateDeclarativeTest } from "../shared/test-validation.js";
+import { AiStepEditorModal } from "./AiStepEditorModal.js";
 import { Button } from "./components/Button.js";
 
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -387,9 +388,12 @@ export const TestFlowEditor = ({
   const [addType, setAddType] = useState<TestFlowItem["type"]>("action");
   const [draggedIndex, setDraggedIndex] = useState<number>();
   const [isSaving, setIsSaving] = useState(false);
+  const [isUndoingAi, setIsUndoingAi] = useState(false);
   const [saveError, setSaveError] = useState<string>();
   const [dirty, setDirty] = useState(false);
   const [versions, setVersions] = useState<TestVersion[]>([]);
+  const [aiStep, setAiStep] = useState<TestFlowItem>();
+  const [lastAiVersion, setLastAiVersion] = useState<number>();
 
   useEffect(() => {
     setItems(clone(test.flowItems));
@@ -472,6 +476,42 @@ export const TestFlowEditor = ({
         <div className="flex flex-wrap gap-2">
           <Button
             variant="secondary"
+            disabled={
+              lastAiVersion === undefined ||
+              lastAiVersion !== test.version ||
+              isUndoingAi
+            }
+            onClick={() => {
+              if (lastAiVersion === undefined) return;
+              setIsUndoingAi(true);
+              setSaveError(undefined);
+              void api
+                .undoAiStepChange({
+                  projectId,
+                  testId: test.id,
+                  aiVersion: lastAiVersion,
+                })
+                .then(async (restored) => {
+                  setLastAiVersion(undefined);
+                  onTestSaved(restored);
+                  setVersions(await api.listTestVersions(projectId, test.id));
+                })
+                .catch((error: unknown) => {
+                  setSaveError(
+                    error instanceof Error
+                      ? error.message
+                      : "Modificarea AI nu a putut fi anulată.",
+                  );
+                })
+                .finally(() => {
+                  setIsUndoingAi(false);
+                });
+            }}
+          >
+            {isUndoingAi ? "Se revine..." : "Undo ultima schimbare AI"}
+          </Button>
+          <Button
+            variant="secondary"
             disabled={history.length === 0}
             onClick={() => {
               const previous = history.at(-1);
@@ -524,6 +564,17 @@ export const TestFlowEditor = ({
           + Adaugă pas
         </Button>
       </div>
+      {test.testMode === "recorded" ? (
+        <p className="mt-3 rounded-lg border border-app-border bg-app-surface p-3 text-xs text-app-muted">
+          Test înregistrat: runnerul urmează exact pașii, iar editarea AI este
+          dezactivată. Poți schimba tipul testului din „Editează testul”.
+        </p>
+      ) : (
+        <p className="mt-3 rounded-lg border border-brand-200 bg-brand-50 p-3 text-xs text-brand-800">
+          Test dinamic: poți deschide AI pe un pas salvat. Trimiterea rămâne
+          manuală și explicită.
+        </p>
+      )}
 
       {!validation.valid ? (
         <div
@@ -613,6 +664,22 @@ export const TestFlowEditor = ({
                     </label>
                   </div>
                   <div className="flex flex-wrap gap-2">
+                    {test.testMode === "dynamic_ai" ? (
+                      <Button
+                        variant="secondary"
+                        disabled={dirty}
+                        title={
+                          dirty
+                            ? "Salvează sau anulează modificările locale înainte de AI."
+                            : "Deschide chat-ul contextual pentru acest pas."
+                        }
+                        onClick={() => {
+                          setAiStep(item);
+                        }}
+                      >
+                        Editează cu AI
+                      </Button>
+                    ) : null}
                     <Button
                       variant="secondary"
                       disabled={index === 0}
@@ -1034,6 +1101,27 @@ export const TestFlowEditor = ({
           </ul>
         )}
       </div>
+      {aiStep ? (
+        <AiStepEditorModal
+          api={api}
+          open
+          projectId={projectId}
+          step={aiStep}
+          test={test}
+          onClose={() => {
+            setAiStep(undefined);
+          }}
+          onApplied={(saved, aiVersion) => {
+            setLastAiVersion(aiVersion);
+            setAiStep(undefined);
+            onTestSaved(saved);
+            void api
+              .listTestVersions(projectId, test.id)
+              .then(setVersions)
+              .catch(() => setVersions([]));
+          }}
+        />
+      ) : null}
     </section>
   );
 };

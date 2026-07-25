@@ -222,14 +222,71 @@ button:disabled {
   color: #655d57;
 }
 
-.booking-calendar,
-.time-slot-list {
+.calendar-help {
+  color: #655d57 !important;
+  font-family: inherit !important;
+  line-height: 1.6;
+}
+
+.calendar-shell {
+  overflow: hidden;
+  border: 1px solid #ded8d1;
+  border-radius: 16px;
+  background: #fffaf6;
+}
+
+.calendar-toolbar {
+  display: grid;
+  align-items: center;
+  gap: 10px;
+  grid-template-columns: 1fr auto 1fr;
+  padding: 16px;
+  background: #fff4ec;
+}
+
+.calendar-toolbar h3 {
+  min-width: 150px;
+  margin: 0;
+  text-align: center;
+  text-transform: capitalize;
+}
+
+.calendar-toolbar button:last-child {
+  justify-self: end;
+}
+
+.calendar-year-control {
+  display: grid;
+  align-items: center;
+  gap: 12px;
+  grid-template-columns: 1fr 130px;
+  padding: 14px 16px;
+  border-top: 1px solid #eadfd6;
+}
+
+.calendar-weekdays,
+.booking-calendar {
   display: grid;
   gap: 8px;
   grid-template-columns: repeat(7, minmax(0, 1fr));
 }
 
+.calendar-weekdays {
+  padding: 12px 16px 4px;
+  color: #746a63;
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.booking-calendar {
+  padding: 8px 16px 16px;
+}
+
 .time-slot-list {
+  display: grid;
+  gap: 8px;
   margin-top: 18px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
@@ -237,6 +294,38 @@ button:disabled {
 .calendar-day,
 .time-slot {
   padding-inline: 4px;
+}
+
+.calendar-day {
+  min-height: 46px;
+  color: #5f2a0c;
+  background: #ffffff;
+}
+
+.calendar-day:hover {
+  border-color: #d8520c;
+  background: #fff0e5;
+}
+
+.calendar-day--outside {
+  border-color: transparent;
+  background: transparent;
+}
+
+.calendar-day--selected {
+  border-color: #9a3f08;
+  color: #ffffff;
+  background: #9a3f08;
+  box-shadow: 0 0 0 3px #ffd9bf;
+}
+
+.calendar-selection {
+  margin: 0;
+  padding: 14px 16px;
+  border-top: 1px solid #eadfd6;
+  color: #9a3f08;
+  background: #fff4ec;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
 .fixture-actions {
@@ -280,8 +369,24 @@ footer code {
     padding-block: 40px;
   }
 
-  .product-grid,
-  .booking-calendar {
+  .product-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .calendar-toolbar {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .calendar-toolbar h3 {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .calendar-weekdays {
+    display: none;
+  }
+
+  .calendar-year-control {
     grid-template-columns: 1fr;
   }
 }

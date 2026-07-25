@@ -15,6 +15,7 @@ const test: TestDefinition = {
   name: "Checkout",
   status: "draft",
   version: 1,
+  testMode: "recorded",
   wipeBeforeRun: false,
   startMode: "base_url",
   startUrl: "https://example.test/products",
@@ -223,6 +224,53 @@ describe("TestFlowEditor", () => {
       valueStrategy: "dataset",
       target: { fieldId: "customer_email" },
     });
+  });
+
+  it("shows AI editing only for tests explicitly marked dynamic", () => {
+    const recorded = {
+      ...test,
+      flowItems: [
+        {
+          id: "step-1",
+          type: "action" as const,
+          actionType: "click" as const,
+          title: "Alege ziua",
+          humanDescription: "Apasă ziua.",
+          whyExplanation: "Selectează data.",
+          target: {
+            primary: {
+              type: "text" as const,
+              operator: "equals" as const,
+              value: "15",
+            },
+          },
+          fallbacks: [],
+          enabled: true,
+        },
+      ],
+    };
+    const { unmount } = render(
+      <TestFlowEditor
+        api={createApi()}
+        projectId={recorded.projectId}
+        test={recorded}
+        onTestSaved={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Editează cu AI" })).toBeNull();
+    unmount();
+
+    render(
+      <TestFlowEditor
+        api={createApi()}
+        projectId={recorded.projectId}
+        test={{ ...recorded, testMode: "dynamic_ai" }}
+        onTestSaved={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Editează cu AI" }),
+    ).not.toBeNull();
   });
 
   it("adds, reorders and disables breakpoints as flow items", async () => {

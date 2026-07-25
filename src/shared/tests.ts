@@ -1,9 +1,10 @@
-import type { Project, TestDefinition } from "./persistence.js";
+import type { Project, TestDefinition, TestMode } from "./persistence.js";
 
 export interface TestInput {
   name: string;
   description?: string;
   startUrl: string;
+  testMode?: TestMode;
   wipeBeforeRun?: boolean;
 }
 
@@ -12,6 +13,7 @@ export interface TestInputErrors {
   description?: string;
   startUrl?: string;
   wipeBeforeRun?: string;
+  testMode?: string;
 }
 
 export const normalizeTestStartUrl = (value: string): string =>
@@ -31,6 +33,13 @@ export const validateTestInput = (
     typeof input.wipeBeforeRun !== "boolean"
   ) {
     errors.wipeBeforeRun = "Configurarea wipe trebuie să fie booleană.";
+  }
+  if (
+    input.testMode !== undefined &&
+    input.testMode !== "recorded" &&
+    input.testMode !== "dynamic_ai"
+  ) {
+    errors.testMode = "Tipul testului nu este valid.";
   }
 
   if (name.length === 0) {
