@@ -407,7 +407,7 @@ export const TestDetailPage = ({
           onTestSaved={onTestUpdated}
         />
 
-        <RunnerPanel api={api} projectId={project.id} test={test} />
+        <RunnerPanel api={api} project={project} test={test} />
 
         <div className="mt-6 grid gap-4 lg:grid-cols-2">
           <section className="rounded-xl border border-app-border p-4">

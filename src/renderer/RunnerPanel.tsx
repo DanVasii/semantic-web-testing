@@ -2,11 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 
 import type { SemanticAppApi } from "../shared/ipc.js";
 import type {
+  Project,
   StepRunResult,
   TestDefinition,
   TestRun,
 } from "../shared/persistence.js";
-import type { RunnerSnapshot } from "../shared/runner.js";
+import type { RunnerSnapshot, RunMode } from "../shared/runner.js";
+import { getContinueShortcut, matchesShortcut } from "../shared/shortcuts.js";
 import { Button } from "./components/Button.js";
 
 const idleSnapshot: RunnerSnapshot = {
@@ -39,16 +41,24 @@ const stateLabels: Record<RunnerSnapshot["state"], string> = {
 
 export interface RunnerPanelProps {
   api: SemanticAppApi;
-  projectId: string;
+  project: Project;
   test: TestDefinition;
 }
 
-export const RunnerPanel = ({ api, projectId, test }: RunnerPanelProps) => {
+export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
+  const projectId = project.id;
   const [snapshot, setSnapshot] = useState<RunnerSnapshot>(idleSnapshot);
   const [runs, setRuns] = useState<TestRun[]>([]);
   const [stepResults, setStepResults] = useState<StepRunResult[]>([]);
   const [isStarting, setIsStarting] = useState(false);
   const [isFallbackBusy, setIsFallbackBusy] = useState(false);
+  const [runMode, setRunMode] = useState<RunMode>("automatic");
+  const [waitBeforeStart, setWaitBeforeStart] = useState(false);
+  const [shortcut, setShortcut] = useState(() =>
+    getContinueShortcut(project.shortcutConfig),
+  );
+  const [shortcutInput, setShortcutInput] = useState(shortcut);
+  const [isSavingShortcut, setIsSavingShortcut] = useState(false);
   const [error, setError] = useState<string>();
 
   const loadHistory = useCallback(async () => {
@@ -119,7 +129,14 @@ export const RunnerPanel = ({ api, projectId, test }: RunnerPanelProps) => {
       canRetry: false,
     });
     try {
-      setSnapshot(await api.startRun({ projectId, testId: test.id }));
+      setSnapshot(
+        await api.startRun({
+          projectId,
+          testId: test.id,
+          mode: runMode,
+          waitBeforeStart,
+        }),
+      );
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
@@ -149,6 +166,65 @@ export const RunnerPanel = ({ api, projectId, test }: RunnerPanelProps) => {
       setSnapshot(await api.retryRunStep(snapshot.run.id));
     } catch {
       setError("Pasul curent nu a putut fi reîncercat.");
+    }
+  };
+
+  const continueRun = useCallback(async (): Promise<void> => {
+    if (snapshot.run === undefined) return;
+    setError(undefined);
+    try {
+      setSnapshot(await api.continueRun(snapshot.run.id));
+    } catch {
+      setError("Rularea nu a putut continua.");
+    }
+  }, [api, snapshot.run]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      const target = event.target;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement
+      ) {
+        return;
+      }
+      if (
+        [
+          "waiting_for_start",
+          "waiting_at_breakpoint",
+          "waiting_after_step",
+        ].includes(snapshot.state) &&
+        matchesShortcut(event, shortcut)
+      ) {
+        event.preventDefault();
+        void continueRun();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [continueRun, shortcut, snapshot.state]);
+
+  const saveShortcut = async (): Promise<void> => {
+    setIsSavingShortcut(true);
+    setError(undefined);
+    try {
+      const configured = await api.configureRunnerShortcut(
+        projectId,
+        shortcutInput,
+      );
+      setShortcut(configured);
+      setShortcutInput(configured);
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Shortcut-ul nu a putut fi salvat.",
+      );
+    } finally {
+      setIsSavingShortcut(false);
     }
   };
 
@@ -184,6 +260,11 @@ export const RunnerPanel = ({ api, projectId, test }: RunnerPanelProps) => {
     !snapshot.canStop &&
     !snapshot.canRetry &&
     !isStarting;
+  const isWaitingForContinue = [
+    "waiting_for_start",
+    "waiting_at_breakpoint",
+    "waiting_after_step",
+  ].includes(snapshot.state);
   const progress =
     snapshot.totalSteps === 0
       ? 0
@@ -237,8 +318,69 @@ export const RunnerPanel = ({ api, projectId, test }: RunnerPanelProps) => {
               Reîncearcă pasul curent
             </Button>
           ) : null}
+          {isWaitingForContinue ? (
+            <Button
+              onClick={() => {
+                void continueRun();
+              }}
+            >
+              Continuă ({shortcut})
+            </Button>
+          ) : null}
         </div>
       </div>
+
+      <fieldset
+        className="mt-4 grid gap-3 rounded-xl border border-app-border bg-app-surface p-4 md:grid-cols-3"
+        disabled={snapshot.canStop || isStarting}
+      >
+        <legend className="px-1 text-xs font-semibold">Mod și control</legend>
+        <label className="text-xs font-semibold text-app-muted">
+          Mod de rulare
+          <select
+            className="mt-1 min-h-10 w-full rounded-lg border border-app-border bg-app-surface px-3 text-sm"
+            value={runMode}
+            onChange={(event) => {
+              setRunMode(event.target.value as RunMode);
+            }}
+          >
+            <option value="automatic">Automat</option>
+            <option value="breakpoints">Breakpoints custom</option>
+            <option value="step_by_step">Pas cu pas</option>
+          </select>
+        </label>
+        <label className="flex min-h-10 items-center gap-2 self-end text-sm">
+          <input
+            type="checkbox"
+            checked={waitBeforeStart}
+            onChange={(event) => {
+              setWaitBeforeStart(event.target.checked);
+            }}
+          />
+          Așteaptă înainte de primul pas
+        </label>
+        <div className="flex items-end gap-2">
+          <label className="min-w-0 flex-1 text-xs font-semibold text-app-muted">
+            Shortcut Continue
+            <input
+              className="mt-1 min-h-10 w-full rounded-lg border border-app-border bg-app-surface px-3 text-sm"
+              value={shortcutInput}
+              onChange={(event) => {
+                setShortcutInput(event.target.value);
+              }}
+            />
+          </label>
+          <Button
+            variant="secondary"
+            disabled={isSavingShortcut}
+            onClick={() => {
+              void saveShortcut();
+            }}
+          >
+            Salvează
+          </Button>
+        </div>
+      </fieldset>
 
       <div
         className="mt-4 h-2 overflow-hidden rounded-full bg-app-border"
@@ -267,6 +409,36 @@ export const RunnerPanel = ({ api, projectId, test }: RunnerPanelProps) => {
             ? ""
             : ` (${snapshot.error.count} rezultate)`}
         </p>
+      ) : null}
+
+      {snapshot.pause !== undefined ? (
+        <section className="mt-4 rounded-xl border border-brand-300 bg-brand-50 p-4">
+          <p className="text-xs font-semibold tracking-wide text-brand-800 uppercase">
+            Pauză controlată
+          </p>
+          <h4 className="mt-1 font-semibold text-brand-950">
+            {snapshot.pause.title}
+          </h4>
+          {snapshot.pause.instructions ? (
+            <p className="mt-1 text-sm text-brand-900">
+              {snapshot.pause.instructions}
+            </p>
+          ) : null}
+          <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+            <div>
+              <dt className="text-app-muted">Pas anterior</dt>
+              <dd className="font-semibold">
+                {snapshot.pause.previousStepId ?? "—"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-app-muted">Pas următor</dt>
+              <dd className="font-semibold">
+                {snapshot.pause.nextStepId ?? "—"}
+              </dd>
+            </div>
+          </dl>
+        </section>
       ) : null}
 
       {snapshot.state === "waiting_for_fallback_decision" &&

@@ -16,10 +16,16 @@ import type {
   TestRun,
 } from "../../shared/persistence.js";
 import {
+  RUN_MODES,
   type RunnerErrorDetails,
+  type RunMode,
   type RunnerSnapshot,
   type StartRunInput,
 } from "../../shared/runner.js";
+import {
+  assertShortcutAvailable,
+  withContinueShortcut,
+} from "../../shared/shortcuts.js";
 import { toDeclarativeTestDefinition } from "../../shared/test-editor.js";
 import type {
   ActionStep,
@@ -70,6 +76,7 @@ interface RunnerSession {
   run: TestRun;
   snapshot: RunnerSnapshot;
   stopRequested: boolean;
+  mode: RunMode;
   pendingFallback?: PendingFallback;
 }
 
@@ -142,6 +149,10 @@ export class TestRunnerService {
 
     const project = this.requireProject(input.projectId);
     const test = this.requireTest(input.projectId, input.testId);
+    const mode = input.mode ?? "automatic";
+    if (!(RUN_MODES as readonly string[]).includes(mode)) {
+      throw new Error("Modul de rulare nu este valid.");
+    }
     const datasets = this.datasetRepository.listByTest(test.id);
     const dataset = this.selectDataset(datasets, input.datasetId);
     this.assertRunnable(test, datasets);
@@ -184,14 +195,30 @@ export class TestRunnerService {
       };
       this.runRepository.create(run);
       const snapshot: RunnerSnapshot = {
-        state: "running",
+        state: input.waitBeforeStart === true ? "waiting_for_start" : "running",
         run,
         currentStepIndex: 0,
         totalSteps: test.flowItems.length,
         ...(test.flowItems[0] === undefined
           ? {}
           : { currentStepId: test.flowItems[0].id }),
-        message: "Rularea a început.",
+        message:
+          input.waitBeforeStart === true
+            ? "Browserul este pregătit. Confirmă pornirea testului."
+            : "Rularea a început.",
+        ...(input.waitBeforeStart === true
+          ? {
+              pause: {
+                kind: "before_start",
+                title: "Pornire manuală",
+                instructions:
+                  "Apasă Continue sau shortcut-ul configurat pentru primul pas.",
+                ...(test.flowItems[0] === undefined
+                  ? {}
+                  : { nextStepId: test.flowItems[0].id }),
+              } as const,
+            }
+          : {}),
         canStop: true,
         canRetry: false,
       };
@@ -208,10 +235,13 @@ export class TestRunnerService {
         run,
         snapshot,
         stopRequested: false,
+        mode,
       };
       this.sessions.set(run.id, session);
       this.publish(session, snapshot);
-      void this.continueRun(session);
+      if (input.waitBeforeStart !== true) {
+        void this.continueRun(session);
+      }
       return copySnapshot(snapshot);
     } catch (error) {
       const details = this.toRunnerError(error);
@@ -243,6 +273,7 @@ export class TestRunnerService {
     const snapshotWithoutError = { ...session.snapshot };
     delete snapshotWithoutError.error;
     delete snapshotWithoutError.fallback;
+    delete snapshotWithoutError.pause;
     delete session.pendingFallback;
     this.publish(session, {
       ...snapshotWithoutError,
@@ -277,6 +308,72 @@ export class TestRunnerService {
     });
     void this.continueRun(session);
     return copySnapshot(session.snapshot);
+  }
+
+  public continueExecution(runId: string): RunnerSnapshot {
+    const session = this.requireSession(runId);
+    if (
+      ![
+        "waiting_for_start",
+        "waiting_at_breakpoint",
+        "waiting_after_step",
+      ].includes(session.snapshot.state)
+    ) {
+      throw new Error("Rularea nu așteaptă comanda Continue.");
+    }
+
+    if (session.snapshot.state === "waiting_at_breakpoint") {
+      const breakpoint =
+        session.test.flowItems[session.snapshot.currentStepIndex];
+      if (breakpoint === undefined || breakpoint.type !== "breakpoint") {
+        throw new Error("Breakpoint-ul curent nu mai există.");
+      }
+      const now = this.options.now().toISOString();
+      this.saveStepResult(
+        session,
+        breakpoint,
+        "passed",
+        {
+          logs: [
+            {
+              level: "info",
+              message: "Breakpoint continuat de utilizator.",
+            },
+          ],
+        },
+        now,
+      );
+      session.snapshot.currentStepIndex += 1;
+    }
+
+    const resumedSnapshot = { ...session.snapshot };
+    delete resumedSnapshot.pause;
+    this.publish(session, {
+      ...resumedSnapshot,
+      state: "running",
+      message: "Rularea continuă.",
+      canStop: true,
+      canRetry: false,
+    });
+    void this.continueRun(session);
+    return copySnapshot(session.snapshot);
+  }
+
+  public configureContinueShortcut(
+    projectId: string,
+    shortcut: string,
+  ): string {
+    const project = this.requireProject(projectId);
+    const normalized = assertShortcutAvailable(
+      project.shortcutConfig,
+      shortcut,
+    );
+    this.projectRepository.update({
+      ...project,
+      shortcutConfig: withContinueShortcut(project.shortcutConfig, normalized),
+      updatedAt: this.options.now().toISOString(),
+    });
+    return normalized;
   }
 
   public async runCurrentFallback(runId: string): Promise<RunnerSnapshot> {
@@ -361,6 +458,9 @@ export class TestRunnerService {
     );
     session.snapshot.currentStepIndex += 1;
     delete session.pendingFallback;
+    if (this.pauseAfterStep(session, pending.item)) {
+      return copySnapshot(session.snapshot);
+    }
     const nextSnapshot = { ...session.snapshot };
     delete nextSnapshot.error;
     delete nextSnapshot.fallback;
@@ -459,6 +559,28 @@ export class TestRunnerService {
         continue;
       }
 
+      if (item.type === "breakpoint") {
+        const previous = session.test.flowItems[index - 1];
+        const next = session.test.flowItems[index + 1];
+        this.publish(session, {
+          ...session.snapshot,
+          state: "waiting_at_breakpoint",
+          message: item.title ?? "Rularea este oprită la breakpoint.",
+          pause: {
+            kind: "breakpoint",
+            title: item.title ?? "Breakpoint",
+            ...(item.instructions === undefined
+              ? {}
+              : { instructions: item.instructions }),
+            ...(previous === undefined ? {} : { previousStepId: previous.id }),
+            ...(next === undefined ? {} : { nextStepId: next.id }),
+          },
+          canStop: true,
+          canRetry: false,
+        });
+        return;
+      }
+
       try {
         const result = await executeFlowItem(
           session.page,
@@ -482,6 +604,7 @@ export class TestRunnerService {
         }
         this.saveStepResult(session, item, "passed", result, stepStartedAt);
         session.snapshot.currentStepIndex += 1;
+        if (this.pauseAfterStep(session, item)) return;
       } catch (error) {
         const details = this.toRunnerError(error, item.id);
         if (
@@ -542,6 +665,7 @@ export class TestRunnerService {
     const completedSnapshot = { ...session.snapshot };
     delete completedSnapshot.currentStepId;
     delete completedSnapshot.error;
+    delete completedSnapshot.pause;
     this.publish(session, {
       ...completedSnapshot,
       state: "completed",
@@ -580,6 +704,35 @@ export class TestRunnerService {
       ...(fallbackIndex === undefined ? {} : { fallbackIndex }),
       logs: execution.logs,
     });
+  }
+
+  private pauseAfterStep(session: RunnerSession, item: TestFlowItem): boolean {
+    if (
+      session.mode !== "step_by_step" ||
+      (item.type !== "action" && item.type !== "check") ||
+      session.snapshot.currentStepIndex >= session.test.flowItems.length
+    ) {
+      return false;
+    }
+    const next = session.test.flowItems[session.snapshot.currentStepIndex];
+    const waitingSnapshot = { ...session.snapshot };
+    delete waitingSnapshot.error;
+    delete waitingSnapshot.fallback;
+    this.publish(session, {
+      ...waitingSnapshot,
+      state: "waiting_after_step",
+      run: session.run,
+      message: "Mod pas cu pas: confirmă următorul pas.",
+      pause: {
+        kind: "after_step",
+        title: `Pas finalizat: ${item.title}`,
+        previousStepId: item.id,
+        ...(next === undefined ? {} : { nextStepId: next.id }),
+      },
+      canStop: true,
+      canRetry: false,
+    });
+    return true;
   }
 
   private publishFallbackDecision(

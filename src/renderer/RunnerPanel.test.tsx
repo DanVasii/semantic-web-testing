@@ -5,13 +5,33 @@ import { userEvent } from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SemanticAppApi } from "../shared/ipc.js";
-import type { TestDefinition, TestRun } from "../shared/persistence.js";
+import type {
+  Project,
+  TestDefinition,
+  TestRun,
+} from "../shared/persistence.js";
 import type { RunnerSnapshot } from "../shared/runner.js";
 import { RunnerPanel } from "./RunnerPanel.js";
 
+const project: Project = {
+  id: "project-1",
+  name: "Magazin",
+  baseUrl: "https://example.test",
+  normalizedBaseUrl: "https://example.test/",
+  createdAt: "2026-07-24T10:00:00.000Z",
+  updatedAt: "2026-07-24T10:00:00.000Z",
+  browserConfig: {
+    browserType: "chromium",
+    sessionMode: "temporary",
+    headless: false,
+  },
+  aiConfig: {},
+  shortcutConfig: {},
+};
+
 const test: TestDefinition = {
   id: "test-1",
-  projectId: "project-1",
+  projectId: project.id,
   name: "Checkout",
   status: "valid",
   version: 2,
@@ -93,7 +113,7 @@ describe("RunnerPanel", () => {
       ),
       retryRunStep: vi.fn().mockResolvedValue(snapshot()),
     } as unknown as SemanticAppApi;
-    render(<RunnerPanel api={api} projectId={test.projectId} test={test} />);
+    render(<RunnerPanel api={api} project={project} test={test} />);
 
     await user.click(
       await screen.findByRole("button", { name: "Rulează testul" }),
@@ -101,6 +121,8 @@ describe("RunnerPanel", () => {
     expect(api.startRun).toHaveBeenCalledWith({
       projectId: test.projectId,
       testId: test.id,
+      mode: "automatic",
+      waitBeforeStart: false,
     });
     await user.click(
       await screen.findByRole("button", { name: "Oprește rularea" }),
@@ -151,7 +173,7 @@ describe("RunnerPanel", () => {
       ]),
       onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
     } as unknown as SemanticAppApi;
-    render(<RunnerPanel api={api} projectId={test.projectId} test={test} />);
+    render(<RunnerPanel api={api} project={project} test={test} />);
 
     await waitFor(() => {
       expect(screen.getByText(/v2 · passed/)).not.toBeNull();
@@ -197,7 +219,7 @@ describe("RunnerPanel", () => {
         }),
       ),
     } as unknown as SemanticAppApi;
-    render(<RunnerPanel api={api} projectId={test.projectId} test={test} />);
+    render(<RunnerPanel api={api} project={project} test={test} />);
 
     expect(await screen.findByText("Fallback 1 din 2")).not.toBeNull();
     expect(screen.getByText("Buton alternativ")).not.toBeNull();
@@ -208,5 +230,78 @@ describe("RunnerPanel", () => {
       screen.getByRole("button", { name: "Sari peste fallback" }),
     );
     expect(api.skipCurrentFallback).toHaveBeenCalledWith(run.id);
+  });
+
+  it("configures run mode, wait-before-start and the Continue shortcut", async () => {
+    const user = userEvent.setup();
+    const api = {
+      getRunnerStatus: vi.fn().mockResolvedValue({
+        state: "idle",
+        currentStepIndex: -1,
+        totalSteps: 0,
+        canStop: false,
+        canRetry: false,
+      }),
+      listTestRuns: vi.fn().mockResolvedValue([]),
+      listRunStepResults: vi.fn().mockResolvedValue([]),
+      onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
+      startRun: vi.fn().mockResolvedValue(snapshot()),
+      configureRunnerShortcut: vi.fn().mockResolvedValue("Alt+Enter"),
+    } as unknown as SemanticAppApi;
+    render(<RunnerPanel api={api} project={project} test={test} />);
+
+    await user.selectOptions(
+      await screen.findByLabelText("Mod de rulare"),
+      "step_by_step",
+    );
+    await user.click(screen.getByLabelText("Așteaptă înainte de primul pas"));
+    const shortcutInput = screen.getByLabelText("Shortcut Continue");
+    await user.clear(shortcutInput);
+    await user.type(shortcutInput, "alt+enter");
+    await user.click(screen.getByRole("button", { name: "Salvează" }));
+    expect(api.configureRunnerShortcut).toHaveBeenCalledWith(
+      project.id,
+      "alt+enter",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Rulează testul" }));
+    expect(api.startRun).toHaveBeenCalledWith({
+      projectId: project.id,
+      testId: test.id,
+      mode: "step_by_step",
+      waitBeforeStart: true,
+    });
+  });
+
+  it("continues a breakpoint with the button or Ctrl+Enter", async () => {
+    const user = userEvent.setup();
+    const waiting = snapshot({
+      state: "waiting_at_breakpoint",
+      pause: {
+        kind: "breakpoint",
+        title: "Verifică pagina",
+        instructions: "Confirmă vizual rezultatul.",
+        previousStepId: "step-previous",
+        nextStepId: "step-next",
+      },
+    });
+    const api = {
+      getRunnerStatus: vi.fn().mockResolvedValue(waiting),
+      listTestRuns: vi.fn().mockResolvedValue([]),
+      listRunStepResults: vi.fn().mockResolvedValue([]),
+      onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
+      continueRun: vi.fn().mockResolvedValue(waiting),
+    } as unknown as SemanticAppApi;
+    render(<RunnerPanel api={api} project={project} test={test} />);
+
+    expect(await screen.findByText("Verifică pagina")).not.toBeNull();
+    expect(screen.getByText("step-previous")).not.toBeNull();
+    expect(screen.getByText("step-next")).not.toBeNull();
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    expect(api.continueRun).toHaveBeenCalledWith(run.id);
+    await user.click(
+      screen.getByRole("button", { name: "Continuă (Ctrl+Enter)" }),
+    );
+    expect(api.continueRun).toHaveBeenCalledTimes(2);
   });
 });

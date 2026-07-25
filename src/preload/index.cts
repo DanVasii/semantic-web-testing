@@ -69,6 +69,8 @@ const RUNNER_CHANNELS = {
   start: "runner:start",
   stop: "runner:stop",
   retry: "runner:retry",
+  continue: "runner:continue",
+  configureShortcut: "runner:configure-shortcut",
   runFallback: "runner:run-fallback",
   skipFallback: "runner:skip-fallback",
   getStatus: "runner:get-status",
@@ -846,6 +848,27 @@ const semanticAppApi: SemanticAppApi = {
       throw new TypeError("Main process returned invalid runner data.");
     }
     return snapshot;
+  },
+  continueRun: async (runId) => {
+    const snapshot: unknown = await ipcRenderer.invoke(
+      RUNNER_CHANNELS.continue,
+      runId,
+    );
+    if (!isRunnerSnapshot(snapshot)) {
+      throw new TypeError("Main process returned invalid continue data.");
+    }
+    return snapshot;
+  },
+  configureRunnerShortcut: async (projectId, shortcut) => {
+    const configured: unknown = await ipcRenderer.invoke(
+      RUNNER_CHANNELS.configureShortcut,
+      projectId,
+      shortcut,
+    );
+    if (typeof configured !== "string") {
+      throw new TypeError("Main process returned an invalid shortcut.");
+    }
+    return configured;
   },
   runCurrentFallback: async (runId) => {
     const snapshot: unknown = await ipcRenderer.invoke(

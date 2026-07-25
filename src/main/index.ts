@@ -262,6 +262,14 @@ void app
     ipcMain.handle(RUNNER_CHANNELS.retry, (_event, runId: string) =>
       testRunnerService.retry(runId),
     );
+    ipcMain.handle(RUNNER_CHANNELS.continue, (_event, runId: string) =>
+      testRunnerService.continueExecution(runId),
+    );
+    ipcMain.handle(
+      RUNNER_CHANNELS.configureShortcut,
+      (_event, projectId: string, shortcut: string) =>
+        testRunnerService.configureContinueShortcut(projectId, shortcut),
+    );
     ipcMain.handle(RUNNER_CHANNELS.runFallback, (_event, runId: string) =>
       testRunnerService.runCurrentFallback(runId),
     );

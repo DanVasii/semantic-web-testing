@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BrowserManagerStatus } from "../../shared/browser-manager.js";
 import type { Project, TestDefinition } from "../../shared/persistence.js";
+import { getContinueShortcut } from "../../shared/shortcuts.js";
 import type { ActionType, TestFlowItem } from "../../shared/test-model.js";
 import {
   openApplicationDatabase,
@@ -547,5 +548,127 @@ describe("TestRunnerService", () => {
       expect(service.getStatus(project.id, test.id).state).toBe("completed");
     });
     expect(working.click).toHaveBeenCalledOnce();
+  });
+
+  it("stops exactly at an enabled breakpoint and continues on command", async () => {
+    const test = createReadyTest([
+      {
+        id: "breakpoint-1",
+        type: "breakpoint",
+        title: "Verifică pagina",
+        instructions: "Confirmă vizual coșul.",
+        enabled: true,
+      },
+      action("scroll", "scroll"),
+    ]);
+    const harness = createHarness();
+    const service = createService(harness.browser);
+    const started = await service.start({
+      projectId: project.id,
+      testId: test.id,
+      mode: "breakpoints",
+    });
+
+    await vi.waitFor(() => {
+      expect(service.getStatus(project.id, test.id).state).toBe(
+        "waiting_at_breakpoint",
+      );
+    });
+    expect(service.getStatus(project.id, test.id).pause).toMatchObject({
+      kind: "breakpoint",
+      title: "Verifică pagina",
+      instructions: "Confirmă vizual coșul.",
+      nextStepId: "scroll",
+    });
+    expect(harness.spies.mouseWheel).not.toHaveBeenCalled();
+
+    service.continueExecution(started.run?.id ?? "");
+    await vi.waitFor(() => {
+      expect(service.getStatus(project.id, test.id).state).toBe("completed");
+    });
+    expect(harness.spies.mouseWheel).toHaveBeenCalledOnce();
+    expect(
+      service.listStepResults(project.id, test.id, started.run?.id ?? "")[0],
+    ).toMatchObject({
+      stepId: "breakpoint-1",
+      status: "passed",
+    });
+  });
+
+  it("pauses after every action in step-by-step mode", async () => {
+    const test = createReadyTest([
+      action("scroll-1", "scroll"),
+      action("scroll-2", "scroll"),
+    ]);
+    const harness = createHarness();
+    const service = createService(harness.browser);
+    const started = await service.start({
+      projectId: project.id,
+      testId: test.id,
+      mode: "step_by_step",
+    });
+
+    await vi.waitFor(() => {
+      expect(service.getStatus(project.id, test.id).state).toBe(
+        "waiting_after_step",
+      );
+    });
+    expect(service.getStatus(project.id, test.id).pause).toMatchObject({
+      kind: "after_step",
+      previousStepId: "scroll-1",
+      nextStepId: "scroll-2",
+    });
+    expect(harness.spies.mouseWheel).toHaveBeenCalledOnce();
+
+    service.continueExecution(started.run?.id ?? "");
+    await vi.waitFor(() => {
+      expect(service.getStatus(project.id, test.id).state).toBe("completed");
+    });
+    expect(harness.spies.mouseWheel).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits before the first step when manual start is configured", async () => {
+    const test = createReadyTest([action("scroll", "scroll")]);
+    const harness = createHarness();
+    const service = createService(harness.browser);
+    const started = await service.start({
+      projectId: project.id,
+      testId: test.id,
+      waitBeforeStart: true,
+    });
+
+    expect(started).toMatchObject({
+      state: "waiting_for_start",
+      pause: {
+        kind: "before_start",
+        nextStepId: "scroll",
+      },
+    });
+    expect(harness.spies.mouseWheel).not.toHaveBeenCalled();
+    service.continueExecution(started.run?.id ?? "");
+    await vi.waitFor(() => {
+      expect(service.getStatus(project.id, test.id).state).toBe("completed");
+    });
+    expect(harness.spies.mouseWheel).toHaveBeenCalledOnce();
+  });
+
+  it("persists the Continue shortcut and rejects conflicts", () => {
+    projects.update({
+      ...project,
+      shortcutConfig: {
+        stopRun: "Alt+S",
+      },
+    });
+    const service = createService(createHarness().browser);
+
+    expect(
+      service.configureContinueShortcut(project.id, "control + enter"),
+    ).toBe("Ctrl+Enter");
+    expect(
+      getContinueShortcut(projects.findById(project.id)?.shortcutConfig ?? {}),
+    ).toBe("Ctrl+Enter");
+    expect(() =>
+      service.configureContinueShortcut(project.id, "alt+s"),
+    ).toThrow("este deja folosit de acțiunea stopRun");
   });
 });

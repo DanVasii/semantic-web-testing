@@ -129,4 +129,39 @@ describe("TestFlowEditor", () => {
     ).toBeGreaterThan(0);
     expect(screen.getByText(/repeated_component/)).not.toBeNull();
   });
+
+  it("adds, reorders and disables breakpoints as flow items", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    render(
+      <TestFlowEditor
+        api={api}
+        projectId={test.projectId}
+        test={test}
+        onTestSaved={vi.fn()}
+      />,
+    );
+
+    await user.selectOptions(
+      screen.getByLabelText("Tip pas nou"),
+      "breakpoint",
+    );
+    await user.click(screen.getByRole("button", { name: "+ Adaugă pas" }));
+    await user.selectOptions(screen.getByLabelText("Tip pas nou"), "action");
+    await user.click(screen.getByRole("button", { name: "+ Adaugă pas" }));
+    await user.click(
+      screen.getByRole("button", { name: "Mută pasul 1 în jos" }),
+    );
+    await user.click(screen.getAllByLabelText("Activ")[1]!);
+    await user.click(
+      screen.getByRole("button", { name: "Salvează flow-ul testului" }),
+    );
+
+    await waitFor(() => {
+      expect(api.saveTestFlow).toHaveBeenCalledWith(test.projectId, test.id, [
+        expect.objectContaining({ type: "action" }),
+        expect.objectContaining({ type: "breakpoint", enabled: false }),
+      ]);
+    });
+  });
 });

@@ -119,6 +119,8 @@ const createApi = (): {
     startRun: vi.fn(),
     stopRun: vi.fn(),
     retryRunStep: vi.fn(),
+    continueRun: vi.fn(),
+    configureRunnerShortcut: vi.fn(),
     runCurrentFallback: vi.fn(),
     skipCurrentFallback: vi.fn(),
     getRunnerStatus: vi.fn(),
