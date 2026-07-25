@@ -24,6 +24,8 @@ import type {
   BrowserSession,
   BasicAuthCredentials,
   DetectedBrowser,
+  ProjectBasicAuthSettings,
+  SaveProjectBasicAuthInput,
 } from "./browser-manager.js";
 
 export type AppInfoChannel = "app:get-info";
@@ -35,6 +37,9 @@ export const PROJECT_CHANNELS = {
   create: "projects:create",
   update: "projects:update",
   updateBrowserConfig: "projects:update-browser-config",
+  getBasicAuth: "projects:get-basic-auth",
+  saveBasicAuth: "projects:save-basic-auth",
+  deleteBasicAuth: "projects:delete-basic-auth",
   delete: "projects:delete",
 } as const;
 
@@ -120,6 +125,12 @@ export interface SemanticAppApi extends DatasetCrudApi {
     projectId: string,
     config: BrowserConfig,
   ) => Promise<ProjectOverview>;
+  getProjectBasicAuth: (projectId: string) => Promise<ProjectBasicAuthSettings>;
+  saveProjectBasicAuth: (
+    projectId: string,
+    input: SaveProjectBasicAuthInput,
+  ) => Promise<ProjectBasicAuthSettings>;
+  deleteProjectBasicAuth: (projectId: string) => Promise<boolean>;
   deleteProject: (projectId: string) => Promise<boolean>;
   detectBrowsers: () => Promise<DetectedBrowser[]>;
   launchBrowser: (options: BrowserLaunchOptions) => Promise<BrowserSession>;

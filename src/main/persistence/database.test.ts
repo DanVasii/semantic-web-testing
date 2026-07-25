@@ -52,6 +52,7 @@ describe("application database", () => {
       "imap_accounts",
       "page_versions",
       "pages",
+      "project_basic_auth",
       "project_settings",
       "projects",
       "runs",
@@ -60,7 +61,7 @@ describe("application database", () => {
       "test_versions",
       "tests",
     ]);
-    expect(version.user_version).toBe(12);
+    expect(version.user_version).toBe(13);
     expect(journalCount.count).toBe(APPLICATION_MIGRATIONS.length);
 
     database.close();

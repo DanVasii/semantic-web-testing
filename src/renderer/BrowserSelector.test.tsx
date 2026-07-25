@@ -74,6 +74,14 @@ const createApi = (): SemanticAppApi => ({
           statistics: { pageCount: 0, testCount: 0, runCount: 0 },
         }),
     ),
+  getProjectBasicAuth: vi.fn().mockResolvedValue({
+    projectId: project.id,
+    origin: "https://example.test",
+    username: "",
+    configured: false,
+  }),
+  saveProjectBasicAuth: vi.fn(),
+  deleteProjectBasicAuth: vi.fn(),
   deleteProject: vi.fn(),
   detectBrowsers: vi.fn().mockResolvedValue(detections),
   launchBrowser: vi.fn().mockResolvedValue({

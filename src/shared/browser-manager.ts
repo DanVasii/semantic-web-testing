@@ -52,6 +52,20 @@ export interface BasicAuthChallenge {
   url: string;
   origin: string;
   invalidCredentials: boolean;
+  suggestedUsername?: string;
+}
+
+export interface ProjectBasicAuthSettings {
+  projectId: string;
+  origin: string;
+  username: string;
+  configured: boolean;
+  updatedAt?: string;
+}
+
+export interface SaveProjectBasicAuthInput {
+  username: string;
+  password?: string;
 }
 
 export interface BrowserManagerStatus {

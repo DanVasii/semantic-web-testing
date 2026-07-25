@@ -171,6 +171,14 @@ const mapStepResult = (row: DatabaseRow): StepRunResult => {
   };
 };
 
+export interface ProjectBasicAuthRecord {
+  projectId: string;
+  origin: string;
+  username: string;
+  encryptedPassword: string;
+  updatedAt: string;
+}
+
 export class ProjectRepository {
   public constructor(private readonly database: DatabaseSync) {}
 
@@ -261,6 +269,58 @@ export class ProjectRepository {
       runCount: number(row, "run_count"),
       ...(lastRunAt === undefined ? {} : { lastRunAt }),
     };
+  }
+}
+
+export class ProjectBasicAuthRepository {
+  public constructor(private readonly database: DatabaseSync) {}
+
+  public findByProjectId(
+    projectId: string,
+  ): ProjectBasicAuthRecord | undefined {
+    const row = asRow(
+      this.database
+        .prepare("SELECT * FROM project_basic_auth WHERE project_id = ?")
+        .get(projectId),
+    );
+    if (row === undefined) return undefined;
+    return {
+      projectId: text(row, "project_id"),
+      origin: text(row, "origin"),
+      username: text(row, "username"),
+      encryptedPassword: text(row, "encrypted_password"),
+      updatedAt: text(row, "updated_at"),
+    };
+  }
+
+  public upsert(record: ProjectBasicAuthRecord): ProjectBasicAuthRecord {
+    this.database
+      .prepare(
+        `INSERT INTO project_basic_auth (
+          project_id, origin, username, encrypted_password, updated_at
+        ) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(project_id) DO UPDATE SET
+          origin = excluded.origin,
+          username = excluded.username,
+          encrypted_password = excluded.encrypted_password,
+          updated_at = excluded.updated_at`,
+      )
+      .run(
+        record.projectId,
+        record.origin,
+        record.username,
+        record.encryptedPassword,
+        record.updatedAt,
+      );
+    return record;
+  }
+
+  public delete(projectId: string): boolean {
+    return (
+      this.database
+        .prepare("DELETE FROM project_basic_auth WHERE project_id = ?")
+        .run(projectId).changes > 0
+    );
   }
 }
 

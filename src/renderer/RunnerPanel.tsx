@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { SemanticAppApi } from "../shared/ipc.js";
 import type {
   Project,
+  JsonValue,
   StepRunResult,
   TestDataset,
   TestDefinition,
   TestRun,
 } from "../shared/persistence.js";
 import type { RunnerSnapshot, RunMode } from "../shared/runner.js";
+import type { TestFlowItem } from "../shared/test-model.js";
 import { getContinueShortcut, matchesShortcut } from "../shared/shortcuts.js";
 import { Button } from "./components/Button.js";
 import { Modal } from "./components/Modal.js";
@@ -40,6 +42,116 @@ const stateLabels: Record<RunnerSnapshot["state"], string> = {
   failed: "Eșuat",
   stopped: "Oprit",
 };
+
+type DisplayStepStatus =
+  | "pending"
+  | "running"
+  | "waiting"
+  | "passed"
+  | "passed_with_fallback"
+  | "skipped"
+  | "failed"
+  | "stopped"
+  | "disabled";
+
+const stepStatusLabels: Record<DisplayStepStatus, string> = {
+  pending: "În așteptare",
+  running: "În curs",
+  waiting: "Așteaptă intervenție",
+  passed: "Finalizat",
+  passed_with_fallback: "Finalizat cu fallback",
+  skipped: "Sărit",
+  failed: "Eșuat",
+  stopped: "Oprit",
+  disabled: "Dezactivat",
+};
+
+const stepStatusClasses: Record<DisplayStepStatus, string> = {
+  pending: "bg-stone-100 text-app-muted",
+  running: "bg-blue-100 text-blue-800",
+  waiting: "bg-amber-100 text-amber-800",
+  passed: "bg-emerald-100 text-emerald-800",
+  passed_with_fallback: "bg-teal-100 text-teal-800",
+  skipped: "bg-stone-200 text-stone-700",
+  failed: "bg-red-100 text-red-800",
+  stopped: "bg-orange-100 text-orange-800",
+  disabled: "bg-stone-100 text-stone-500",
+};
+
+const getStepTitle = (item: TestFlowItem, index: number): string =>
+  item.title?.trim() || `Pas ${index + 1}`;
+
+const getStepDescription = (item: TestFlowItem): string | undefined => {
+  if (item.type === "breakpoint") return item.instructions;
+  if (item.type === "manual_intervention") {
+    return item.humanDescription || item.instructions;
+  }
+  return item.humanDescription;
+};
+
+const actionTypeLabels: Record<
+  Extract<TestFlowItem, { type: "action" }>["actionType"],
+  string
+> = {
+  navigate: "Navigare",
+  click: "Click",
+  fill: "Completare câmp",
+  select_option: "Selectare opțiune",
+  check: "Bifare",
+  uncheck: "Debifare",
+  press_key: "Apăsare tastă",
+  scroll: "Derulare",
+  wait_for_element: "Așteptare element",
+  wait_for_url: "Așteptare URL",
+  choose_repeated_item: "Selectare element repetat",
+  calendar_select: "Selectare în calendar",
+  manual_intervention: "Intervenție manuală",
+};
+
+const checkTypeLabels: Record<
+  Extract<TestFlowItem, { type: "check" }>["checkType"],
+  string
+> = {
+  element: "Element",
+  text: "Text",
+  url: "URL",
+  mysql: "MySQL",
+  imap: "E-mail",
+};
+
+const getStepKind = (item: TestFlowItem): string => {
+  if (item.type === "action") {
+    return `Acțiune · ${actionTypeLabels[item.actionType]}`;
+  }
+  if (item.type === "check") {
+    return `Verificare · ${checkTypeLabels[item.checkType]}`;
+  }
+  if (item.type === "breakpoint") return "Breakpoint";
+  return "Intervenție manuală";
+};
+
+const getLogMessage = (log: JsonValue): string => {
+  if (
+    typeof log === "object" &&
+    log !== null &&
+    !Array.isArray(log) &&
+    typeof log.message === "string"
+  ) {
+    return log.message;
+  }
+  if (typeof log === "string") return log;
+  return JSON.stringify(log);
+};
+
+const waitingStepStates = new Set<RunnerSnapshot["state"]>([
+  "waiting_at_breakpoint",
+  "waiting_after_step",
+  "waiting_for_missing_data",
+  "waiting_for_fallback_decision",
+  "waiting_for_manual_intervention",
+  "waiting_for_mysql_check",
+  "waiting_for_imap_check",
+]);
 
 export interface RunnerPanelProps {
   api: SemanticAppApi;
@@ -94,7 +206,7 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
         setSnapshot(status);
         setRuns(loadedRuns);
         setDatasets(loadedDatasets);
-        const latest = loadedRuns[0];
+        const latest = status.run ?? loadedRuns[0];
         if (latest !== undefined) {
           const results = await api.listRunStepResults(
             projectId,
@@ -115,6 +227,16 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
         return;
       }
       setSnapshot(nextSnapshot);
+      if (nextSnapshot.run !== undefined) {
+        void api
+          .listRunStepResults(projectId, test.id, nextSnapshot.run.id)
+          .then((results) => {
+            if (active) setStepResults(results);
+          })
+          .catch(() => {
+            // Snapshot-ul live rămâne util chiar dacă un refresh de logs eșuează.
+          });
+      }
       if (
         ["completed", "paused_on_error", "failed", "stopped"].includes(
           nextSnapshot.state,
@@ -133,6 +255,7 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
   const start = async (): Promise<void> => {
     setIsStarting(true);
     setError(undefined);
+    setStepResults([]);
     setSnapshot({
       state: "preparing",
       currentStepIndex: -1,
@@ -291,6 +414,28 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
           100,
           Math.max(0, (snapshot.currentStepIndex / snapshot.totalSteps) * 100),
         );
+  const stepResultsById = useMemo(
+    () => new Map(stepResults.map((result) => [result.stepId, result])),
+    [stepResults],
+  );
+  const getDisplayStatus = (
+    item: TestFlowItem,
+    index: number,
+  ): DisplayStepStatus => {
+    if (!item.enabled) return "disabled";
+    const result = stepResultsById.get(item.id);
+    if (result !== undefined) return result.status;
+    if (snapshot.state === "completed") return "passed";
+    if (snapshot.currentStepId === item.id) {
+      if (snapshot.state === "paused_on_error" || snapshot.state === "failed") {
+        return "failed";
+      }
+      if (snapshot.state === "stopped") return "stopped";
+      return waitingStepStates.has(snapshot.state) ? "waiting" : "running";
+    }
+    if (index < snapshot.currentStepIndex) return "passed";
+    return "pending";
+  };
 
   return (
     <section
@@ -417,6 +562,100 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
         Pas {Math.max(0, snapshot.currentStepIndex + 1)} din{" "}
         {snapshot.totalSteps}
       </p>
+
+      <section
+        className="mt-4 rounded-xl border border-app-border bg-app-surface p-4"
+        aria-labelledby="live-execution-heading"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h4 id="live-execution-heading" className="font-semibold">
+              Execuție pas cu pas
+            </h4>
+            <p className="mt-1 text-xs text-app-muted">
+              Vezi în timp real pasul curent, ce urmează și rezultatul fiecărei
+              acțiuni.
+            </p>
+          </div>
+          <span className="rounded-full bg-app-canvas px-2.5 py-1 text-xs font-semibold text-app-muted">
+            {test.flowItems.length} pași
+          </span>
+        </div>
+
+        {test.flowItems.length === 0 ? (
+          <p className="mt-3 text-sm text-app-muted">
+            Testul nu conține încă pași.
+          </p>
+        ) : (
+          <ol className="mt-4 grid gap-3">
+            {test.flowItems.map((item, index) => {
+              const result = stepResultsById.get(item.id);
+              const displayStatus = getDisplayStatus(item, index);
+              const isCurrent = snapshot.currentStepId === item.id;
+              const description = getStepDescription(item);
+              return (
+                <li
+                  key={item.id}
+                  aria-current={isCurrent ? "step" : undefined}
+                  className={`rounded-lg border p-3 transition-colors ${
+                    isCurrent
+                      ? "border-brand-400 bg-brand-50 ring-1 ring-brand-200"
+                      : "border-app-border bg-app-canvas"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex min-w-0 gap-3">
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-app-surface text-xs font-bold text-app-ink">
+                        {index + 1}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="font-semibold text-app-ink">
+                          {getStepTitle(item, index)}
+                        </p>
+                        <p className="mt-0.5 text-xs font-medium text-app-muted">
+                          {getStepKind(item)}
+                        </p>
+                        {description ? (
+                          <p className="mt-1 text-sm text-app-muted">
+                            {description}
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                    <span
+                      className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${stepStatusClasses[displayStatus]}`}
+                    >
+                      {stepStatusLabels[displayStatus]}
+                    </span>
+                  </div>
+
+                  {isCurrent && snapshot.message ? (
+                    <p
+                      role="status"
+                      className="mt-3 rounded-md bg-white/70 px-3 py-2 text-sm font-medium text-brand-900"
+                    >
+                      Acum: {snapshot.message}
+                    </p>
+                  ) : null}
+
+                  {result !== undefined && result.logs.length > 0 ? (
+                    <ul className="mt-3 grid gap-1 text-xs text-app-muted">
+                      {result.logs.map((log, logIndex) => (
+                        <li key={logIndex}>• {getLogMessage(log)}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {result?.error !== undefined ? (
+                    <p className="mt-2 text-xs text-red-700">
+                      {getLogMessage(result.error)}
+                    </p>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ol>
+        )}
+      </section>
 
       {snapshot.error ? (
         <p

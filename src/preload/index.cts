@@ -8,6 +8,7 @@ import type {
   BrowserSession,
   BrowserTab,
   DetectedBrowser,
+  ProjectBasicAuthSettings,
 } from "../shared/browser-manager.js";
 import type { ProjectOverview } from "../shared/projects.js";
 import type {
@@ -41,6 +42,9 @@ const PROJECT_CHANNELS = {
   create: "projects:create",
   update: "projects:update",
   updateBrowserConfig: "projects:update-browser-config",
+  getBasicAuth: "projects:get-basic-auth",
+  saveBasicAuth: "projects:save-basic-auth",
+  deleteBasicAuth: "projects:delete-basic-auth",
   delete: "projects:delete",
 } as const;
 const BROWSER_CHANNELS = {
@@ -200,7 +204,27 @@ const isBasicAuthChallenge = (value: unknown): value is BasicAuthChallenge =>
   "origin" in value &&
   typeof value.origin === "string" &&
   "invalidCredentials" in value &&
-  typeof value.invalidCredentials === "boolean";
+  typeof value.invalidCredentials === "boolean" &&
+  (!("suggestedUsername" in value) ||
+    value.suggestedUsername === undefined ||
+    typeof value.suggestedUsername === "string");
+
+const isProjectBasicAuthSettings = (
+  value: unknown,
+): value is ProjectBasicAuthSettings =>
+  typeof value === "object" &&
+  value !== null &&
+  "projectId" in value &&
+  typeof value.projectId === "string" &&
+  "origin" in value &&
+  typeof value.origin === "string" &&
+  "username" in value &&
+  typeof value.username === "string" &&
+  "configured" in value &&
+  typeof value.configured === "boolean" &&
+  (!("updatedAt" in value) ||
+    value.updatedAt === undefined ||
+    typeof value.updatedAt === "string");
 
 const isBrowserNavigationResult = (
   value: unknown,
@@ -776,6 +800,49 @@ const semanticAppApi: SemanticAppApi = {
         config,
       ),
     ),
+  getProjectBasicAuth: async (projectId) => {
+    const settings: unknown = await ipcRenderer.invoke(
+      PROJECT_CHANNELS.getBasicAuth,
+      projectId,
+    );
+
+    if (!isProjectBasicAuthSettings(settings)) {
+      throw new TypeError(
+        "Main process returned invalid HTTP Basic Auth settings.",
+      );
+    }
+
+    return settings;
+  },
+  saveProjectBasicAuth: async (projectId, input) => {
+    const settings: unknown = await ipcRenderer.invoke(
+      PROJECT_CHANNELS.saveBasicAuth,
+      projectId,
+      input,
+    );
+
+    if (!isProjectBasicAuthSettings(settings)) {
+      throw new TypeError(
+        "Main process returned invalid HTTP Basic Auth settings.",
+      );
+    }
+
+    return settings;
+  },
+  deleteProjectBasicAuth: async (projectId) => {
+    const wasDeleted: unknown = await ipcRenderer.invoke(
+      PROJECT_CHANNELS.deleteBasicAuth,
+      projectId,
+    );
+
+    if (typeof wasDeleted !== "boolean") {
+      throw new TypeError(
+        "Main process returned an invalid Basic Auth delete result.",
+      );
+    }
+
+    return wasDeleted;
+  },
   deleteProject: async (projectId) => {
     const wasDeleted: unknown = await ipcRenderer.invoke(
       PROJECT_CHANNELS.delete,

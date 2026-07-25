@@ -126,6 +126,8 @@ describe("RunnerPanel", () => {
       mode: "automatic",
       waitBeforeStart: false,
     });
+    expect(screen.getByText("Execuție pas cu pas")).not.toBeNull();
+    expect(screen.getByText("În curs")).not.toBeNull();
     await user.click(
       await screen.findByRole("button", { name: "Oprește rularea" }),
     );
@@ -181,6 +183,10 @@ describe("RunnerPanel", () => {
     await waitFor(() => {
       expect(screen.getByText(/v2 · passed/)).not.toBeNull();
     });
+    expect(screen.getByText("Execuție pas cu pas")).not.toBeNull();
+    expect(screen.getByText("Acțiune · Click")).not.toBeNull();
+    expect(screen.getByText("Finalizat")).not.toBeNull();
+    expect(screen.getByText("• Click executat.")).not.toBeNull();
     expect(screen.getByText("Rezultate și logs (1)")).not.toBeNull();
   });
 

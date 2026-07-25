@@ -15,6 +15,7 @@ import {
 import { Button } from "./components/Button.js";
 import { Input } from "./components/Input.js";
 import { Select } from "./components/Select.js";
+import { ProjectBasicAuthSettingsPanel } from "./ProjectBasicAuthSettings.js";
 
 export interface BrowserSelectorProps {
   api: SemanticAppApi;
@@ -510,6 +511,7 @@ export const BrowserSelector = ({
           {browserStatus.message}
         </p>
       ) : null}
+      <ProjectBasicAuthSettingsPanel api={api} project={project} />
     </section>
   );
 };

@@ -262,6 +262,21 @@ export const APPLICATION_MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    version: 13,
+    name: "create_project_basic_auth",
+    up(database) {
+      database.exec(`
+        CREATE TABLE project_basic_auth (
+          project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+          origin TEXT NOT NULL,
+          username TEXT NOT NULL,
+          encrypted_password TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+      `);
+    },
+  },
 ];
 
 export const assertValidMigrations = (

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, safeStorage } from "electron";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +16,7 @@ import {
 import type {
   BasicAuthCredentials,
   BrowserLaunchOptions,
+  SaveProjectBasicAuthInput,
 } from "../shared/browser-manager.js";
 import type { BrowserConfig } from "../shared/persistence.js";
 import type {
@@ -37,6 +38,7 @@ import {
 import {
   DatasetRepository,
   PageRepository,
+  ProjectBasicAuthRepository,
   ProjectRepository,
   RunRepository,
   TestRepository,
@@ -47,6 +49,7 @@ import { DatasetsService } from "./datasets-service.js";
 import { TestsService } from "./tests-service.js";
 import { TestRunnerService } from "./runner/test-runner-service.js";
 import { RecorderService } from "./recorder/recorder-service.js";
+import { ProjectBasicAuthService } from "./project-basic-auth-service.js";
 import { resolveRendererTarget } from "./renderer-target.js";
 import { createMainWindowOptions } from "./window-options.js";
 
@@ -107,6 +110,9 @@ void app
     const projectRepository = new ProjectRepository(
       applicationDatabase.connection,
     );
+    const projectBasicAuthRepository = new ProjectBasicAuthRepository(
+      applicationDatabase.connection,
+    );
     const pageRepository = new PageRepository(applicationDatabase.connection);
     const testRepository = new TestRepository(applicationDatabase.connection);
     const datasetRepository = new DatasetRepository(
@@ -117,6 +123,28 @@ void app
       createId: randomUUID,
       now: () => new Date(),
     });
+    const projectBasicAuthService = new ProjectBasicAuthService(
+      projectRepository,
+      projectBasicAuthRepository,
+      {
+        now: () => new Date(),
+        secrets: {
+          encrypt: (value) => {
+            if (!safeStorage.isEncryptionAvailable()) {
+              throw new Error(
+                "Criptarea sistemului nu este disponibilă; credentialele nu au fost salvate.",
+              );
+            }
+            return safeStorage.encryptString(value).toString("base64");
+          },
+          decrypt: (value) =>
+            safeStorage.decryptString(Buffer.from(value, "base64")),
+        },
+      },
+    );
+    browserManager.setBasicAuthResolver((projectId, origin) =>
+      projectBasicAuthService.resolve(projectId, origin),
+    );
     const pageAnalysisService = new PageAnalysisService(
       projectRepository,
       pageRepository,
@@ -199,6 +227,36 @@ void app
       (_event, projectId: string, config: BrowserConfig) =>
         projectsService.updateBrowserConfig(projectId, config),
     );
+    ipcMain.handle(PROJECT_CHANNELS.getBasicAuth, (_event, projectId: string) =>
+      projectBasicAuthService.get(projectId),
+    );
+    ipcMain.handle(
+      PROJECT_CHANNELS.saveBasicAuth,
+      async (_event, projectId: string, input: SaveProjectBasicAuthInput) => {
+        const settings = projectBasicAuthService.save(projectId, input);
+        const credentials = projectBasicAuthService.resolve(
+          projectId,
+          settings.origin,
+        );
+        if (credentials !== undefined) {
+          await browserManager.clearBasicAuthCredentialsForProject(projectId);
+          browserManager.setBasicAuthCredentials(
+            projectId,
+            settings.origin,
+            credentials,
+          );
+        }
+        return settings;
+      },
+    );
+    ipcMain.handle(
+      PROJECT_CHANNELS.deleteBasicAuth,
+      async (_event, projectId: string) => {
+        const deleted = projectBasicAuthService.delete(projectId);
+        await browserManager.clearBasicAuthCredentialsForProject(projectId);
+        return deleted;
+      },
+    );
     ipcMain.handle(PROJECT_CHANNELS.delete, (_event, projectId: string) =>
       projectsService.delete(projectId),
     );
@@ -216,8 +274,14 @@ void app
     );
     ipcMain.handle(
       BROWSER_CHANNELS.submitBasicAuth,
-      (_event, credentials: BasicAuthCredentials) =>
-        browserManager.submitBasicAuth(credentials),
+      async (_event, credentials: BasicAuthCredentials) => {
+        const challenge = browserManager.getStatus().basicAuthChallenge;
+        const result = await browserManager.submitBasicAuth(credentials);
+        if (result.state === "opened" && challenge !== undefined) {
+          projectBasicAuthService.save(challenge.projectId, credentials);
+        }
+        return result;
+      },
     );
     ipcMain.handle(BROWSER_CHANNELS.cancelBasicAuth, () =>
       browserManager.cancelBasicAuth(),

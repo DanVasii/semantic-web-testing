@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -44,6 +51,14 @@ const createApi = (
   createProject: vi.fn().mockResolvedValue(overview),
   updateProject: vi.fn().mockResolvedValue(overview),
   updateBrowserConfig: vi.fn().mockResolvedValue(overview),
+  getProjectBasicAuth: vi.fn().mockResolvedValue({
+    projectId: overview.project.id,
+    origin: "https://example.test",
+    username: "",
+    configured: false,
+  }),
+  saveProjectBasicAuth: vi.fn(),
+  deleteProjectBasicAuth: vi.fn(),
   deleteProject: vi.fn().mockResolvedValue(true),
   detectBrowsers: vi.fn().mockResolvedValue([]),
   launchBrowser: vi.fn(),
@@ -216,16 +231,16 @@ describe("ProjectDashboard", () => {
       });
     });
 
-    expect(
-      await screen.findByRole("dialog", {
-        name: "Autentificare HTTP necesară",
-      }),
-    ).not.toBeNull();
+    const authDialog = await screen.findByRole("dialog", {
+      name: "Autentificare HTTP necesară",
+    });
     expect(screen.getByText("Așteaptă autentificarea")).not.toBeNull();
-    await user.type(screen.getByLabelText("Username"), "tester");
-    await user.type(screen.getByLabelText("Parolă"), "secret");
+    await user.type(within(authDialog).getByLabelText("Username"), "tester");
+    await user.type(within(authDialog).getByLabelText("Parolă"), "secret");
     await user.click(
-      screen.getByRole("button", { name: "Autentifică și continuă" }),
+      within(authDialog).getByRole("button", {
+        name: "Autentifică și continuă",
+      }),
     );
 
     await waitFor(() => {

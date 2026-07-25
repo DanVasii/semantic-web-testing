@@ -71,6 +71,12 @@ interface PendingBasicAuth {
   page: Page;
 }
 
+export type BasicAuthCredentialsResolver = (
+  projectId: string,
+  origin: string,
+) =>
+  BasicAuthCredentials | undefined | Promise<BasicAuthCredentials | undefined>;
+
 export interface PlaywrightBrowserManagerOptions {
   browserTypes?: Record<BrowserEngine, BrowserTypeAdapter>;
   cdpConnectAttempts?: number;
@@ -125,6 +131,7 @@ export class PlaywrightBrowserManager implements BrowserManager {
     string,
     BasicAuthCredentials
   >();
+  private basicAuthResolver: BasicAuthCredentialsResolver | undefined;
   private browser: Browser | undefined;
   private context: BrowserContext | undefined;
   private runtimeKind: RuntimeKind | undefined;
@@ -172,6 +179,34 @@ export class PlaywrightBrowserManager implements BrowserManager {
     );
   }
 
+  public setBasicAuthResolver(resolver: BasicAuthCredentialsResolver): void {
+    this.basicAuthResolver = resolver;
+  }
+
+  public setBasicAuthCredentials(
+    projectId: string,
+    origin: string,
+    credentials: BasicAuthCredentials,
+  ): void {
+    this.assertValidBasicAuthCredentials(credentials);
+    this.basicAuthCredentials.set(this.basicAuthKey(projectId, origin), {
+      ...credentials,
+    });
+  }
+
+  public async clearBasicAuthCredentialsForProject(
+    projectId: string,
+  ): Promise<void> {
+    const prefix = `${projectId}\u0000`;
+    for (const key of this.basicAuthCredentials.keys()) {
+      if (key.startsWith(prefix)) this.basicAuthCredentials.delete(key);
+    }
+    if (this.session?.projectId === projectId) {
+      this.appliedBasicAuthOrigin = undefined;
+      await this.context?.setHTTPCredentials(null).catch(() => undefined);
+    }
+  }
+
   public getStatus(): BrowserManagerStatus {
     return { ...this.status };
   }
@@ -206,7 +241,7 @@ export class PlaywrightBrowserManager implements BrowserManager {
 
     const normalizedUrl = this.requireWebUrl(url);
     const origin = new URL(normalizedUrl).origin;
-    await this.applyBasicAuthForOrigin(context, origin);
+    await this.applyBasicAuthForOrigin(context, projectId, origin);
     const page = await context.newPage();
     const tabId = this.trackPage(projectId, page);
     const pending = {
@@ -220,7 +255,7 @@ export class PlaywrightBrowserManager implements BrowserManager {
     try {
       return await this.navigateWithBasicAuth(
         pending,
-        this.basicAuthCredentials.has(origin),
+        this.basicAuthCredentials.has(this.basicAuthKey(projectId, origin)),
       );
     } catch (error) {
       this.pages.delete(tabId);
@@ -282,7 +317,10 @@ export class PlaywrightBrowserManager implements BrowserManager {
       username: credentials.username,
       password: credentials.password,
     };
-    this.basicAuthCredentials.set(pending.origin, safeCredentials);
+    this.basicAuthCredentials.set(
+      this.basicAuthKey(pending.projectId, pending.origin),
+      safeCredentials,
+    );
     await context.setHTTPCredentials(safeCredentials);
     this.appliedBasicAuthOrigin = pending.origin;
     return this.navigateWithBasicAuth(pending, true);
@@ -660,8 +698,10 @@ export class PlaywrightBrowserManager implements BrowserManager {
     pending: PendingBasicAuth,
     invalidCredentials: boolean,
   ): Promise<BrowserNavigationResult> {
+    const credentialsKey = this.basicAuthKey(pending.projectId, pending.origin);
+    const attemptedCredentials = this.basicAuthCredentials.get(credentialsKey);
     if (invalidCredentials) {
-      this.basicAuthCredentials.delete(pending.origin);
+      this.basicAuthCredentials.delete(credentialsKey);
       await this.context?.setHTTPCredentials(null).catch(() => undefined);
       this.appliedBasicAuthOrigin = undefined;
     }
@@ -671,6 +711,9 @@ export class PlaywrightBrowserManager implements BrowserManager {
       url: pending.url,
       origin: pending.origin,
       invalidCredentials,
+      ...(attemptedCredentials === undefined
+        ? {}
+        : { suggestedUsername: attemptedCredentials.username }),
     };
     this.pendingBasicAuth = pending;
     this.setStatus({
@@ -693,9 +736,18 @@ export class PlaywrightBrowserManager implements BrowserManager {
 
   private async applyBasicAuthForOrigin(
     context: BrowserContext,
+    projectId: string,
     origin: string,
   ): Promise<void> {
-    const credentials = this.basicAuthCredentials.get(origin);
+    const credentialsKey = this.basicAuthKey(projectId, origin);
+    let credentials = this.basicAuthCredentials.get(credentialsKey);
+    if (credentials === undefined && this.basicAuthResolver !== undefined) {
+      credentials = await this.basicAuthResolver(projectId, origin);
+      if (credentials !== undefined) {
+        this.assertValidBasicAuthCredentials(credentials);
+        this.basicAuthCredentials.set(credentialsKey, { ...credentials });
+      }
+    }
 
     if (credentials !== undefined) {
       await context.setHTTPCredentials(credentials);
@@ -704,6 +756,10 @@ export class PlaywrightBrowserManager implements BrowserManager {
       await context.setHTTPCredentials(null);
       this.appliedBasicAuthOrigin = undefined;
     }
+  }
+
+  private basicAuthKey(projectId: string, origin: string): string {
+    return `${projectId}\u0000${origin}`;
   }
 
   private assertValidBasicAuthCredentials(

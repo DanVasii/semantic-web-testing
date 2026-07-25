@@ -29,11 +29,11 @@ export const BasicAuthDialog = ({
 
   useEffect(() => {
     if (open) {
-      setUsername("");
+      setUsername(challenge?.suggestedUsername ?? "");
       setPassword("");
       setUsernameError(undefined);
     }
-  }, [challenge?.origin, open]);
+  }, [challenge?.origin, challenge?.suggestedUsername, open]);
 
   useEffect(() => {
     if (challenge?.invalidCredentials) {
@@ -87,8 +87,9 @@ export const BasicAuthDialog = ({
           }}
         />
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          Credentialele sunt păstrate numai în memoria aplicației și sunt șterse
-          complet la închidere.
+          După autentificarea reușită, credentialele sunt criptate și salvate
+          pentru acest proiect. Le poți edita oricând din configurarea
+          browserului.
         </p>
         <div className="flex justify-end gap-3 border-t border-app-border pt-4">
           <Button

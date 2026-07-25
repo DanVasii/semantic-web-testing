@@ -17,7 +17,7 @@ const challenge: BasicAuthChallenge = {
 afterEach(cleanup);
 
 describe("BasicAuthDialog", () => {
-  it("collects credentials without persisting or displaying the password", async () => {
+  it("collects credentials without displaying the password", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     render(
@@ -46,7 +46,7 @@ describe("BasicAuthDialog", () => {
       username: "tester",
       password: "secret",
     });
-    expect(screen.getByText(/șterse complet la închidere/i)).not.toBeNull();
+    expect(screen.getByText(/criptate și salvate/i)).not.toBeNull();
   });
 
   it("shows invalid credentials and supports cancellation", async () => {
@@ -54,7 +54,11 @@ describe("BasicAuthDialog", () => {
     const onCancel = vi.fn();
     render(
       <BasicAuthDialog
-        challenge={{ ...challenge, invalidCredentials: true }}
+        challenge={{
+          ...challenge,
+          invalidCredentials: true,
+          suggestedUsername: "saved-user",
+        }}
         isSubmitting={false}
         open
         onCancel={onCancel}
@@ -65,6 +69,12 @@ describe("BasicAuthDialog", () => {
     expect(
       screen.getByText("Username-ul sau parola sunt invalide."),
     ).not.toBeNull();
+    const username = screen.getByLabelText("Username");
+    expect(username).toBeInstanceOf(HTMLInputElement);
+    if (!(username instanceof HTMLInputElement)) {
+      throw new Error("Expected a username input.");
+    }
+    expect(username.value).toBe("saved-user");
     await user.click(screen.getByRole("button", { name: "Anulează" }));
     expect(onCancel).toHaveBeenCalledOnce();
   });

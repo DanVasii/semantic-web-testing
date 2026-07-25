@@ -472,12 +472,75 @@ describe("PlaywrightBrowserManager HTTP Basic Auth", () => {
     });
     expect(result).toMatchObject({
       state: "waiting_for_basic_auth",
-      challenge: { invalidCredentials: true },
+      challenge: {
+        invalidCredentials: true,
+        suggestedUsername: "tester",
+      },
     });
     const serializedStatus = JSON.stringify(manager.getStatus());
     expect(serializedStatus).toContain("Credentialele HTTP sunt invalide.");
-    expect(serializedStatus).not.toContain("tester");
     expect(serializedStatus).not.toContain("secret-value");
+  });
+
+  it("loads saved project credentials before navigating", async () => {
+    const { engines, manager } = createManager();
+    const resolver = vi.fn().mockResolvedValue({
+      username: "saved-user",
+      password: "saved-secret",
+    });
+    manager.setBasicAuthResolver(resolver);
+    engines.chromium.page.goto.mockResolvedValueOnce(successfulResponse);
+    await manager.launch(launchOptions("chromium", "playwright"));
+
+    const result = await manager.openProjectUrl(
+      "project-1",
+      "https://secure.example.test/account",
+    );
+
+    expect(resolver).toHaveBeenCalledWith(
+      "project-1",
+      "https://secure.example.test",
+    );
+    expect(
+      engines.chromium.regularContext.setHTTPCredentials,
+    ).toHaveBeenCalledWith({
+      username: "saved-user",
+      password: "saved-secret",
+    });
+    expect(result.state).toBe("opened");
+  });
+
+  it("keeps cached credentials isolated between projects on the same origin", async () => {
+    const { engines, manager } = createManager();
+    manager.setBasicAuthCredentials(
+      "project-1",
+      "https://secure.example.test",
+      { username: "first-user", password: "first-secret" },
+    );
+    manager.setBasicAuthCredentials(
+      "project-2",
+      "https://secure.example.test",
+      { username: "second-user", password: "second-secret" },
+    );
+    await manager.clearBasicAuthCredentialsForProject("project-1");
+    engines.chromium.page.goto.mockResolvedValueOnce(successfulResponse);
+    await manager.launch(
+      launchOptions("chromium", "playwright", undefined, {
+        projectId: "project-2",
+      }),
+    );
+
+    await manager.openProjectUrl(
+      "project-2",
+      "https://secure.example.test/account",
+    );
+
+    expect(
+      engines.chromium.regularContext.setHTTPCredentials,
+    ).toHaveBeenLastCalledWith({
+      username: "second-user",
+      password: "second-secret",
+    });
   });
 
   it("keeps valid credentials in memory and continues navigation", async () => {
