@@ -33,6 +33,7 @@ export type RunnerErrorCode =
   | "locator_not_found"
   | "locator_ambiguous"
   | "missing_data"
+  | "wipe_failed"
   | "step_failed"
   | "unsupported_step";
 
@@ -69,6 +70,29 @@ export interface MissingDataDetails {
   locator: LocatorDefinition;
 }
 
+export type WipeResource =
+  | "navigation"
+  | "cookies"
+  | "localStorage"
+  | "sessionStorage"
+  | "indexedDB"
+  | "cacheStorage"
+  | "serviceWorkers"
+  | "permissions";
+
+export interface WipeLogEntry {
+  resource: WipeResource;
+  status: "cleared" | "skipped" | "failed";
+  message: string;
+  count?: number;
+}
+
+export interface WipeDetails {
+  origin: string;
+  status: "completed" | "failed";
+  entries: WipeLogEntry[];
+}
+
 export interface RunnerSnapshot {
   state: RunnerState;
   run?: TestRun;
@@ -80,6 +104,7 @@ export interface RunnerSnapshot {
   fallback?: FallbackDecision;
   pause?: RunnerPauseDetails;
   missingData?: MissingDataDetails;
+  wipe?: WipeDetails;
   canStop: boolean;
   canRetry: boolean;
 }

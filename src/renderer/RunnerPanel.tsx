@@ -430,6 +430,49 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
         </p>
       ) : null}
 
+      {snapshot.wipe !== undefined ? (
+        <section
+          className={`mt-4 rounded-xl border p-4 ${
+            snapshot.wipe.status === "completed"
+              ? "border-emerald-300 bg-emerald-50"
+              : "border-red-300 bg-red-50"
+          }`}
+          aria-label="Log wipe"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <p className="text-xs font-semibold tracking-wide uppercase">
+                Wipe înainte de test
+              </p>
+              <h4 className="mt-1 font-semibold">
+                {snapshot.wipe.status === "completed"
+                  ? "Curățare finalizată"
+                  : "Curățare eșuată critic"}
+              </h4>
+            </div>
+            <code className="rounded bg-white/70 px-2 py-1 text-xs">
+              {snapshot.wipe.origin}
+            </code>
+          </div>
+          <ol className="mt-3 grid gap-2 text-sm">
+            {snapshot.wipe.entries.map((entry, index) => (
+              <li
+                key={`${entry.resource}-${index}`}
+                className="flex flex-wrap items-start justify-between gap-2 rounded-lg bg-white/70 px-3 py-2"
+              >
+                <span>
+                  <strong>{entry.resource}</strong> · {entry.message}
+                </span>
+                <span className="font-mono text-xs uppercase">
+                  {entry.status}
+                  {entry.count === undefined ? "" : ` · ${entry.count}`}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
+
       {snapshot.pause !== undefined ? (
         <section className="mt-4 rounded-xl border border-brand-300 bg-brand-50 p-4">
           <p className="text-xs font-semibold tracking-wide text-brand-800 uppercase">
@@ -609,6 +652,12 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
           <div>
             <dt className="text-app-muted">Mod</dt>
             <dd className="font-semibold text-app-ink">{runMode}</dd>
+          </div>
+          <div>
+            <dt className="text-app-muted">Wipe înainte</dt>
+            <dd className="font-semibold text-app-ink">
+              {test.wipeBeforeRun ? "Activ" : "Dezactivat"}
+            </dd>
           </div>
         </dl>
         <label className="mt-4 grid gap-1.5 text-sm font-semibold text-app-ink">

@@ -119,10 +119,59 @@ const createLocator = () => {
 const createHarness = (locator = createLocator()) => {
   const goto = vi.fn().mockResolvedValue(null);
   const waitForURL = vi.fn().mockResolvedValue(undefined);
-  const evaluate = vi.fn().mockResolvedValue(undefined);
+  const evaluate = vi.fn().mockResolvedValue([
+    {
+      resource: "localStorage",
+      status: "cleared",
+      message: "localStorage a fost șters.",
+      count: 1,
+    },
+    {
+      resource: "sessionStorage",
+      status: "cleared",
+      message: "sessionStorage a fost șters.",
+      count: 1,
+    },
+    {
+      resource: "indexedDB",
+      status: "cleared",
+      message: "Bazele IndexedDB au fost șterse.",
+      count: 1,
+    },
+    {
+      resource: "cacheStorage",
+      status: "cleared",
+      message: "Cache Storage a fost șters.",
+      count: 1,
+    },
+    {
+      resource: "serviceWorkers",
+      status: "cleared",
+      message: "Service workers au fost șterși.",
+      count: 1,
+    },
+    {
+      resource: "permissions",
+      status: "skipped",
+      message: "Permisiunile altor origin-uri sunt păstrate.",
+    },
+  ]);
   const keyboardPress = vi.fn().mockResolvedValue(undefined);
   const mouseWheel = vi.fn().mockResolvedValue(undefined);
+  const setContent = vi.fn().mockResolvedValue(undefined);
   const clearCookies = vi.fn().mockResolvedValue(undefined);
+  const cookies = vi.fn().mockResolvedValue([
+    {
+      name: "session",
+      value: "one",
+      domain: ".example.test",
+      path: "/",
+      expires: -1,
+      httpOnly: false,
+      secure: true,
+      sameSite: "Lax",
+    },
+  ]);
   const pageLocator = vi.fn().mockReturnValue(locator);
   const page = {
     locator: pageLocator,
@@ -131,12 +180,14 @@ const createHarness = (locator = createLocator()) => {
     waitForLoadState: vi.fn().mockResolvedValue(undefined),
     waitForTimeout: vi.fn().mockResolvedValue(undefined),
     evaluate,
+    setContent,
     keyboard: { press: keyboardPress },
     mouse: { wheel: mouseWheel },
     url: vi.fn().mockReturnValue("https://example.test/checkout"),
   } as unknown as Page;
   const context = {
     clearCookies,
+    cookies,
   } as unknown as BrowserContext;
   let status: BrowserManagerStatus = { state: "idle" };
   const browser: RunnerBrowserGateway = {
@@ -185,11 +236,13 @@ const createHarness = (locator = createLocator()) => {
     page,
     spies: {
       clearCookies,
+      cookies,
       evaluate,
       goto,
       keyboardPress,
       mouseWheel,
       pageLocator,
+      setContent,
       waitForURL,
     },
   };
@@ -307,6 +360,86 @@ describe("TestRunnerService", () => {
     expect(results).toHaveLength(10);
     expect(results.every((result) => result.status === "passed")).toBe(true);
     expect(results.every((result) => result.logs.length > 0)).toBe(true);
+  });
+
+  it("stops before creating the run when wipe fails critically", async () => {
+    const test = createReadyTest([action("scroll", "scroll")], true);
+    const harness = createHarness();
+    harness.spies.evaluate.mockResolvedValue([
+      {
+        resource: "localStorage",
+        status: "cleared",
+        message: "localStorage a fost șters.",
+        count: 1,
+      },
+      {
+        resource: "indexedDB",
+        status: "failed",
+        message: "Ștergerea este blocată.",
+      },
+    ]);
+    const service = createService(harness.browser);
+
+    await expect(
+      service.start({
+        projectId: project.id,
+        testId: test.id,
+      }),
+    ).rejects.toThrow("Wipe critic eșuat");
+
+    expect(service.getStatus(project.id, test.id)).toMatchObject({
+      state: "failed",
+      error: { code: "wipe_failed" },
+      wipe: {
+        origin: "https://example.test",
+        status: "failed",
+      },
+    });
+    expect(service.listRuns(project.id, test.id)).toEqual([]);
+    expect(harness.spies.mouseWheel).not.toHaveBeenCalled();
+  });
+
+  it("wipes the exact origin in a persistent browser profile", async () => {
+    projects.update({
+      ...project,
+      browserConfig: {
+        ...project.browserConfig,
+        sessionMode: "persistent_profile",
+        profilePath: "D:\\profiles\\semantic-test",
+      },
+    });
+    const test = createReadyTest([action("scroll", "scroll")], true);
+    const harness = createHarness();
+    const service = createService(harness.browser);
+
+    await service.start({
+      projectId: project.id,
+      testId: test.id,
+    });
+    await vi.waitFor(() => {
+      expect(service.getStatus(project.id, test.id).state).toBe("completed");
+    });
+
+    expect(harness.browser.launch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionMode: "persistent_profile",
+        profilePath: "D:\\profiles\\semantic-test",
+      }),
+    );
+    expect(service.getStatus(project.id, test.id).wipe).toMatchObject({
+      origin: "https://example.test",
+      status: "completed",
+    });
+    const cookieFilter: unknown = harness.spies.clearCookies.mock.calls[0]?.[0];
+    if (
+      typeof cookieFilter !== "object" ||
+      cookieFilter === null ||
+      !("domain" in cookieFilter) ||
+      !(cookieFilter.domain instanceof RegExp)
+    ) {
+      throw new Error("Filtrul cookie nu este RegExp.");
+    }
+    expect(cookieFilter.domain.test("other.test")).toBe(false);
   });
 
   it("blocks on locator ambiguity, saves failure and retries the current step", async () => {

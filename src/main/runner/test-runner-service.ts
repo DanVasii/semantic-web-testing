@@ -22,6 +22,7 @@ import {
   type RunMode,
   type RunnerSnapshot,
   type StartRunInput,
+  type WipeDetails,
 } from "../../shared/runner.js";
 import {
   assertShortcutAvailable,
@@ -48,6 +49,7 @@ import {
   StepExecutionError,
   type StepExecutionResult,
 } from "./step-executor.js";
+import { wipeBrowserStateForOrigin, WipeError } from "./wipe-browser-state.js";
 
 export interface RunnerBrowserGateway {
   detectAvailableBrowsers: () => Promise<DetectedBrowser[]>;
@@ -106,6 +108,14 @@ const activeBrowserStates = new Set([
 
 const copySnapshot = (snapshot: RunnerSnapshot): RunnerSnapshot => ({
   ...snapshot,
+  ...(snapshot.wipe === undefined
+    ? {}
+    : {
+        wipe: {
+          ...snapshot.wipe,
+          entries: snapshot.wipe.entries.map((entry) => ({ ...entry })),
+        },
+      }),
   ...(snapshot.run === undefined ? {} : { run: { ...snapshot.run } }),
   ...(snapshot.error === undefined ? {} : { error: { ...snapshot.error } }),
   ...(snapshot.fallback === undefined
@@ -182,6 +192,7 @@ export class TestRunnerService {
       canRetry: false,
     });
 
+    let wipe: WipeDetails | undefined;
     try {
       this.publishForTest(project.id, test.id, {
         state: "browser_starting",
@@ -195,7 +206,20 @@ export class TestRunnerService {
       const page = this.browser.getRunnerPage(project.id);
       const context = this.browser.getRunnerContext(project.id);
       if (test.wipeBeforeRun) {
-        await this.wipeBrowserState(context, page, test.startUrl);
+        this.publishForTest(project.id, test.id, {
+          state: "browser_starting",
+          currentStepIndex: -1,
+          totalSteps: test.flowItems.length,
+          message: `Se curăță origin-ul ${new URL(test.startUrl).origin}.`,
+          canStop: false,
+          canRetry: false,
+        });
+        try {
+          wipe = await wipeBrowserStateForOrigin(context, page, test.startUrl);
+        } catch (error) {
+          if (error instanceof WipeError) wipe = error.result;
+          throw error;
+        }
       }
 
       const startedAt = this.options.now().toISOString();
@@ -223,6 +247,7 @@ export class TestRunnerService {
           input.waitBeforeStart === true
             ? "Browserul este pregătit. Confirmă pornirea testului."
             : "Rularea a început.",
+        ...(wipe === undefined ? {} : { wipe }),
         ...(input.waitBeforeStart === true
           ? {
               pause: {
@@ -271,6 +296,7 @@ export class TestRunnerService {
         totalSteps: test.flowItems.length,
         message: details.message,
         error: details,
+        ...(wipe === undefined ? {} : { wipe }),
         canStop: false,
         canRetry: false,
       });
@@ -1024,23 +1050,6 @@ export class TestRunnerService {
     }
   }
 
-  private async wipeBrowserState(
-    context: BrowserContext,
-    page: Page,
-    startUrl: string,
-  ): Promise<void> {
-    const hostname = new URL(startUrl).hostname;
-    const escapedHostname = hostname.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    await context.clearCookies({
-      domain: new RegExp(`^\\.?${escapedHostname}$`, "i"),
-    });
-    await page.evaluate(() => {
-      localStorage.clear();
-      sessionStorage.clear();
-    });
-    await page.goto(startUrl, { waitUntil: "domcontentloaded" });
-  }
-
   private assertRunnable(test: TestDefinition, datasets: TestDataset[]): void {
     const validation = validateDeclarativeTest(
       toDeclarativeTestDefinition(test, test.flowItems, datasets),
@@ -1140,6 +1149,12 @@ export class TestRunnerService {
   }
 
   private toRunnerError(error: unknown, stepId?: string): RunnerErrorDetails {
+    if (error instanceof WipeError) {
+      return {
+        code: "wipe_failed",
+        message: error.message,
+      };
+    }
     if (error instanceof StepExecutionError) {
       return {
         code: error.code,

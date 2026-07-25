@@ -192,11 +192,40 @@
           <button type="button" class="time-slot">12:00</button>
         </div>
       </section>
+
+      <section
+        class="target-card"
+        aria-labelledby="fixture-wipe-title"
+        data-testid="fixture-wipe"
+      >
+        <h2 id="fixture-wipe-title">Stare pentru verificarea wipe</h2>
+        <p>
+          Populează storage-ul origin-ului, rulează un test cu wipe activ, apoi
+          verifică raportul după reîncărcare.
+        </p>
+        <div class="fixture-actions">
+          <button type="button" id="seed-storage">
+            Populează datele origin-ului
+          </button>
+          <button type="button" id="refresh-storage">Reîncarcă raportul</button>
+          <button type="button" id="clear-storage">
+            Șterge datele fixture
+          </button>
+        </div>
+        <pre
+          id="storage-report"
+          class="storage-report"
+          data-testid="fixture-storage-report"
+          aria-live="polite"
+        >
+se încarcă...</pre>
+      </section>
     </main>
 
     <footer>
       <span>Origin local controlat</span>
       <code>http://127.0.0.1:4173</code>
     </footer>
+    <script type="module" src="/fixture-storage.js"></script>
   </body>
 </html>

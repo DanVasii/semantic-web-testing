@@ -598,6 +598,42 @@ const isMissingDataDetails = (value: unknown): boolean =>
   typeof value.locator === "object" &&
   value.locator !== null;
 
+const wipeResources = new Set([
+  "navigation",
+  "cookies",
+  "localStorage",
+  "sessionStorage",
+  "indexedDB",
+  "cacheStorage",
+  "serviceWorkers",
+  "permissions",
+]);
+const wipeEntryStatuses = new Set(["cleared", "skipped", "failed"]);
+
+const isWipeLogEntry = (entry: unknown): boolean =>
+  typeof entry === "object" &&
+  entry !== null &&
+  "resource" in entry &&
+  typeof entry.resource === "string" &&
+  wipeResources.has(entry.resource) &&
+  "status" in entry &&
+  typeof entry.status === "string" &&
+  wipeEntryStatuses.has(entry.status) &&
+  "message" in entry &&
+  typeof entry.message === "string" &&
+  (!("count" in entry) || typeof entry.count === "number");
+
+const isWipeDetails = (value: unknown): boolean =>
+  typeof value === "object" &&
+  value !== null &&
+  "origin" in value &&
+  typeof value.origin === "string" &&
+  "status" in value &&
+  (value.status === "completed" || value.status === "failed") &&
+  "entries" in value &&
+  Array.isArray(value.entries) &&
+  value.entries.every((entry: unknown) => isWipeLogEntry(entry));
+
 const isRunnerSnapshot = (value: unknown): value is RunnerSnapshot =>
   typeof value === "object" &&
   value !== null &&
@@ -615,6 +651,9 @@ const isRunnerSnapshot = (value: unknown): value is RunnerSnapshot =>
   (!("missingData" in value) ||
     value.missingData === undefined ||
     isMissingDataDetails(value.missingData)) &&
+  (!("wipe" in value) ||
+    value.wipe === undefined ||
+    isWipeDetails(value.wipe)) &&
   (!("run" in value) || isTestRun(value.run));
 
 const semanticAppApi: SemanticAppApi = {

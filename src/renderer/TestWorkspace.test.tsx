@@ -125,6 +125,9 @@ describe("ProjectTestsPanel", () => {
     ).toBe(project.normalizedBaseUrl);
 
     await user.type(screen.getByLabelText("Numele testului"), "Cumpără produs");
+    await user.click(
+      screen.getByRole("checkbox", { name: /Wipe înainte de test/ }),
+    );
     const startUrl = screen.getByLabelText("URL de start");
     await user.clear(startUrl);
     await user.type(startUrl, "https://example.test/products?category=10#list");
@@ -134,6 +137,7 @@ describe("ProjectTestsPanel", () => {
       expect(api.createTest).toHaveBeenCalledWith(project.id, {
         name: "Cumpără produs",
         startUrl: "https://example.test/products?category=10#list",
+        wipeBeforeRun: true,
       });
     });
     expect(onOpenTest).toHaveBeenCalledWith(testDefinition);
@@ -201,6 +205,9 @@ describe("TestDetailPage", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "Editează testul" }));
+    await user.click(
+      screen.getByRole("checkbox", { name: /Wipe înainte de test/ }),
+    );
     const startUrl = screen.getByRole("textbox", { name: "URL de start" });
     await user.clear(startUrl);
     await user.type(startUrl, "https://example.test/cart?coupon=10#summary");
@@ -214,6 +221,7 @@ describe("TestDetailPage", () => {
           name: testDefinition.name,
           description: testDefinition.description,
           startUrl: "https://example.test/cart?coupon=10#summary",
+          wipeBeforeRun: true,
         },
       );
     });

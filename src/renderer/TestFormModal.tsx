@@ -33,6 +33,9 @@ export const TestFormModal = ({
   const [startUrl, setStartUrl] = useState(
     test?.normalizedStartUrl ?? project.normalizedBaseUrl,
   );
+  const [wipeBeforeRun, setWipeBeforeRun] = useState(
+    test?.wipeBeforeRun ?? false,
+  );
   const [errors, setErrors] = useState<TestInputErrors>({});
 
   useEffect(() => {
@@ -40,6 +43,7 @@ export const TestFormModal = ({
       setName(test?.name ?? "");
       setDescription(test?.description ?? "");
       setStartUrl(test?.normalizedStartUrl ?? project.normalizedBaseUrl);
+      setWipeBeforeRun(test?.wipeBeforeRun ?? false);
       setErrors({});
     }
   }, [
@@ -48,6 +52,7 @@ export const TestFormModal = ({
     test?.description,
     test?.name,
     test?.normalizedStartUrl,
+    test?.wipeBeforeRun,
   ]);
 
   const submit = (): void => {
@@ -55,6 +60,7 @@ export const TestFormModal = ({
       name,
       ...(description.trim().length === 0 ? {} : { description }),
       startUrl,
+      wipeBeforeRun,
     };
     const nextErrors = validateTestInput(input, project);
     setErrors(nextErrors);
@@ -86,6 +92,23 @@ export const TestFormModal = ({
             setName(event.target.value);
           }}
         />
+        <label className="rounded-lg border border-app-border bg-app-canvas p-3">
+          <span className="flex items-center gap-2 text-sm font-semibold text-app-ink">
+            <input
+              type="checkbox"
+              checked={wipeBeforeRun}
+              disabled={isSaving}
+              onChange={(event) => {
+                setWipeBeforeRun(event.target.checked);
+              }}
+            />
+            Wipe înainte de test
+          </span>
+          <span className="mt-1 block text-sm text-app-muted">
+            Șterge numai datele origin-ului proiectului înainte de rulare.
+            Testul nu pornește dacă operația eșuează critic.
+          </span>
+        </label>
         <Input
           label="URL de start"
           value={startUrl}

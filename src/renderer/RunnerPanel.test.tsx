@@ -392,4 +392,56 @@ describe("RunnerPanel", () => {
       screen.getByRole("button", { name: "Continuă (Ctrl+Enter)" }),
     ).not.toBeNull();
   });
+
+  it("shows the wipe configuration and its structured failure log", async () => {
+    const user = userEvent.setup();
+    const failedWipe: RunnerSnapshot = {
+      state: "failed",
+      currentStepIndex: -1,
+      totalSteps: 1,
+      canStop: false,
+      canRetry: false,
+      error: {
+        code: "wipe_failed",
+        message: "Wipe critic eșuat.",
+      },
+      wipe: {
+        origin: "https://example.test",
+        status: "failed",
+        entries: [
+          {
+            resource: "cookies",
+            status: "cleared",
+            message: "Cookie-urile au fost șterse.",
+            count: 2,
+          },
+          {
+            resource: "indexedDB",
+            status: "failed",
+            message: "Ștergerea este blocată.",
+          },
+        ],
+      },
+    };
+    const api = {
+      getRunnerStatus: vi.fn().mockResolvedValue(failedWipe),
+      listTestRuns: vi.fn().mockResolvedValue([]),
+      listDatasets: vi.fn().mockResolvedValue([]),
+      listRunStepResults: vi.fn().mockResolvedValue([]),
+      onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
+    } as unknown as SemanticAppApi;
+    render(
+      <RunnerPanel
+        api={api}
+        project={project}
+        test={{ ...test, wipeBeforeRun: true }}
+      />,
+    );
+
+    expect(await screen.findByLabelText("Log wipe")).not.toBeNull();
+    expect(screen.getByText("Curățare eșuată critic")).not.toBeNull();
+    expect(screen.getByText(/Ștergerea este blocată/)).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "Rulează testul" }));
+    expect(screen.getByText("Activ")).not.toBeNull();
+  });
 });

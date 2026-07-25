@@ -63,6 +63,7 @@ describe("test input", () => {
         {
           name: "Cumpără produs",
           startUrl: "https://example.test/products?category=10#list",
+          wipeBeforeRun: true,
         },
         project,
       ),

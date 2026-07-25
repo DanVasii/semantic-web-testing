@@ -70,6 +70,7 @@ describe("TestsService", () => {
       name: " Cumpără produs ",
       description: " Produse până la checkout ",
       startUrl: "https://example.test/products?category=10#list",
+      wipeBeforeRun: true,
     });
 
     expect(created).toMatchObject({
@@ -79,6 +80,7 @@ describe("TestsService", () => {
       description: "Produse până la checkout",
       startUrl: "https://example.test/products?category=10#list",
       normalizedStartUrl: "https://example.test/products?category=10#list",
+      wipeBeforeRun: true,
       workflowState: "not_recorded",
       flowItems: [],
     });
@@ -129,6 +131,7 @@ describe("TestsService", () => {
     const updated = service.update(project.id, created.id, {
       name: "Checkout rapid",
       startUrl: "https://example.test/cart?coupon=10#summary",
+      wipeBeforeRun: true,
     });
 
     expect(updated).toMatchObject({
@@ -137,6 +140,7 @@ describe("TestsService", () => {
       status: "draft",
       workflowState: "not_recorded",
       flowItems: [],
+      wipeBeforeRun: true,
       version: 2,
     });
   });

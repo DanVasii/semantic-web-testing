@@ -4,12 +4,14 @@ export interface TestInput {
   name: string;
   description?: string;
   startUrl: string;
+  wipeBeforeRun?: boolean;
 }
 
 export interface TestInputErrors {
   name?: string;
   description?: string;
   startUrl?: string;
+  wipeBeforeRun?: string;
 }
 
 export const normalizeTestStartUrl = (value: string): string =>
@@ -23,6 +25,13 @@ export const validateTestInput = (
   const name = input.name.trim();
   const description = input.description?.trim() ?? "";
   const startUrl = input.startUrl.trim();
+
+  if (
+    input.wipeBeforeRun !== undefined &&
+    typeof input.wipeBeforeRun !== "boolean"
+  ) {
+    errors.wipeBeforeRun = "Configurarea wipe trebuie să fie booleană.";
+  }
 
   if (name.length === 0) {
     errors.name = "Numele testului este obligatoriu.";
