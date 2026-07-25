@@ -140,10 +140,7 @@ export class TestsService {
     return this.persistFlowVersion(existing, updated, "manual");
   }
 
-  public beginRecording(
-    projectId: string,
-    testId: string,
-  ): TestDefinition {
+  public beginRecording(projectId: string, testId: string): TestDefinition {
     const existing = this.get(projectId, testId);
     if (
       existing.workflowState !== "not_recorded" &&

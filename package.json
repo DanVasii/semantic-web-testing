@@ -15,6 +15,7 @@
     "electron:start": "npm run build && electron .",
     "fixture:web": "vite fixtures/web --host 127.0.0.1 --port 4173 --strictPort",
     "fixture:web:build": "vite build fixtures/web --outDir ../../dist/fixture-web --emptyOutDir",
+    "smoke:recorder": "node scripts/smoke-recorder.mjs",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "lint": "eslint src --max-warnings 0",

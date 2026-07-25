@@ -93,6 +93,27 @@ const createApi = (): SemanticAppApi => ({
   listTestRuns: vi.fn().mockResolvedValue([]),
   listRunStepResults: vi.fn().mockResolvedValue([]),
   onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
+  startRecorder: vi.fn(),
+  stopRecorder: vi.fn(),
+  addRecorderStep: vi.fn(),
+  discardRecorderStep: vi.fn(),
+  retryRecorderAnalysis: vi.fn(),
+  ignoreRecorderAnalysisError: vi.fn(),
+  getRecorderStatus: vi.fn().mockResolvedValue({
+    projectId: project.id,
+    testId: testDefinition.id,
+    state: "idle",
+    signal: "green",
+    message: "Recorderul este oprit.",
+    test: testDefinition,
+    capturedSteps: 0,
+    queuedEvents: 0,
+    canStart: true,
+    canStop: false,
+    canRetry: false,
+    canIgnore: false,
+  }),
+  onRecorderStatusChange: vi.fn().mockReturnValue(vi.fn()),
 });
 
 afterEach(() => {
@@ -145,7 +166,7 @@ describe("ProjectTestsPanel", () => {
 });
 
 describe("TestDetailPage", () => {
-  it("shows recording-first action, start URL and live-analysis semaphore", () => {
+  it("shows recording-first action, start URL and live-analysis semaphore", async () => {
     const api = createApi();
     render(
       <TestDetailPage
@@ -159,7 +180,7 @@ describe("TestDetailPage", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Înregistrează testul" }),
+      await screen.findByRole("button", { name: "Înregistrează testul" }),
     ).not.toBeNull();
     expect(screen.getByText(testDefinition.normalizedStartUrl)).not.toBeNull();
     expect(screen.getByText("Semafor analiză înregistrare")).not.toBeNull();

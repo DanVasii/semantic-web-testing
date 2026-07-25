@@ -379,12 +379,8 @@ void app
     );
     ipcMain.handle(
       RECORDER_CHANNELS.addStep,
-      (
-        _event,
-        projectId: string,
-        testId: string,
-        draft: RecorderStepDraft,
-      ) => recorderService.addStep(projectId, testId, draft),
+      (_event, projectId: string, testId: string, draft: RecorderStepDraft) =>
+        recorderService.addStep(projectId, testId, draft),
     );
     ipcMain.handle(
       RECORDER_CHANNELS.discardStep,

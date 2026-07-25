@@ -9,6 +9,7 @@ import { DatasetsPanel } from "./DatasetsPanel.js";
 import { TestFormModal } from "./TestFormModal.js";
 import { TestFlowEditor } from "./TestFlowEditor.js";
 import { RunnerPanel } from "./RunnerPanel.js";
+import { RecorderPanel } from "./RecorderPanel.js";
 
 export interface ProjectTestsPanelProps {
   api: SemanticAppApi;
@@ -213,7 +214,6 @@ export const TestDetailPage = ({
   const [isSaving, setIsSaving] = useState(false);
   const [editError, setEditError] = useState<string>();
   const activeStage = stageIndex(test.workflowState);
-  const primaryAction = getTestPrimaryAction(test);
   const analysisSignal =
     test.workflowState === "analyzing_flow"
       ? "analyzing"
@@ -294,11 +294,6 @@ export const TestDetailPage = ({
               >
                 Editează testul
               </Button>
-              {test.workflowState === "ready" ? null : (
-                <Button disabled title={actionHelp}>
-                  {primaryAction}
-                </Button>
-              )}
             </div>
             <p className="mt-2 max-w-xs text-xs text-app-muted">{actionHelp}</p>
           </div>
@@ -350,6 +345,13 @@ export const TestDetailPage = ({
             ))}
           </ol>
         </div>
+
+        <RecorderPanel
+          api={api}
+          project={project}
+          test={test}
+          onTestUpdated={onTestUpdated}
+        />
 
         <section className="mt-6 rounded-xl border border-app-border bg-app-canvas p-4">
           <div className="flex flex-wrap items-center justify-between gap-4">

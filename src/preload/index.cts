@@ -22,6 +22,11 @@ import type {
 } from "../shared/persistence.js";
 import type { RunnerSnapshot, RunnerState } from "../shared/runner.js";
 import type {
+  RecorderSnapshot,
+  RecorderState,
+  RecorderStepDraft,
+} from "../shared/recorder.js";
+import type {
   AnalyzedPageSummary,
   InaccessibleStylesheet,
   PageAnalysisCounts,
@@ -86,6 +91,16 @@ const RUNNER_CHANNELS = {
   listRuns: "runner:list-runs",
   listStepResults: "runner:list-step-results",
   statusChanged: "runner:status-changed",
+} as const;
+const RECORDER_CHANNELS = {
+  start: "recorder:start",
+  stop: "recorder:stop",
+  addStep: "recorder:add-step",
+  discardStep: "recorder:discard-step",
+  retry: "recorder:retry",
+  ignoreError: "recorder:ignore-error",
+  getStatus: "recorder:get-status",
+  statusChanged: "recorder:status-changed",
 } as const;
 
 const isAppInfo = (value: unknown): value is AppInfo => {
@@ -656,6 +671,73 @@ const isRunnerSnapshot = (value: unknown): value is RunnerSnapshot =>
     isWipeDetails(value.wipe)) &&
   (!("run" in value) || isTestRun(value.run));
 
+const recorderStates = new Set<RecorderState>([
+  "idle",
+  "preparing",
+  "recording",
+  "analyzing",
+  "preview",
+  "error",
+  "completed",
+]);
+
+const isRecorderStepDraft = (value: unknown): value is RecorderStepDraft =>
+  typeof value === "object" &&
+  value !== null &&
+  "step" in value &&
+  typeof value.step === "object" &&
+  value.step !== null &&
+  "id" in value.step &&
+  typeof value.step.id === "string" &&
+  "type" in value.step &&
+  value.step.type === "action" &&
+  (!("capturedValue" in value) ||
+    value.capturedValue === null ||
+    typeof value.capturedValue === "string" ||
+    typeof value.capturedValue === "number" ||
+    typeof value.capturedValue === "boolean") &&
+  (!("capturedInputKind" in value) ||
+    ["text", "password", "checkbox", "select", "radio"].includes(
+      String(value.capturedInputKind),
+    ));
+
+const isRecorderSnapshot = (value: unknown): value is RecorderSnapshot =>
+  typeof value === "object" &&
+  value !== null &&
+  "projectId" in value &&
+  typeof value.projectId === "string" &&
+  "testId" in value &&
+  typeof value.testId === "string" &&
+  "state" in value &&
+  typeof value.state === "string" &&
+  recorderStates.has(value.state as RecorderState) &&
+  "signal" in value &&
+  (value.signal === "green" ||
+    value.signal === "yellow" ||
+    value.signal === "red") &&
+  "message" in value &&
+  typeof value.message === "string" &&
+  "test" in value &&
+  isTestDefinition(value.test) &&
+  "capturedSteps" in value &&
+  typeof value.capturedSteps === "number" &&
+  "queuedEvents" in value &&
+  typeof value.queuedEvents === "number" &&
+  "canStart" in value &&
+  typeof value.canStart === "boolean" &&
+  "canStop" in value &&
+  typeof value.canStop === "boolean" &&
+  "canRetry" in value &&
+  typeof value.canRetry === "boolean" &&
+  "canIgnore" in value &&
+  typeof value.canIgnore === "boolean" &&
+  (!("pendingStep" in value) ||
+    value.pendingStep === undefined ||
+    isRecorderStepDraft(value.pendingStep)) &&
+  (!("error" in value) ||
+    value.error === undefined ||
+    typeof value.error === "string");
+
 const semanticAppApi: SemanticAppApi = {
   getAppInfo: async () => {
     const appInfo: unknown = await ipcRenderer.invoke(APP_INFO_CHANNEL);
@@ -1144,6 +1226,97 @@ const semanticAppApi: SemanticAppApi = {
     ipcRenderer.on(RUNNER_CHANNELS.statusChanged, handleStatus);
     return () => {
       ipcRenderer.removeListener(RUNNER_CHANNELS.statusChanged, handleStatus);
+    };
+  },
+  startRecorder: async (projectId, testId) => {
+    const snapshot: unknown = await ipcRenderer.invoke(
+      RECORDER_CHANNELS.start,
+      projectId,
+      testId,
+    );
+    if (!isRecorderSnapshot(snapshot)) {
+      throw new TypeError("Main process returned invalid recorder start data.");
+    }
+    return snapshot;
+  },
+  stopRecorder: async (projectId, testId) => {
+    const snapshot: unknown = await ipcRenderer.invoke(
+      RECORDER_CHANNELS.stop,
+      projectId,
+      testId,
+    );
+    if (!isRecorderSnapshot(snapshot)) {
+      throw new TypeError("Main process returned invalid recorder stop data.");
+    }
+    return snapshot;
+  },
+  addRecorderStep: async (projectId, testId, draft) => {
+    const snapshot: unknown = await ipcRenderer.invoke(
+      RECORDER_CHANNELS.addStep,
+      projectId,
+      testId,
+      draft,
+    );
+    if (!isRecorderSnapshot(snapshot)) {
+      throw new TypeError("Main process returned invalid recorder step data.");
+    }
+    return snapshot;
+  },
+  discardRecorderStep: async (projectId, testId) => {
+    const snapshot: unknown = await ipcRenderer.invoke(
+      RECORDER_CHANNELS.discardStep,
+      projectId,
+      testId,
+    );
+    if (!isRecorderSnapshot(snapshot)) {
+      throw new TypeError(
+        "Main process returned invalid recorder discard data.",
+      );
+    }
+    return snapshot;
+  },
+  retryRecorderAnalysis: async (projectId, testId) => {
+    const snapshot: unknown = await ipcRenderer.invoke(
+      RECORDER_CHANNELS.retry,
+      projectId,
+      testId,
+    );
+    if (!isRecorderSnapshot(snapshot)) {
+      throw new TypeError("Main process returned invalid recorder retry data.");
+    }
+    return snapshot;
+  },
+  ignoreRecorderAnalysisError: async (projectId, testId) => {
+    const snapshot: unknown = await ipcRenderer.invoke(
+      RECORDER_CHANNELS.ignoreError,
+      projectId,
+      testId,
+    );
+    if (!isRecorderSnapshot(snapshot)) {
+      throw new TypeError(
+        "Main process returned invalid recorder ignore data.",
+      );
+    }
+    return snapshot;
+  },
+  getRecorderStatus: async (projectId, testId) => {
+    const snapshot: unknown = await ipcRenderer.invoke(
+      RECORDER_CHANNELS.getStatus,
+      projectId,
+      testId,
+    );
+    if (!isRecorderSnapshot(snapshot)) {
+      throw new TypeError("Main process returned invalid recorder status.");
+    }
+    return snapshot;
+  },
+  onRecorderStatusChange: (listener) => {
+    const handleStatus = (_event: unknown, snapshot: unknown): void => {
+      if (isRecorderSnapshot(snapshot)) listener(snapshot);
+    };
+    ipcRenderer.on(RECORDER_CHANNELS.statusChanged, handleStatus);
+    return () => {
+      ipcRenderer.removeListener(RECORDER_CHANNELS.statusChanged, handleStatus);
     };
   },
 };

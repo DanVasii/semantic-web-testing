@@ -65,6 +65,14 @@ describe("App", () => {
       listTestRuns: vi.fn().mockResolvedValue([]),
       listRunStepResults: vi.fn().mockResolvedValue([]),
       onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
+      startRecorder: vi.fn(),
+      stopRecorder: vi.fn(),
+      addRecorderStep: vi.fn(),
+      discardRecorderStep: vi.fn(),
+      retryRecorderAnalysis: vi.fn(),
+      ignoreRecorderAnalysisError: vi.fn(),
+      getRecorderStatus: vi.fn(),
+      onRecorderStatusChange: vi.fn().mockReturnValue(vi.fn()),
     };
     window.semanticApp = api;
 

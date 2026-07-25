@@ -5,7 +5,7 @@ import type {
   RecorderRawEvent,
 } from "../../shared/recorder.js";
 
-const recorderInitScript = ({
+export const recorderInitScript = ({
   bindingName,
   controlName,
 }: {
@@ -95,7 +95,7 @@ const recorderInitScript = ({
     const heading = container.querySelector(
       "h1, h2, h3, h4, [data-title], .title, [class*='title']",
     );
-    return {
+    const result: NonNullable<RecorderElementSnapshot["repeated"]> = {
       containerLocator:
         component === null
           ? {
@@ -109,10 +109,12 @@ const recorderInitScript = ({
               operator: "equals",
               value: component,
             },
-      ...(compact(heading?.textContent) === undefined
-        ? {}
-        : { distinguishingText: compact(heading?.textContent) }),
     };
+    const distinguishingText = compact(heading?.textContent);
+    if (distinguishingText !== undefined) {
+      result.distinguishingText = distinguishingText;
+    }
+    return result;
   };
 
   const snapshot = (element: Element): RecorderElementSnapshot => {
@@ -138,35 +140,29 @@ const recorderInitScript = ({
       repeatedContainer === null
         ? undefined
         : simpleContainerLocator(repeatedContainer);
-    return {
+    const result: RecorderElementSnapshot = {
       tagName: element.tagName.toLowerCase(),
-      ...(element.getAttribute("type") === null
-        ? {}
-        : { inputType: element.getAttribute("type")?.toLowerCase() }),
-      ...(element.id.length === 0 ? {} : { id: element.id }),
-      ...(element.getAttribute("name") === null
-        ? {}
-        : { name: element.getAttribute("name") ?? undefined }),
-      ...(compact(htmlElement.innerText ?? element.textContent) === undefined
-        ? {}
-        : { text: compact(htmlElement.innerText ?? element.textContent) }),
-      ...(compact(labels) === undefined ? {} : { label: compact(labels) }),
-      ...(implicitRole(element) === undefined
-        ? {}
-        : { role: implicitRole(element) }),
-      ...(compact(element.getAttribute("aria-label")) === undefined
-        ? {}
-        : { ariaLabel: compact(element.getAttribute("aria-label")) }),
-      ...(compact(element.getAttribute("placeholder")) === undefined
-        ? {}
-        : { placeholder: compact(element.getAttribute("placeholder")) }),
-      ...(compact(element.getAttribute("title")) === undefined
-        ? {}
-        : { title: compact(element.getAttribute("title")) }),
       dataAttributes,
       cssPath: cssPath(element),
-      ...(repeated === undefined ? {} : { repeated }),
     };
+    const optionalValues = {
+      inputType: element.getAttribute("type")?.toLowerCase(),
+      id: element.id.length === 0 ? undefined : element.id,
+      name: element.getAttribute("name") ?? undefined,
+      text: compact(htmlElement.innerText ?? element.textContent),
+      label: compact(labels),
+      role: implicitRole(element),
+      ariaLabel: compact(element.getAttribute("aria-label")),
+      placeholder: compact(element.getAttribute("placeholder")),
+      title: compact(element.getAttribute("title")),
+    };
+    for (const [key, value] of Object.entries(optionalValues)) {
+      if (value !== undefined) {
+        Object.assign(result, { [key]: value });
+      }
+    }
+    if (repeated !== undefined) result.repeated = repeated;
+    return result;
   };
 
   const setBlocked = (next: boolean): void => {
@@ -196,9 +192,7 @@ const recorderInitScript = ({
     const binding = recorderGlobal[bindingName];
     if (typeof binding !== "function") return;
     setBlocked(true);
-    void (
-      binding as (value: RecorderRawEvent) => Promise<void>
-    )({
+    void (binding as (value: RecorderRawEvent) => Promise<void>)({
       ...event,
       url: location.href,
       timestamp: new Date().toISOString(),
@@ -222,10 +216,22 @@ const recorderInitScript = ({
     (event) => {
       if (!active || blocked || !(event.target instanceof Element)) return;
       if (isInternal(event.target)) return;
-      if (
-        event.target instanceof HTMLInputElement ||
-        event.target instanceof HTMLTextAreaElement
-      ) {
+      const isTextInput =
+        event.target instanceof HTMLTextAreaElement ||
+        (event.target instanceof HTMLInputElement &&
+          ![
+            "button",
+            "checkbox",
+            "color",
+            "file",
+            "hidden",
+            "image",
+            "radio",
+            "range",
+            "reset",
+            "submit",
+          ].includes(event.target.type));
+      if (isTextInput) {
         pendingInputs.set(event.target, event.target.value);
       }
     },

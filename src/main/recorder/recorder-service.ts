@@ -7,9 +7,7 @@ import type {
   BrowserSession,
   DetectedBrowser,
 } from "../../shared/browser-manager.js";
-import type {
-  PageAnalysisResult,
-} from "../../shared/page-analysis.js";
+import type { PageAnalysisResult } from "../../shared/page-analysis.js";
 import type {
   Project,
   TestDataset,
@@ -98,17 +96,13 @@ const copySnapshot = (snapshot: RecorderSnapshot): RecorderSnapshot => ({
     : { pendingStep: structuredClone(snapshot.pendingStep) }),
 });
 
-const isStringRecord = (
-  value: unknown,
-): value is Record<string, string> =>
+const isStringRecord = (value: unknown): value is Record<string, string> =>
   typeof value === "object" &&
   value !== null &&
   !Array.isArray(value) &&
   Object.values(value).every((item) => typeof item === "string");
 
-const isElementSnapshot = (
-  value: unknown,
-): value is RecorderElementSnapshot =>
+const isElementSnapshot = (value: unknown): value is RecorderElementSnapshot =>
   typeof value === "object" &&
   value !== null &&
   "tagName" in value &&
@@ -396,10 +390,7 @@ export class RecorderService {
     return copySnapshot(session.snapshot);
   }
 
-  public retry(
-    projectId: string,
-    testId: string,
-  ): RecorderSnapshot {
+  public retry(projectId: string, testId: string): RecorderSnapshot {
     const session = this.requireSession(projectId, testId);
     if (
       session.snapshot.state !== "error" ||
@@ -426,10 +417,7 @@ export class RecorderService {
     return copySnapshot(session.snapshot);
   }
 
-  public ignoreError(
-    projectId: string,
-    testId: string,
-  ): RecorderSnapshot {
+  public ignoreError(projectId: string, testId: string): RecorderSnapshot {
     const session = this.requireSession(projectId, testId);
     if (
       session.snapshot.state !== "error" ||
@@ -525,7 +513,9 @@ export class RecorderService {
         signal: "red",
         message: "Analiza acțiunii a eșuat.",
         error:
-          error instanceof Error ? error.message : "Eroare recorder necunoscută.",
+          error instanceof Error
+            ? error.message
+            : "Eroare recorder necunoscută.",
         queuedEvents: session.queue.length,
         canStop: true,
         canRetry: true,
@@ -708,10 +698,7 @@ export class RecorderService {
     }
   }
 
-  private publish(
-    session: RecorderSession,
-    snapshot: RecorderSnapshot,
-  ): void {
+  private publish(session: RecorderSession, snapshot: RecorderSnapshot): void {
     session.snapshot = snapshot;
     this.publishSnapshot(snapshot);
   }
@@ -735,10 +722,7 @@ export class RecorderService {
     return test;
   }
 
-  private requireSession(
-    projectId: string,
-    testId: string,
-  ): RecorderSession {
+  private requireSession(projectId: string, testId: string): RecorderSession {
     const session = this.sessions.get(this.key(projectId, testId));
     if (session === undefined) throw new Error("Recorderul nu este activ.");
     return session;

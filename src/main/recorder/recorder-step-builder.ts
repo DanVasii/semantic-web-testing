@@ -74,7 +74,9 @@ const simpleLocatorCandidates = (
   if (label !== undefined) {
     candidates.push({ type: "label", operator: "equals", value: label });
   }
-  const accessibleName = compactText(target.ariaLabel ?? target.text);
+  const accessibleName = compactText(
+    target.ariaLabel ?? target.label ?? target.text,
+  );
   if (target.role !== undefined && accessibleName !== undefined) {
     candidates.push({
       type: "role",
@@ -99,7 +101,9 @@ const simpleLocatorCandidates = (
     });
   }
   if (target.name !== undefined && target.name.length > 0) {
-    const escapedName = target.name.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+    const escapedName = target.name
+      .replaceAll("\\", "\\\\")
+      .replaceAll('"', '\\"');
     candidates.push({
       type: "css",
       operator: "equals",
@@ -151,9 +155,7 @@ const targetDefinition = (
   };
   let primary: LocatorDefinition = inside;
   if (target.repeated !== undefined) {
-    const distinguishingText = compactText(
-      target.repeated.distinguishingText,
-    );
+    const distinguishingText = compactText(target.repeated.distinguishingText);
     primary = {
       type: "repeated_component",
       container: structuredClone(target.repeated.containerLocator),
@@ -248,14 +250,16 @@ export const buildRecorderStep = (
   const isInput = ["fill", "select", "checkbox", "radio"].includes(event.type);
   const fieldId = isInput
     ? toSemanticFieldId(
-        target.name ??
-          target.label ??
-          target.ariaLabel ??
-          target.id ??
-          name,
+        target.name ?? target.label ?? target.ariaLabel ?? target.id ?? name,
       )
     : undefined;
   const locator = targetDefinition(target, fieldId);
+  const requiredFieldId = (): string => {
+    if (fieldId === undefined) {
+      throw new Error(`Evenimentul ${event.type} nu are un câmp semantic.`);
+    }
+    return fieldId;
+  };
 
   switch (event.type) {
     case "click":
@@ -282,8 +286,8 @@ export const buildRecorderStep = (
           ),
           actionType: "fill",
           ...locator,
-          inputFieldId: fieldId,
-          valueKey: fieldId,
+          inputFieldId: requiredFieldId(),
+          valueKey: requiredFieldId(),
           valueStrategy: "dataset",
         },
         capturedValue: event.value ?? "",
@@ -301,8 +305,8 @@ export const buildRecorderStep = (
           ),
           actionType: "select_option",
           ...locator,
-          inputFieldId: fieldId,
-          valueKey: fieldId,
+          inputFieldId: requiredFieldId(),
+          valueKey: requiredFieldId(),
           valueStrategy: "dataset",
         },
         capturedValue: event.value ?? "",
@@ -319,8 +323,8 @@ export const buildRecorderStep = (
           ),
           actionType: event.checked === false ? "uncheck" : "check",
           ...locator,
-          inputFieldId: fieldId,
-          valueKey: fieldId,
+          inputFieldId: requiredFieldId(),
+          valueKey: requiredFieldId(),
           valueStrategy: "dataset",
         },
         capturedValue: event.checked ?? false,
@@ -337,8 +341,8 @@ export const buildRecorderStep = (
           ),
           actionType: "check",
           ...locator,
-          inputFieldId: fieldId,
-          valueKey: fieldId,
+          inputFieldId: requiredFieldId(),
+          valueKey: requiredFieldId(),
           valueStrategy: "dataset",
         },
         capturedValue: event.value ?? true,
@@ -359,6 +363,6 @@ export const buildRecorderStep = (
         },
       };
     default:
-      throw new Error(`Eveniment recorder nesuportat: ${event.type}.`);
+      throw new Error("Eveniment recorder nesuportat.");
   }
 };
