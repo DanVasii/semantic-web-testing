@@ -48,6 +48,7 @@ describe("application database", () => {
 
     expect(existsSync(filePath)).toBe(true);
     expect(tables).toEqual([
+      "application_ai_settings",
       "datasets",
       "imap_accounts",
       "page_versions",
@@ -61,7 +62,7 @@ describe("application database", () => {
       "test_versions",
       "tests",
     ]);
-    expect(version.user_version).toBe(13);
+    expect(version.user_version).toBe(14);
     expect(journalCount.count).toBe(APPLICATION_MIGRATIONS.length);
 
     database.close();

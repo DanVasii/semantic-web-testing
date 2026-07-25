@@ -79,6 +79,10 @@ const createApi = (): {
   let progressListener: ((progress: PageAnalysisProgress) => void) | undefined;
   const api: SemanticAppApi = {
     getAppInfo: vi.fn(),
+    getAiSettings: vi.fn(),
+    saveAiSettings: vi.fn(),
+    testAiConnection: vi.fn(),
+    previewAiRequest: vi.fn(),
     listProjects: vi.fn(),
     createProject: vi.fn(),
     updateProject: vi.fn(),

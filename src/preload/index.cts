@@ -2,6 +2,12 @@ import { contextBridge, ipcRenderer } from "electron";
 
 import type { AppInfo, AppInfoChannel, SemanticAppApi } from "../shared/ipc.js";
 import type {
+  AiConnectionTestResult,
+  AiModelInfo,
+  AiRequestPreview,
+  AiSettingsSummary,
+} from "../shared/ai.js";
+import type {
   BasicAuthChallenge,
   BrowserManagerStatus,
   BrowserNavigationResult,
@@ -37,6 +43,12 @@ import type {
 } from "../shared/page-analysis.js";
 
 const APP_INFO_CHANNEL: AppInfoChannel = "app:get-info";
+const AI_CHANNELS = {
+  getSettings: "ai:get-settings",
+  saveSettings: "ai:save-settings",
+  testConnection: "ai:test-connection",
+  previewRequest: "ai:preview-request",
+} as const;
 const PROJECT_CHANNELS = {
   list: "projects:list",
   create: "projects:create",
@@ -119,6 +131,110 @@ const isAppInfo = (value: unknown): value is AppInfo => {
     typeof value.electronVersion === "string"
   );
 };
+
+const isAiProviderId = (value: unknown): boolean =>
+  value === "none" || value === "ollama" || value === "gemini";
+
+const isAiModelInfo = (value: unknown): value is AiModelInfo =>
+  typeof value === "object" &&
+  value !== null &&
+  "id" in value &&
+  typeof value.id === "string" &&
+  "displayName" in value &&
+  typeof value.displayName === "string" &&
+  (!("inputTokenLimit" in value) ||
+    typeof value.inputTokenLimit === "number") &&
+  (!("outputTokenLimit" in value) ||
+    typeof value.outputTokenLimit === "number");
+
+const isAiSettingsSummary = (value: unknown): value is AiSettingsSummary =>
+  typeof value === "object" &&
+  value !== null &&
+  "provider" in value &&
+  isAiProviderId(value.provider) &&
+  "ollama" in value &&
+  typeof value.ollama === "object" &&
+  value.ollama !== null &&
+  "baseUrl" in value.ollama &&
+  typeof value.ollama.baseUrl === "string" &&
+  "model" in value.ollama &&
+  typeof value.ollama.model === "string" &&
+  "gemini" in value &&
+  typeof value.gemini === "object" &&
+  value.gemini !== null &&
+  "model" in value.gemini &&
+  typeof value.gemini.model === "string" &&
+  "apiKeyConfigured" in value.gemini &&
+  typeof value.gemini.apiKeyConfigured === "boolean" &&
+  (!("updatedAt" in value) ||
+    value.updatedAt === undefined ||
+    typeof value.updatedAt === "string");
+
+const isAiConnectionTestResult = (
+  value: unknown,
+): value is AiConnectionTestResult =>
+  typeof value === "object" &&
+  value !== null &&
+  "provider" in value &&
+  (value.provider === "ollama" || value.provider === "gemini") &&
+  "success" in value &&
+  typeof value.success === "boolean" &&
+  "message" in value &&
+  typeof value.message === "string" &&
+  "latencyMs" in value &&
+  typeof value.latencyMs === "number" &&
+  "models" in value &&
+  Array.isArray(value.models) &&
+  value.models.every(isAiModelInfo);
+
+const isJsonValue = (value: unknown, depth = 0): boolean => {
+  if (depth > 20) return false;
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  ) {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.every((item) => isJsonValue(item, depth + 1));
+  }
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Object.values(value).every((item) => isJsonValue(item, depth + 1))
+  );
+};
+
+const isAiRequestPreview = (value: unknown): value is AiRequestPreview =>
+  typeof value === "object" &&
+  value !== null &&
+  "task" in value &&
+  ["analyze_step", "generate_test", "repair_locator"].includes(
+    String(value.task),
+  ) &&
+  "provider" in value &&
+  isAiProviderId(value.provider) &&
+  "model" in value &&
+  typeof value.model === "string" &&
+  "systemInstruction" in value &&
+  typeof value.systemInstruction === "string" &&
+  "prompt" in value &&
+  typeof value.prompt === "string" &&
+  "outputSchema" in value &&
+  isJsonValue(value.outputSchema) &&
+  "contextPreview" in value &&
+  isJsonValue(value.contextPreview) &&
+  "estimatedInputTokens" in value &&
+  typeof value.estimatedInputTokens === "number" &&
+  "originalContextBytes" in value &&
+  typeof value.originalContextBytes === "number" &&
+  "sentContextBytes" in value &&
+  typeof value.sentContextBytes === "number" &&
+  "omittedPaths" in value &&
+  Array.isArray(value.omittedPaths) &&
+  value.omittedPaths.every((path) => typeof path === "string");
 
 const isProjectOverview = (value: unknown): value is ProjectOverview => {
   if (typeof value !== "object" || value === null) {
@@ -771,6 +887,45 @@ const semanticAppApi: SemanticAppApi = {
     }
 
     return appInfo;
+  },
+  getAiSettings: async () => {
+    const settings: unknown = await ipcRenderer.invoke(AI_CHANNELS.getSettings);
+    if (!isAiSettingsSummary(settings)) {
+      throw new TypeError("Main process returned invalid AI settings.");
+    }
+    return settings;
+  },
+  saveAiSettings: async (input) => {
+    const settings: unknown = await ipcRenderer.invoke(
+      AI_CHANNELS.saveSettings,
+      input,
+    );
+    if (!isAiSettingsSummary(settings)) {
+      throw new TypeError("Main process returned invalid AI settings.");
+    }
+    return settings;
+  },
+  testAiConnection: async (provider) => {
+    const result: unknown = await ipcRenderer.invoke(
+      AI_CHANNELS.testConnection,
+      provider,
+    );
+    if (!isAiConnectionTestResult(result)) {
+      throw new TypeError("Main process returned an invalid AI test result.");
+    }
+    return result;
+  },
+  previewAiRequest: async (input) => {
+    const preview: unknown = await ipcRenderer.invoke(
+      AI_CHANNELS.previewRequest,
+      input,
+    );
+    if (!isAiRequestPreview(preview)) {
+      throw new TypeError(
+        "Main process returned an invalid AI request preview.",
+      );
+    }
+    return preview;
   },
   listProjects: async () => {
     const projects: unknown = await ipcRenderer.invoke(PROJECT_CHANNELS.list);

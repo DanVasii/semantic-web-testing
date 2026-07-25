@@ -277,6 +277,23 @@ export const APPLICATION_MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    version: 14,
+    name: "create_application_ai_settings",
+    up(database) {
+      database.exec(`
+        CREATE TABLE application_ai_settings (
+          singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+          provider TEXT NOT NULL CHECK(provider IN ('none', 'ollama', 'gemini')),
+          ollama_base_url TEXT NOT NULL,
+          ollama_model TEXT NOT NULL,
+          gemini_model TEXT NOT NULL,
+          encrypted_gemini_api_key TEXT,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+      `);
+    },
+  },
 ];
 
 export const assertValidMigrations = (

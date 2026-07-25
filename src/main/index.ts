@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   APP_INFO_CHANNEL,
+  AI_CHANNELS,
   BROWSER_CHANNELS,
   DATASET_CHANNELS,
   PAGE_ANALYSIS_CHANNELS,
@@ -13,6 +14,11 @@ import {
   RUNNER_CHANNELS,
   TEST_CHANNELS,
 } from "../shared/ipc.js";
+import type {
+  AiProviderId,
+  CreateAiRequestPreviewInput,
+  SaveAiSettingsInput,
+} from "../shared/ai.js";
 import type {
   BasicAuthCredentials,
   BrowserLaunchOptions,
@@ -36,6 +42,7 @@ import {
   type ApplicationDatabase,
 } from "./persistence/database.js";
 import {
+  ApplicationAiSettingsRepository,
   DatasetRepository,
   PageRepository,
   ProjectBasicAuthRepository,
@@ -50,6 +57,7 @@ import { TestsService } from "./tests-service.js";
 import { TestRunnerService } from "./runner/test-runner-service.js";
 import { RecorderService } from "./recorder/recorder-service.js";
 import { ProjectBasicAuthService } from "./project-basic-auth-service.js";
+import { AiSettingsService } from "./ai/ai-settings-service.js";
 import { resolveRendererTarget } from "./renderer-target.js";
 import { createMainWindowOptions } from "./window-options.js";
 
@@ -113,6 +121,9 @@ void app
     const projectBasicAuthRepository = new ProjectBasicAuthRepository(
       applicationDatabase.connection,
     );
+    const applicationAiSettingsRepository = new ApplicationAiSettingsRepository(
+      applicationDatabase.connection,
+    );
     const pageRepository = new PageRepository(applicationDatabase.connection);
     const testRepository = new TestRepository(applicationDatabase.connection);
     const datasetRepository = new DatasetRepository(
@@ -123,23 +134,32 @@ void app
       createId: randomUUID,
       now: () => new Date(),
     });
+    const secretProtector = {
+      encrypt: (value: string): string => {
+        if (!safeStorage.isEncryptionAvailable()) {
+          throw new Error(
+            "Criptarea sistemului nu este disponibilă; secretul nu a fost salvat.",
+          );
+        }
+        return safeStorage.encryptString(value).toString("base64");
+      },
+      decrypt: (value: string): string =>
+        safeStorage.decryptString(Buffer.from(value, "base64")),
+    };
     const projectBasicAuthService = new ProjectBasicAuthService(
       projectRepository,
       projectBasicAuthRepository,
       {
         now: () => new Date(),
-        secrets: {
-          encrypt: (value) => {
-            if (!safeStorage.isEncryptionAvailable()) {
-              throw new Error(
-                "Criptarea sistemului nu este disponibilă; credentialele nu au fost salvate.",
-              );
-            }
-            return safeStorage.encryptString(value).toString("base64");
-          },
-          decrypt: (value) =>
-            safeStorage.decryptString(Buffer.from(value, "base64")),
-        },
+        secrets: secretProtector,
+      },
+    );
+    const aiSettingsService = new AiSettingsService(
+      applicationAiSettingsRepository,
+      {
+        now: () => new Date(),
+        secrets: secretProtector,
+        fetch: (input, init) => fetch(input, init),
       },
     );
     browserManager.setBasicAuthResolver((projectId, origin) =>
@@ -212,6 +232,21 @@ void app
 
     ipcMain.handle(APP_INFO_CHANNEL, () =>
       createAppInfo(app.getVersion(), process.versions.electron),
+    );
+    ipcMain.handle(AI_CHANNELS.getSettings, () => aiSettingsService.get());
+    ipcMain.handle(
+      AI_CHANNELS.saveSettings,
+      (_event, input: SaveAiSettingsInput) => aiSettingsService.save(input),
+    );
+    ipcMain.handle(
+      AI_CHANNELS.testConnection,
+      (_event, provider: Exclude<AiProviderId, "none">) =>
+        aiSettingsService.testConnection(provider),
+    );
+    ipcMain.handle(
+      AI_CHANNELS.previewRequest,
+      (_event, input: CreateAiRequestPreviewInput) =>
+        aiSettingsService.preview(input),
     );
     ipcMain.handle(PROJECT_CHANNELS.list, () => projectsService.list());
     ipcMain.handle(PROJECT_CHANNELS.create, (_event, input: ProjectInput) =>

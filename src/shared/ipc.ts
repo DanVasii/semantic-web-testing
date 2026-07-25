@@ -18,6 +18,14 @@ import type {
 } from "./page-analysis.js";
 import type { TestInput } from "./tests.js";
 import type {
+  AiConnectionTestResult,
+  AiProviderId,
+  AiRequestPreview,
+  AiSettingsSummary,
+  CreateAiRequestPreviewInput,
+  SaveAiSettingsInput,
+} from "./ai.js";
+import type {
   BrowserLaunchOptions,
   BrowserManagerStatus,
   BrowserNavigationResult,
@@ -108,6 +116,13 @@ export const RECORDER_CHANNELS = {
   statusChanged: "recorder:status-changed",
 } as const;
 
+export const AI_CHANNELS = {
+  getSettings: "ai:get-settings",
+  saveSettings: "ai:save-settings",
+  testConnection: "ai:test-connection",
+  previewRequest: "ai:preview-request",
+} as const;
+
 export interface AppInfo {
   version: string;
   electronVersion: string;
@@ -131,6 +146,14 @@ export interface SemanticAppApi extends DatasetCrudApi {
     input: SaveProjectBasicAuthInput,
   ) => Promise<ProjectBasicAuthSettings>;
   deleteProjectBasicAuth: (projectId: string) => Promise<boolean>;
+  getAiSettings: () => Promise<AiSettingsSummary>;
+  saveAiSettings: (input: SaveAiSettingsInput) => Promise<AiSettingsSummary>;
+  testAiConnection: (
+    provider: Exclude<AiProviderId, "none">,
+  ) => Promise<AiConnectionTestResult>;
+  previewAiRequest: (
+    input: CreateAiRequestPreviewInput,
+  ) => Promise<AiRequestPreview>;
   deleteProject: (projectId: string) => Promise<boolean>;
   detectBrowsers: () => Promise<DetectedBrowser[]>;
   launchBrowser: (options: BrowserLaunchOptions) => Promise<BrowserSession>;

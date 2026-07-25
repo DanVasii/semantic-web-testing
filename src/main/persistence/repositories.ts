@@ -179,6 +179,15 @@ export interface ProjectBasicAuthRecord {
   updatedAt: string;
 }
 
+export interface ApplicationAiSettingsRecord {
+  provider: "none" | "ollama" | "gemini";
+  ollamaBaseUrl: string;
+  ollamaModel: string;
+  geminiModel: string;
+  encryptedGeminiApiKey?: string;
+  updatedAt: string;
+}
+
 export class ProjectRepository {
   public constructor(private readonly database: DatabaseSync) {}
 
@@ -321,6 +330,59 @@ export class ProjectBasicAuthRepository {
         .prepare("DELETE FROM project_basic_auth WHERE project_id = ?")
         .run(projectId).changes > 0
     );
+  }
+}
+
+export class ApplicationAiSettingsRepository {
+  public constructor(private readonly database: DatabaseSync) {}
+
+  public get(): ApplicationAiSettingsRecord | undefined {
+    const row = asRow(
+      this.database
+        .prepare("SELECT * FROM application_ai_settings WHERE singleton_id = 1")
+        .get(),
+    );
+    if (row === undefined) return undefined;
+    const encryptedGeminiApiKey = optionalText(row, "encrypted_gemini_api_key");
+    return {
+      provider: text(
+        row,
+        "provider",
+      ) as ApplicationAiSettingsRecord["provider"],
+      ollamaBaseUrl: text(row, "ollama_base_url"),
+      ollamaModel: text(row, "ollama_model"),
+      geminiModel: text(row, "gemini_model"),
+      ...(encryptedGeminiApiKey === undefined ? {} : { encryptedGeminiApiKey }),
+      updatedAt: text(row, "updated_at"),
+    };
+  }
+
+  public save(
+    settings: ApplicationAiSettingsRecord,
+  ): ApplicationAiSettingsRecord {
+    this.database
+      .prepare(
+        `INSERT INTO application_ai_settings (
+          singleton_id, provider, ollama_base_url, ollama_model,
+          gemini_model, encrypted_gemini_api_key, updated_at
+        ) VALUES (1, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(singleton_id) DO UPDATE SET
+          provider = excluded.provider,
+          ollama_base_url = excluded.ollama_base_url,
+          ollama_model = excluded.ollama_model,
+          gemini_model = excluded.gemini_model,
+          encrypted_gemini_api_key = excluded.encrypted_gemini_api_key,
+          updated_at = excluded.updated_at`,
+      )
+      .run(
+        settings.provider,
+        settings.ollamaBaseUrl,
+        settings.ollamaModel,
+        settings.geminiModel,
+        settings.encryptedGeminiApiKey ?? null,
+        settings.updatedAt,
+      );
+    return settings;
   }
 }
 

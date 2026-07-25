@@ -78,4 +78,46 @@ describe("recorderInitScript", () => {
       value: "premium",
     });
   });
+
+  it("treats Tab as focus navigation and keeps the completed input as the only step", async () => {
+    document.body.innerHTML = `
+      <label for="first-name">Prenume</label>
+      <input id="first-name" name="first_name" type="text" />
+      <label for="last-name">Nume</label>
+      <input id="last-name" name="last_name" type="text" />
+    `;
+    const bindingName = "__recorderTabTest";
+    const controlName = `${bindingName}Control`;
+    Object.defineProperty(globalThis, "CSS", {
+      configurable: true,
+      value: { escape: (value: string) => value },
+    });
+    const recorderGlobal = globalThis as unknown as Record<string, unknown>;
+    const events: RecorderRawEvent[] = [];
+    recorderGlobal[bindingName] = (event: RecorderRawEvent) => {
+      events.push(event);
+      const control = recorderGlobal[controlName] as
+        { setBlocked?: (blocked: boolean) => void } | undefined;
+      control?.setBlocked?.(false);
+      return Promise.resolve();
+    };
+    recorderInitScript({ bindingName, controlName });
+
+    const firstName = document.querySelector<HTMLInputElement>("#first-name");
+    if (firstName === null) throw new Error("Inputul fixture lipsește.");
+    firstName.value = "Ana";
+    firstName.dispatchEvent(new Event("input", { bubbles: true }));
+    firstName.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, key: "Tab" }),
+    );
+    firstName.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    await Promise.resolve();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "fill",
+      value: "Ana",
+      target: { name: "first_name" },
+    });
+  });
 });

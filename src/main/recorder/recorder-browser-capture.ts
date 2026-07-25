@@ -313,6 +313,11 @@ export const recorderInitScript = ({
         flushInput(event.target);
         return;
       }
+      if (event.key === "Tab") {
+        // Tab doar mută focusul. Evenimentul focusout va salva valoarea
+        // câmpului, fără să creeze un pas press_key care să o suprascrie.
+        return;
+      }
       if (
         event.key.length === 1 ||
         ["Shift", "Control", "Alt", "Meta"].includes(event.key)

@@ -7,9 +7,16 @@ export interface ModalProps {
   title: string;
   children: ReactNode;
   onClose: () => void;
+  size?: "default" | "wide";
 }
 
-export const Modal = ({ children, onClose, open, title }: ModalProps) => {
+export const Modal = ({
+  children,
+  onClose,
+  open,
+  size = "default",
+  title,
+}: ModalProps) => {
   const titleId = useId();
 
   useEffect(() => {
@@ -47,7 +54,9 @@ export const Modal = ({ children, onClose, open, title }: ModalProps) => {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="w-full max-w-lg rounded-2xl border border-app-border bg-app-surface p-6 shadow-xl"
+        className={`max-h-[calc(100vh-3rem)] w-full overflow-y-auto rounded-2xl border border-app-border bg-app-surface p-6 shadow-xl ${
+          size === "wide" ? "max-w-5xl" : "max-w-lg"
+        }`}
       >
         <header className="flex items-start justify-between gap-4">
           <h2 id={titleId} className="text-xl font-semibold text-app-ink">
