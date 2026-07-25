@@ -45,6 +45,61 @@ const createApi = (): SemanticAppApi =>
 afterEach(cleanup);
 
 describe("TestFlowEditor", () => {
+  it("allows an unchanged recorded flow to be explicitly approved", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    const recordedTest: TestDefinition = {
+      ...test,
+      workflowState: "flow_analyzed",
+      flowItems: [
+        {
+          id: "recorded-step-1",
+          type: "action",
+          actionType: "click",
+          title: "Continuă spre checkout",
+          humanDescription: "Apasă butonul Continuă.",
+          whyExplanation: "Butonul continuă scenariul înregistrat.",
+          target: {
+            primary: {
+              type: "role",
+              role: "button",
+              operator: "equals",
+              value: "Continuă",
+            },
+          },
+          fallbacks: [],
+          enabled: true,
+        },
+      ],
+    };
+    render(
+      <TestFlowEditor
+        api={api}
+        projectId={recordedTest.projectId}
+        test={recordedTest}
+        onTestSaved={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText(/Nu trebuie să modifici un pas dacă este deja corect/),
+    ).not.toBeNull();
+    const approve = screen.getByRole("button", {
+      name: "Salvează flow-ul testului",
+    });
+    expect(approve.hasAttribute("disabled")).toBe(false);
+    expect(approve.textContent).toBe("Aprobă și pregătește testul");
+
+    await user.click(approve);
+    await waitFor(() => {
+      expect(api.saveTestFlow).toHaveBeenCalledWith(
+        recordedTest.projectId,
+        recordedTest.id,
+        recordedTest.flowItems,
+      );
+    });
+  });
+
   it("adds, edits, duplicates, reorders, disables and saves flow items", async () => {
     const user = userEvent.setup();
     const api = createApi();

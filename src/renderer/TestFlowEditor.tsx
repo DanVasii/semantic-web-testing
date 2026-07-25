@@ -410,6 +410,9 @@ export const TestFlowEditor = ({
     () => validateDeclarativeTest(toDeclarativeTestDefinition(test, items, [])),
     [items, test],
   );
+  const requiresRecordedFlowApproval = test.workflowState === "flow_analyzed";
+  const canSave =
+    validation.valid && !isSaving && (dirty || requiresRecordedFlowApproval);
 
   const mutate = (next: TestFlowItem[]): void => {
     setHistory((current) => [...current.slice(-49), clone(items)]);
@@ -483,12 +486,16 @@ export const TestFlowEditor = ({
           </Button>
           <Button
             aria-label="Salvează flow-ul testului"
-            disabled={!dirty || !validation.valid || isSaving}
+            disabled={!canSave}
             onClick={() => {
               void save();
             }}
           >
-            {isSaving ? "Se salvează..." : "Salvează testul"}
+            {isSaving
+              ? "Se salvează..."
+              : requiresRecordedFlowApproval
+                ? "Aprobă și pregătește testul"
+                : "Salvează testul"}
           </Button>
         </div>
       </div>
@@ -537,7 +544,11 @@ export const TestFlowEditor = ({
           className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800"
           role="status"
         >
-          Flow valid. Poate fi salvat.
+          {requiresRecordedFlowApproval
+            ? "Flow-ul înregistrat este valid. Verifică pașii de mai jos, apoi apasă „Aprobă și pregătește testul”. Nu trebuie să modifici un pas dacă este deja corect."
+            : dirty
+              ? "Flow valid. Poate fi salvat."
+              : "Flow valid. Nu există modificări nesalvate."}
         </p>
       )}
       {saveError ? (
