@@ -37,6 +37,7 @@ const elementName = (target: RecorderElementSnapshot): string =>
   compactText(
     target.label ??
       target.ariaLabel ??
+      target.actionText ??
       target.text ??
       target.placeholder ??
       target.name ??
@@ -48,6 +49,9 @@ const escapeCssIdentifier = (value: string): string =>
     const codePoint = character.codePointAt(0)?.toString(16) ?? "0";
     return `\\${codePoint} `;
   });
+
+const escapeCssString = (value: string): string =>
+  value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
 
 const simpleLocatorCandidates = (
   target: RecorderElementSnapshot,
@@ -70,12 +74,29 @@ const simpleLocatorCandidates = (
       value: testId,
     });
   }
+  for (const attribute of [
+    "data-date",
+    "data-value",
+    "data-id",
+    "data-key",
+    "data-slot",
+  ]) {
+    const value = target.dataAttributes[attribute];
+    if (value !== undefined && value.length > 0 && value.length <= 200) {
+      candidates.push({
+        type: "data_attribute",
+        attribute,
+        operator: "equals",
+        value,
+      });
+    }
+  }
   const label = compactText(target.label);
   if (label !== undefined) {
     candidates.push({ type: "label", operator: "equals", value: label });
   }
   const accessibleName = compactText(
-    target.ariaLabel ?? target.label ?? target.text,
+    target.ariaLabel ?? target.label ?? target.actionText ?? target.text,
   );
   if (target.role !== undefined && accessibleName !== undefined) {
     candidates.push({
@@ -114,6 +135,14 @@ const simpleLocatorCandidates = (
   if (title !== undefined) {
     candidates.push({ type: "title", operator: "equals", value: title });
   }
+  const actionText = compactText(target.actionText);
+  if (actionText !== undefined) {
+    candidates.push({
+      type: "text",
+      operator: "equals",
+      value: actionText,
+    });
+  }
   const text = compactText(target.text);
   if (text !== undefined) {
     candidates.push({ type: "text", operator: "equals", value: text });
@@ -146,8 +175,17 @@ const fallbackFrom = (
 const targetDefinition = (
   target: RecorderElementSnapshot,
   fieldId: string | undefined,
+  preferredCandidates: SimpleLocator[] = [],
 ): Pick<ActionStep, "target" | "fallbacks"> => {
-  const candidates = simpleLocatorCandidates(target);
+  const candidates = [
+    ...preferredCandidates,
+    ...simpleLocatorCandidates(target),
+  ].filter(
+    (candidate, index, all) =>
+      all.findIndex(
+        (other) => JSON.stringify(other) === JSON.stringify(candidate),
+      ) === index,
+  );
   const inside = candidates[0] ?? {
     type: "css",
     operator: "equals",
@@ -156,25 +194,24 @@ const targetDefinition = (
   let primary: LocatorDefinition = inside;
   if (target.repeated !== undefined) {
     const distinguishingText = compactText(target.repeated.distinguishingText);
-    primary = {
-      type: "repeated_component",
-      container: structuredClone(target.repeated.containerLocator),
-      filters:
-        distinguishingText === undefined
-          ? []
-          : [
-              {
-                field: {
-                  type: "text",
-                  operator: "equals",
-                  value: distinguishingText,
-                },
-                operator: "contains",
-                value: distinguishingText,
-              },
-            ],
-      targetInsideContainer: inside,
-    };
+    if (distinguishingText !== undefined) {
+      primary = {
+        type: "repeated_component",
+        container: structuredClone(target.repeated.containerLocator),
+        filters: [
+          {
+            field: {
+              type: "text",
+              operator: "equals",
+              value: distinguishingText,
+            },
+            operator: "contains",
+            value: distinguishingText,
+          },
+        ],
+        targetInsideContainer: inside,
+      };
+    }
   }
   return {
     target: {
@@ -253,7 +290,21 @@ export const buildRecorderStep = (
         target.name ?? target.label ?? target.ariaLabel ?? target.id ?? name,
       )
     : undefined;
-  const locator = targetDefinition(target, fieldId);
+  const preferredLocators: SimpleLocator[] =
+    event.type === "radio" &&
+    event.value !== undefined &&
+    target.name !== undefined
+      ? [
+          {
+            type: "css",
+            operator: "equals",
+            value: `${target.tagName}[type="radio"][name="${escapeCssString(
+              target.name,
+            )}"][value="${escapeCssString(event.value)}"]`,
+          },
+        ]
+      : [];
+  const locator = targetDefinition(target, fieldId, preferredLocators);
   const requiredFieldId = (): string => {
     if (fieldId === undefined) {
       throw new Error(`Evenimentul ${event.type} nu are un câmp semantic.`);

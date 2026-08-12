@@ -302,4 +302,30 @@ describe("TestsService", () => {
       source: "manual",
     });
   });
+
+  it("revalidates an invalidated test without changing its flow version", () => {
+    const created = service.create(project.id, {
+      name: "Checkout",
+      startUrl: "https://example.test/products",
+    });
+    testRepository.update({
+      ...created,
+      status: "invalidated",
+      workflowState: "ready",
+      invalidation: {
+        pageId: "page-1",
+        pageVersionId: "page-version-2",
+        detectedAt: "2026-07-27T10:00:00.000Z",
+        score: 0.45,
+        threshold: 0.3,
+      },
+    });
+
+    const revalidated = service.revalidate(project.id, created.id);
+
+    expect(revalidated.status).toBe("valid");
+    expect(revalidated.invalidation).toBeUndefined();
+    expect(revalidated.version).toBe(created.version);
+    expect(testRepository.findById(created.id)).toEqual(revalidated);
+  });
 });

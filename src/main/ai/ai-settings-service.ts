@@ -1,6 +1,7 @@
 import type {
   AiConnectionTestResult,
   AiGenerationResult,
+  AiModelInfo,
   AiProviderId,
   AiRequestPreview,
   AiSettingsSummary,
@@ -94,6 +95,15 @@ const isJsonValue = (
 };
 
 export class AiSettingsService {
+  private readonly modelCache = new Map<
+    Exclude<AiProviderId, "none">,
+    AiModelInfo[]
+  >();
+  private readonly modelLoads = new Map<
+    Exclude<AiProviderId, "none">,
+    Promise<AiModelInfo[]>
+  >();
+
   public constructor(
     private readonly repository: ApplicationAiSettingsRepository,
     private readonly options: AiSettingsServiceOptions,
@@ -146,19 +156,59 @@ export class AiSettingsService {
       updatedAt: this.options.now().toISOString(),
     };
     this.repository.save(saved);
+    this.modelCache.clear();
+    this.modelLoads.clear();
     return this.toSummary(saved);
+  }
+
+  public async listModels(
+    providerId: Exclude<AiProviderId, "none">,
+    refresh = false,
+  ): Promise<AiModelInfo[]> {
+    this.requireProvider(providerId);
+    if (!refresh) {
+      const cached = this.modelCache.get(providerId);
+      if (cached !== undefined) return structuredClone(cached);
+      const pending = this.modelLoads.get(providerId);
+      if (pending !== undefined) return structuredClone(await pending);
+    }
+    const load = this.createProvider(providerId)
+      .listModels()
+      .then((models) => {
+        this.modelCache.set(providerId, structuredClone(models));
+        return models;
+      })
+      .finally(() => {
+        if (this.modelLoads.get(providerId) === load) {
+          this.modelLoads.delete(providerId);
+        }
+      });
+    this.modelLoads.set(providerId, load);
+    return structuredClone(await load);
+  }
+
+  public preloadModels(): void {
+    const record = this.repository.get() ?? defaultRecord();
+    const providers: Exclude<AiProviderId, "none">[] = [];
+    if (record.encryptedGeminiApiKey !== undefined) providers.push("gemini");
+    if (record.provider === "ollama") providers.push("ollama");
+    for (const provider of providers) {
+      void this.listModels(provider).catch((error: unknown) => {
+        console.warn(
+          `[AI][${provider}] catalogul de modele nu a putut fi preîncărcat:`,
+          error instanceof Error ? error.message : error,
+        );
+      });
+    }
   }
 
   public async testConnection(
     providerId: Exclude<AiProviderId, "none">,
   ): Promise<AiConnectionTestResult> {
-    if (providerId !== "ollama" && providerId !== "gemini") {
-      throw new Error("Providerul AI nu poate fi testat.");
-    }
+    this.requireProvider(providerId);
     const startedAt = Date.now();
     try {
-      const provider = this.createProvider(providerId);
-      const models = await provider.listModels();
+      const models = await this.listModels(providerId, true);
       return {
         provider: providerId,
         success: true,
@@ -195,6 +245,8 @@ export class AiSettingsService {
         (typeof input.model !== "string" ||
           input.model.length > 200 ||
           /[\r\n]/.test(input.model))) ||
+      (input.outputSchema !== undefined &&
+        !isJsonValue(input.outputSchema, { nodes: 0 })) ||
       !isJsonValue(input.context, { nodes: 0 })
     ) {
       throw new Error("Contextul pentru preview-ul AI nu este valid.");
@@ -230,6 +282,12 @@ export class AiSettingsService {
       apiKey: this.options.secrets.decrypt(record.encryptedGeminiApiKey),
       fetch: this.options.fetch,
     });
+  }
+
+  private requireProvider(providerId: Exclude<AiProviderId, "none">): void {
+    if (providerId !== "ollama" && providerId !== "gemini") {
+      throw new Error("Providerul AI nu poate fi folosit.");
+    }
   }
 
   private toSummary(record: ApplicationAiSettingsRecord): AiSettingsSummary {

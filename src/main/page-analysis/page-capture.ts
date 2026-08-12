@@ -342,6 +342,19 @@ const captureDom = async (page: Page): Promise<DomCapture> =>
       "summary",
       "textarea",
     ]);
+    const clickableDataAttributes = [
+      "data-action",
+      "data-click",
+      "data-command",
+      "data-date",
+    ];
+    const hasPointerCursor = (element: Element): boolean => {
+      if (!(element instanceof HTMLElement || element instanceof SVGElement)) {
+        return false;
+      }
+      const style = getComputedStyle(element);
+      return style.pointerEvents !== "none" && style.cursor === "pointer";
+    };
     const interactiveElements = allElements.filter((element) => {
       const role = element.getAttribute("role") ?? "";
       const tabIndex = element.getAttribute("tabindex");
@@ -349,7 +362,14 @@ const captureDom = async (page: Page): Promise<DomCapture> =>
         interactiveTags.has(element.tagName.toLowerCase()) ||
         interactiveRoles.has(role) ||
         element.getAttribute("contenteditable") === "true" ||
-        (tabIndex !== null && Number(tabIndex) >= 0)
+        (tabIndex !== null && Number(tabIndex) >= 0) ||
+        element.hasAttribute("onclick") ||
+        clickableDataAttributes.some((attribute) =>
+          element.hasAttribute(attribute),
+        ) ||
+        (hasPointerCursor(element) &&
+          (element.parentElement === null ||
+            !hasPointerCursor(element.parentElement)))
       );
     });
     const ariaElements = allElements.filter((element) =>

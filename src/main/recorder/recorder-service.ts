@@ -28,6 +28,7 @@ import {
 } from "../persistence/repositories.js";
 import { TestsService } from "../tests-service.js";
 import {
+  flushRecorderPendingInputs,
   installRecorderCapture,
   setRecorderPageBlocked,
   stopRecorderCapture,
@@ -61,6 +62,7 @@ export type RecorderStatusListener = (snapshot: RecorderSnapshot) => void;
 
 interface RecorderSession {
   project: Project;
+  originalTest: TestDefinition;
   test: TestDefinition;
   bindingName: string;
   snapshot: RecorderSnapshot;
@@ -82,6 +84,13 @@ const activeBrowserStates = new Set([
   "waiting_for_basic_auth",
   "reconnecting",
 ]);
+
+const canStartRecording = (
+  workflowState: TestDefinition["workflowState"],
+): boolean =>
+  ["not_recorded", "recording", "recorded", "flow_analyzed", "ready"].includes(
+    workflowState,
+  );
 
 const copyTest = (test: TestDefinition): TestDefinition => ({
   ...test,
@@ -141,7 +150,6 @@ const isRecorderRawEvent = (value: unknown): value is RecorderRawEvent => {
 
 export class RecorderService {
   private readonly sessions = new Map<string, RecorderSession>();
-  private readonly latest = new Map<string, RecorderSnapshot>();
   private readonly listeners = new Set<RecorderStatusListener>();
   private readonly stabilizationMs: number;
   private readonly wait: (milliseconds: number) => Promise<void>;
@@ -172,8 +180,8 @@ export class RecorderService {
   }
 
   public getStatus(projectId: string, testId: string): RecorderSnapshot {
-    const current = this.latest.get(this.key(projectId, testId));
-    if (current !== undefined) return copySnapshot(current);
+    const session = this.sessions.get(this.key(projectId, testId));
+    if (session !== undefined) return copySnapshot(session.snapshot);
     const test = this.requireTest(projectId, testId);
     return {
       projectId,
@@ -187,9 +195,7 @@ export class RecorderService {
       test,
       capturedSteps: test.flowItems.length,
       queuedEvents: 0,
-      canStart:
-        test.workflowState === "not_recorded" ||
-        test.workflowState === "recorded",
+      canStart: canStartRecording(test.workflowState),
       canStop: false,
       canRetry: false,
       canIgnore: false,
@@ -221,15 +227,25 @@ export class RecorderService {
       canIgnore: false,
     });
 
-    await this.prepareBrowser(project, originalTest);
-    const test = this.testsService.beginRecording(projectId, testId);
-    const page = this.browser.getRunnerPage(projectId);
-    const context = this.browser.getRunnerContext(projectId);
+    let test: TestDefinition;
+    let page: Page;
+    let context: BrowserContext;
+    try {
+      await this.prepareBrowser(project, originalTest);
+      test = this.testsService.beginRecording(projectId, testId);
+      page = this.browser.getRunnerPage(projectId);
+      context = this.browser.getRunnerContext(projectId);
+    } catch (error) {
+      this.testsService.cancelRecording(projectId, testId, originalTest);
+      this.publishStartFailure(projectId, testId, error);
+      throw error;
+    }
     const bindingName = `__semanticRecorder_${this.options
       .createId()
       .replace(/[^a-zA-Z0-9_]/g, "_")}`;
     const session: RecorderSession = {
       project,
+      originalTest,
       test,
       bindingName,
       pages: new Set(),
@@ -269,7 +285,8 @@ export class RecorderService {
     } catch (error) {
       this.sessions.delete(sessionKey);
       context.off("page", session.contextPageListener);
-      this.testsService.markRecordingIncomplete(projectId, testId);
+      this.testsService.cancelRecording(projectId, testId, originalTest);
+      this.publishStartFailure(projectId, testId, error);
       throw error;
     }
   }
@@ -279,6 +296,13 @@ export class RecorderService {
     testId: string,
   ): Promise<RecorderSnapshot> {
     const session = this.requireSession(projectId, testId);
+    await Promise.all(
+      [...session.pages].map(async (page) =>
+        flushRecorderPendingInputs(page, session.bindingName).catch(
+          () => undefined,
+        ),
+      ),
+    );
     if (session.processing !== undefined) {
       await session.processing;
     }
@@ -288,22 +312,31 @@ export class RecorderService {
       session.queue.length === 0 &&
       session.snapshot.pendingStep === undefined &&
       session.test.flowItems.length > 0;
+    const emptyRecording = session.test.flowItems.length === 0;
     const test = cleanFinish
       ? await this.testsService.completeRecording(projectId, testId)
-      : this.testsService.markRecordingIncomplete(projectId, testId);
+      : emptyRecording
+        ? this.testsService.cancelRecording(
+            projectId,
+            testId,
+            session.originalTest,
+          )
+        : this.testsService.markRecordingIncomplete(projectId, testId);
     await this.cleanup(session);
     const completed: RecorderSnapshot = {
       projectId,
       testId,
       state: "completed",
-      signal: cleanFinish ? "green" : "red",
+      signal: cleanFinish || emptyRecording ? "green" : "red",
       message: cleanFinish
         ? "Înregistrarea s-a încheiat. Revizuiește pașii generați."
-        : "Recorderul s-a oprit cu pași sau analize nefinalizate.",
+        : emptyRecording
+          ? "Înregistrarea goală a fost anulată. Poți porni din nou recorderul."
+          : "Recorderul s-a oprit cu pași sau analize nefinalizate.",
       test,
       capturedSteps: test.flowItems.length,
       queuedEvents: 0,
-      canStart: false,
+      canStart: canStartRecording(test.workflowState),
       canStop: false,
       canRetry: false,
       canIgnore: false,
@@ -454,6 +487,13 @@ export class RecorderService {
       .catch(() => undefined)
       .finally(() => {
         delete session.processing;
+        if (
+          session.queue.length > 0 &&
+          session.snapshot.pendingStep === undefined &&
+          session.snapshot.state !== "error"
+        ) {
+          this.processQueue(session);
+        }
       });
   }
 
@@ -495,17 +535,35 @@ export class RecorderService {
         pageId: result.page.id,
       });
       session.failedDraft = draft;
+      session.test = this.testsService.appendRecordedStep(
+        session.project.id,
+        session.test.id,
+        structuredClone(draft.step),
+      );
+      this.persistCapturedValue(session.test, draft);
+      delete session.currentEvent;
+      delete session.failedDraft;
+      const nextSnapshot = { ...session.snapshot };
+      delete nextSnapshot.pendingStep;
+      delete nextSnapshot.error;
       this.publish(session, {
-        ...session.snapshot,
-        state: "preview",
-        signal: "red",
-        message: "Pas capturat. Revizuiește-l înainte de adăugare.",
-        pendingStep: draft,
+        ...nextSnapshot,
+        state: "recording",
+        signal: session.queue.length === 0 ? "green" : "yellow",
+        message:
+          session.queue.length === 0
+            ? "Pas salvat automat. Poți continua în browser."
+            : "Pas salvat automat. Se analizează următorul eveniment.",
+        test: session.test,
+        capturedSteps: session.test.flowItems.length,
         queuedEvents: session.queue.length,
-        canStop: true,
+        canStop: session.queue.length === 0,
         canRetry: false,
         canIgnore: false,
       });
+      if (session.queue.length === 0) {
+        await this.setBlocked(session, false);
+      }
     } catch (error) {
       this.publish(session, {
         ...session.snapshot,
@@ -704,8 +762,33 @@ export class RecorderService {
   }
 
   private publishSnapshot(snapshot: RecorderSnapshot): void {
-    this.latest.set(this.key(snapshot.projectId, snapshot.testId), snapshot);
     for (const listener of this.listeners) listener(copySnapshot(snapshot));
+  }
+
+  private publishStartFailure(
+    projectId: string,
+    testId: string,
+    error: unknown,
+  ): void {
+    const test = this.requireTest(projectId, testId);
+    this.publishSnapshot({
+      projectId,
+      testId,
+      state: "idle",
+      signal: "red",
+      message: "Recorderul nu a putut porni. Poți încerca din nou.",
+      error:
+        error instanceof Error
+          ? error.message
+          : "Eroare necunoscută la pornirea recorderului.",
+      test,
+      capturedSteps: test.flowItems.length,
+      queuedEvents: 0,
+      canStart: canStartRecording(test.workflowState),
+      canStop: false,
+      canRetry: false,
+      canIgnore: false,
+    });
   }
 
   private requireProject(projectId: string): Project {

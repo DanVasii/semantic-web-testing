@@ -33,9 +33,6 @@ export const TestFormModal = ({
   const [startUrl, setStartUrl] = useState(
     test?.normalizedStartUrl ?? project.normalizedBaseUrl,
   );
-  const [wipeBeforeRun, setWipeBeforeRun] = useState(
-    test?.wipeBeforeRun ?? false,
-  );
   const [testMode, setTestMode] = useState<NonNullable<TestInput["testMode"]>>(
     test?.testMode ?? "recorded",
   );
@@ -46,7 +43,6 @@ export const TestFormModal = ({
       setName(test?.name ?? "");
       setDescription(test?.description ?? "");
       setStartUrl(test?.normalizedStartUrl ?? project.normalizedBaseUrl);
-      setWipeBeforeRun(test?.wipeBeforeRun ?? false);
       setTestMode(test?.testMode ?? "recorded");
       setErrors({});
     }
@@ -57,7 +53,6 @@ export const TestFormModal = ({
     test?.name,
     test?.normalizedStartUrl,
     test?.testMode,
-    test?.wipeBeforeRun,
   ]);
 
   const submit = (): void => {
@@ -66,7 +61,7 @@ export const TestFormModal = ({
       ...(description.trim().length === 0 ? {} : { description }),
       startUrl,
       testMode,
-      wipeBeforeRun,
+      wipeBeforeRun: false,
     };
     const nextErrors = validateTestInput(input, project);
     setErrors(nextErrors);
@@ -124,23 +119,6 @@ export const TestFormModal = ({
           {errors.testMode ? (
             <span className="text-sm text-red-700">{errors.testMode}</span>
           ) : null}
-        </label>
-        <label className="rounded-lg border border-app-border bg-app-canvas p-3">
-          <span className="flex items-center gap-2 text-sm font-semibold text-app-ink">
-            <input
-              type="checkbox"
-              checked={wipeBeforeRun}
-              disabled={isSaving}
-              onChange={(event) => {
-                setWipeBeforeRun(event.target.checked);
-              }}
-            />
-            Wipe înainte de test
-          </span>
-          <span className="mt-1 block text-sm text-app-muted">
-            Șterge numai datele origin-ului proiectului înainte de rulare.
-            Testul nu pornește dacă operația eșuează critic.
-          </span>
         </label>
         <Input
           label="URL de start"

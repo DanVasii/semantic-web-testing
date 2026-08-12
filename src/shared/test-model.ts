@@ -117,6 +117,13 @@ export interface WaitDefinition {
   value?: string;
 }
 
+export interface RepeatUntilDefinition {
+  target: LocatorDefinition;
+  operator: MatchOperator;
+  value: string;
+  maxAttempts: number;
+}
+
 export type DatasetValueStrategy = "dataset" | "manual";
 
 export interface ActionStep {
@@ -135,6 +142,8 @@ export interface ActionStep {
   key?: string;
   scrollX?: number;
   scrollY?: number;
+  repeat?: number;
+  repeatUntil?: RepeatUntilDefinition;
   waitAfter?: WaitDefinition;
   fallbacks: LocatorFallback[];
   enabled: boolean;

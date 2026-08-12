@@ -665,6 +665,43 @@ const validateWait = (
   }
 };
 
+const validateRepeatUntil = (
+  value: unknown,
+  path: string,
+  context: ValidationContext,
+): void => {
+  const condition = requireRecord(value, path, context);
+  if (condition === undefined) return;
+  allowOnly(
+    condition,
+    ["target", "operator", "value", "maxAttempts"],
+    path,
+    context,
+  );
+  requireProperties(
+    condition,
+    ["target", "operator", "value", "maxAttempts"],
+    path,
+    context,
+  );
+  validateLocator(condition.target, `${path}.target`, context);
+  validateEnum(
+    condition.operator,
+    MATCH_OPERATORS,
+    `${path}.operator`,
+    context,
+  );
+  validateString(condition.value, `${path}.value`, context, {
+    min: 1,
+    max: 1_000,
+  });
+  validateNumber(condition.maxAttempts, `${path}.maxAttempts`, context, {
+    integer: true,
+    min: 1,
+    max: 24,
+  });
+};
+
 const validateActionStep = (
   action: JsonRecord,
   path: string,
@@ -686,6 +723,8 @@ const validateActionStep = (
     "key",
     "scrollX",
     "scrollY",
+    "repeat",
+    "repeatUntil",
     "waitAfter",
     "fallbacks",
     "enabled",
@@ -768,6 +807,23 @@ const validateActionStep = (
       min: -100000,
       max: 100000,
     });
+  }
+  if (action.repeat !== undefined) {
+    validateNumber(action.repeat, `${path}.repeat`, context, {
+      integer: true,
+      min: 0,
+      max: 24,
+    });
+  }
+  if (action.repeatUntil !== undefined) {
+    validateRepeatUntil(action.repeatUntil, `${path}.repeatUntil`, context);
+  }
+  if (action.repeat !== undefined && action.repeatUntil !== undefined) {
+    context.add(
+      `${path}.repeatUntil`,
+      "invalid_value",
+      "repeat și repeatUntil nu pot fi folosite împreună.",
+    );
   }
   if (action.waitAfter !== undefined) {
     validateWait(action.waitAfter, `${path}.waitAfter`, context);
@@ -858,6 +914,16 @@ const validateActionStep = (
       `${path}.key`,
       "missing_property",
       "Acțiunea press_key necesită key.",
+    );
+  }
+  if (
+    action.repeatUntil !== undefined &&
+    !["click", "choose_repeated_item", "calendar_select"].includes(actionType)
+  ) {
+    context.add(
+      `${path}.repeatUntil`,
+      "invalid_value",
+      `Acțiunea ${actionType} nu poate folosi repeatUntil.`,
     );
   }
 };

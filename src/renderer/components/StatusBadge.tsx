@@ -18,6 +18,7 @@ const statusLabels: Record<RunnerState, string> = {
   waiting_for_manual_intervention: "Așteaptă intervenția manuală",
   waiting_for_mysql_check: "Așteaptă verificarea MySQL",
   waiting_for_imap_check: "Așteaptă verificarea IMAP",
+  waiting_for_ai_analysis: "AI verifică rezultatele",
   paused_on_error: "Pauză la eroare",
   completed: "Finalizat",
   failed: "Eșuat",
@@ -34,7 +35,7 @@ const getStatusClasses = (status: RunnerState): string => {
   }
 
   if (status === "stopped" || status === "idle") {
-    return "border-stone-200 bg-stone-100 text-stone-700";
+    return "border-slate-200 bg-slate-100 text-slate-700";
   }
 
   if (status === "paused_on_error") {

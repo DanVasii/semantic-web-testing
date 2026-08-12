@@ -743,7 +743,7 @@ export const DatasetsPanel = ({
         <textarea
           aria-label="JSON raw al datasetului"
           spellCheck={false}
-          className="min-h-96 rounded-lg border border-app-border bg-stone-950 px-4 py-3 font-mono text-sm leading-6 text-stone-100 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+          className="min-h-96 rounded-lg border border-app-border bg-slate-950 px-4 py-3 font-mono text-sm leading-6 text-slate-100 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
           value={rawJson}
           onChange={(event: ChangeEvent<HTMLTextAreaElement>) => {
             const json = event.target.value;

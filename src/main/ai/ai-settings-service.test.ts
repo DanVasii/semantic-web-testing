@@ -136,6 +136,38 @@ describe("AiSettingsService", () => {
     });
   });
 
+  it("preloads the configured model catalog once and serves it from memory", async () => {
+    service.save({
+      provider: "gemini",
+      ollamaBaseUrl: "http://127.0.0.1:11434",
+      ollamaModel: "",
+      geminiModel: "gemini-flash",
+      geminiApiKey: "gemini-secret-key",
+    });
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          models: [
+            {
+              name: "models/gemini-flash",
+              displayName: "Gemini Flash",
+              supportedGenerationMethods: ["generateContent"],
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+
+    service.preloadModels();
+    const first = await service.listModels("gemini");
+    const second = await service.listModels("gemini");
+
+    expect(first).toEqual(second);
+    expect(first[0]?.id).toBe("gemini-flash");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("normalizes and tests an Ollama connection without requiring a local installation in tests", async () => {
     service.save({
       provider: "ollama",
@@ -193,6 +225,49 @@ describe("AiSettingsService", () => {
     );
     expect(JSON.stringify(preview.contextPreview)).not.toContain("do-not-send");
     expect(preview.prompt).toContain("Completează email");
+    expect(preview.prompt).toContain('{"useful":');
+    expect(preview.prompt).not.toContain('\n  "useful":');
+  });
+
+  it("keeps nested semantic calendar locators in the AI run preview", () => {
+    service.save({
+      provider: "gemini",
+      ollamaBaseUrl: "http://127.0.0.1:11434",
+      ollamaModel: "",
+      geminiModel: "gemini-flash",
+      geminiApiKey: "gemini-secret-key",
+    });
+
+    const preview = service.preview({
+      task: "adapt_run",
+      context: {
+        semanticInteractionMap: [
+          {
+            pageId: "page-calendar",
+            controlsAndMarkers: [
+              {
+                fieldId: "next_month_button",
+                primaryLocator: {
+                  strategy: {
+                    type: "data_attribute",
+                    operator: "equals",
+                    attribute: "data-testid",
+                    value: "calendar-next-month",
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(JSON.stringify(preview.contextPreview)).toContain(
+      "calendar-next-month",
+    );
+    expect(preview.outputSchema).toMatchObject({
+      required: ["summary", "changes", "insertions"],
+    });
   });
 
   it("can clear the Gemini key only after leaving the Gemini provider", () => {

@@ -6,8 +6,10 @@ export type AiProviderId = (typeof AI_PROVIDER_IDS)[number];
 export const AI_TASKS = [
   "analyze_step",
   "edit_step",
+  "adapt_run",
   "generate_test",
   "repair_locator",
+  "evaluate_post_run",
 ] as const;
 export type AiTask = (typeof AI_TASKS)[number];
 
@@ -53,6 +55,7 @@ export interface CreateAiRequestPreviewInput {
   context: JsonValue;
   provider?: AiProviderId;
   model?: string;
+  outputSchema?: JsonValue;
 }
 
 export interface AiRequestPreview {
@@ -182,4 +185,73 @@ export interface UndoAiStepChangeInput {
   projectId: string;
   testId: string;
   aiVersion: number;
+}
+
+export interface AiRunStepPatch {
+  primaryLocator?: AiEditableStepPatch["primaryLocator"];
+  repeat?: number;
+  repeatUntil?: {
+    target: NonNullable<AiEditableStepPatch["primaryLocator"]>;
+    operator:
+      | "equals"
+      | "contains"
+      | "contains_all_keywords"
+      | "contains_any_keyword"
+      | "starts_with"
+      | "ends_with"
+      | "regex";
+    value: string;
+    maxAttempts: number;
+  };
+  datasetValue?: string;
+}
+
+export interface AiRunStepChange {
+  stepId: string;
+  patch: AiRunStepPatch;
+  rationale: string;
+}
+
+export interface AiRunStepInsertion {
+  anchorStepId: string;
+  position: "before" | "after";
+  action: {
+    actionType:
+      "click" | "calendar_select" | "select_option" | "wait_for_element";
+    title: string;
+    humanDescription: string;
+    whyExplanation: string;
+    primaryLocator: NonNullable<AiEditableStepPatch["primaryLocator"]>;
+    datasetValue?: string;
+    repeat?: number;
+    repeatUntil?: NonNullable<AiRunStepPatch["repeatUntil"]>;
+  };
+  rationale: string;
+}
+
+export interface AiRunPlanProposal {
+  summary: string;
+  changes: AiRunStepChange[];
+  insertions: AiRunStepInsertion[];
+}
+
+export interface AiRunPlanInput {
+  projectId: string;
+  testId: string;
+  instruction: string;
+  provider?: AiProviderId;
+  model?: string;
+}
+
+export interface AiRunPlanPreview {
+  request: AiRequestPreview;
+  stepIds: string[];
+  pageIds: string[];
+}
+
+export interface AiRunPlanResult {
+  provider: Exclude<AiProviderId, "none">;
+  model: string;
+  proposal: AiRunPlanProposal;
+  usage: AiTokenUsage;
 }

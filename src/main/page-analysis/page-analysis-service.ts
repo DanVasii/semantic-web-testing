@@ -15,6 +15,7 @@ import type { SemanticAnalysis } from "../../shared/semantic-analysis.js";
 import {
   PageRepository,
   ProjectRepository,
+  TestRepository,
 } from "../persistence/repositories.js";
 import {
   TOTAL_CAPTURE_STEPS,
@@ -23,6 +24,10 @@ import {
   toPageAnalysisProgress,
 } from "./page-capture.js";
 import { analyzePageSemantics } from "./semantic-analyzer.js";
+import {
+  detectSemanticChange,
+  type SemanticComparisonSnapshot,
+} from "./semantic-change-detector.js";
 
 export interface CurrentPageMetadata {
   tabId: string;
@@ -43,6 +48,7 @@ export interface PageAnalysisServiceOptions {
   artifactRoot: string;
   createId: () => string;
   now: () => Date;
+  semanticChangeThreshold?: number;
 }
 
 interface StoredAnalysisArtifact {
@@ -103,21 +109,135 @@ const toPortablePath = (value: string): string => value.replaceAll("\\", "/");
 const serializeJson = (value: unknown): string =>
   `${JSON.stringify(value, null, 2)}\n`;
 
+type CapturedElement = PageCapture["allElements"][number];
+
+const calendarControlPattern =
+  /calendar|datepicker|date-picker|(?:^|[-_])cal[-_]|prev[-_]?month|next[-_]?month|month[-_]?prev|month[-_]?next/i;
+const calendarPeriodPattern =
+  /\b(?:ianuarie|februarie|martie|aprilie|mai|iunie|iulie|august|septembrie|octombrie|noiembrie|decembrie|january|february|march|april|may|june|july|august|september|october|november|december)\s+20\d{2}\b/i;
+
+const cssClassLocator = (element: CapturedElement): string | undefined => {
+  const classes = (element.attributes.class ?? "")
+    .split(/\s+/)
+    .filter((token) => /^[a-zA-Z_][\w-]*$/.test(token));
+  const preferred =
+    classes.find((token) => /calendar|month|header|^cal-/i.test(token)) ??
+    classes[0];
+  return preferred === undefined ? undefined : `.${preferred}`;
+};
+
+const capturedElementHint = (
+  element: CapturedElement,
+  kind: string,
+): JsonValue => {
+  const id = element.attributes.id;
+  const strategy =
+    typeof id === "string" && /^[a-zA-Z_][\w-]*$/.test(id)
+      ? { type: "css", operator: "equals", value: `#${id}` }
+      : {
+          type: "css",
+          operator: "equals",
+          value: cssClassLocator(element) ?? element.cssSelector,
+        };
+  return {
+    kind,
+    tag: element.tag,
+    text: element.text.slice(0, 300),
+    primaryLocator: {
+      strategy,
+      unique: true,
+      stability: id === undefined ? 0.65 : 0.93,
+      reason: "Locator capturat din structura reală a paginii.",
+    },
+  };
+};
+
+const calendarRuntimeHints = (artifact: StoredAnalysisArtifact): JsonValue => {
+  const navigationControls = artifact.interactiveElements
+    .filter((element) =>
+      calendarControlPattern.test(
+        `${element.cssSelector} ${JSON.stringify(element.attributes)}`,
+      ),
+    )
+    .slice(0, 8);
+  const parentPaths = new Set(
+    navigationControls
+      .map(({ parentPath }) => parentPath)
+      .filter((path): path is string => path !== null),
+  );
+  const periodMarkers = artifact.allElements
+    .filter(
+      (element) =>
+        parentPaths.has(element.path) &&
+        calendarPeriodPattern.test(element.text),
+    )
+    .slice(0, 4);
+  const dateCellTemplates = artifact.dataElements
+    .filter((element) =>
+      /^20\d{2}-\d{2}-\d{2}$/.test(element.dataAttributes["data-date"] ?? ""),
+    )
+    .slice(0, 3)
+    .map((element): JsonValue => ({
+      kind: "calendar_date_cell_template",
+      tag: element.tag,
+      text: element.text.slice(0, 40),
+      primaryLocator: {
+        strategy: {
+          type: "data_attribute",
+          attribute: "data-date",
+          operator: "equals",
+          value: element.dataAttributes["data-date"]!,
+        },
+        unique: true,
+        stability: 0.95,
+        reason: "Atribut data-date capturat din structura reală a paginii.",
+      },
+    }));
+  return {
+    periodMarkers: periodMarkers.map((element) =>
+      capturedElementHint(element, "calendar_period_marker"),
+    ),
+    navigationControls: navigationControls.map((element) =>
+      capturedElementHint(
+        element,
+        /prev|previous|anterioar/i.test(
+          `${element.cssSelector} ${JSON.stringify(element.attributes)}`,
+        )
+          ? "calendar_previous_month"
+          : "calendar_next_month",
+      ),
+    ),
+    dateCellTemplates,
+  };
+};
+
 export class PageAnalysisService {
   private readonly activeProjects = new Set<string>();
 
   public constructor(
     private readonly projectRepository: ProjectRepository,
     private readonly pageRepository: PageRepository,
+    private readonly testRepository: TestRepository,
     private readonly captureSource: PageCaptureSource,
     private readonly options: PageAnalysisServiceOptions,
   ) {}
 
   public async getCurrentTarget(
     projectId: string,
-  ): Promise<PageAnalysisTarget> {
+  ): Promise<PageAnalysisTarget | undefined> {
     this.requireProject(projectId);
-    const metadata = await this.captureSource.getCurrentPageMetadata(projectId);
+    let metadata: CurrentPageMetadata;
+    try {
+      metadata = await this.captureSource.getCurrentPageMetadata(projectId);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes("Nu există o pagină web deschisă")
+      ) {
+        return undefined;
+      }
+      throw error;
+    }
     const normalizedUrl = normalizeAnalyzedPageUrl(metadata.url);
     const page = this.pageRepository.findByProjectAndNormalizedUrl(
       projectId,
@@ -179,11 +299,11 @@ export class PageAnalysisService {
       );
       const pageId = existingPage?.id ?? this.options.createId();
       const pageVersionId = this.options.createId();
-      const versionNumber =
-        (existingPage === undefined
-          ? 0
-          : (this.pageRepository.findLatestVersion(existingPage.id)
-              ?.versionNumber ?? 0)) + 1;
+      const previousVersion =
+        existingPage === undefined
+          ? undefined
+          : this.pageRepository.findLatestVersion(existingPage.id);
+      const versionNumber = (previousVersion?.versionNumber ?? 0) + 1;
       const title = this.pageTitle(capture.title, capture.url);
       const page: Page = {
         id: pageId,
@@ -230,6 +350,25 @@ export class PageAnalysisService {
         generatedAt: capturedAt,
         url: capture.url,
       });
+      const previousSnapshot =
+        previousVersion === undefined
+          ? undefined
+          : await this.loadComparisonSnapshot(previousVersion);
+      const semanticChange =
+        previousVersion === undefined || previousSnapshot === undefined
+          ? undefined
+          : detectSemanticChange({
+              previousPageVersionId: previousVersion.id,
+              currentPageVersionId: pageVersionId,
+              previous: previousSnapshot,
+              current: {
+                dom: capture.html,
+                interactiveElements: capture.interactiveElements,
+                forms: capture.forms,
+                semanticAnalysis,
+              },
+              threshold: this.options.semanticChangeThreshold ?? 0.3,
+            });
       const semanticAnalysisFilePath = `${portableDirectory}/semantic-analysis.json`;
       const version: PageVersion = {
         id: pageVersionId,
@@ -242,6 +381,7 @@ export class PageAnalysisService {
         accessibilityFilePath,
         analysisFilePath,
         semanticHash,
+        ...(semanticChange === undefined ? {} : { change: semanticChange }),
       };
       const analysisArtifact: StoredAnalysisArtifact = {
         schemaVersion: 2,
@@ -351,6 +491,17 @@ export class PageAnalysisService {
         throw error;
       }
 
+      const invalidatedTestIds =
+        semanticChange?.exceeded === true
+          ? this.invalidateAssociatedTests(
+              page,
+              version,
+              semanticChange.score,
+              semanticChange.threshold,
+              capturedAt,
+            )
+          : [];
+
       const result: PageAnalysisResult = {
         projectId,
         page,
@@ -362,6 +513,8 @@ export class PageAnalysisService {
         counts: capture.counts,
         inaccessibleStylesheets: capture.inaccessibleStylesheets,
         artifactDirectory: portableDirectory,
+        ...(semanticChange === undefined ? {} : { semanticChange }),
+        ...(invalidatedTestIds.length === 0 ? {} : { invalidatedTestIds }),
       };
       onProgress?.(
         toPageAnalysisProgress(
@@ -412,6 +565,9 @@ export class PageAnalysisService {
           title: artifact?.title ?? page.name,
           counts: artifact?.counts ?? emptyCounts(),
           inaccessibleStylesheets: artifact?.inaccessibleStylesheets ?? [],
+          ...(latestVersion.change === undefined
+            ? {}
+            : { latestChange: latestVersion.change }),
         };
       }),
     );
@@ -448,6 +604,7 @@ export class PageAnalysisService {
             title: artifact.title,
             normalizedUrl: version.normalizedUrl,
             semanticAnalysis: artifact.semanticAnalysis as unknown as JsonValue,
+            calendarRuntimeHints: calendarRuntimeHints(artifact),
           };
         } catch {
           return undefined;
@@ -477,6 +634,67 @@ export class PageAnalysisService {
 
     const url = new URL(urlValue);
     return (url.pathname === "/" ? url.hostname : url.pathname).slice(0, 200);
+  }
+
+  private async loadComparisonSnapshot(
+    version: PageVersion,
+  ): Promise<SemanticComparisonSnapshot | undefined> {
+    try {
+      const [dom, artifactText] = await Promise.all([
+        readFile(this.resolveArtifactPath(version.domFilePath), "utf8"),
+        readFile(this.resolveArtifactPath(version.analysisFilePath), "utf8"),
+      ]);
+      const artifact = JSON.parse(artifactText) as StoredAnalysisArtifact;
+      return {
+        dom,
+        interactiveElements: artifact.interactiveElements,
+        forms: artifact.forms,
+        semanticAnalysis: artifact.semanticAnalysis,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private invalidateAssociatedTests(
+    page: Page,
+    version: PageVersion,
+    score: number,
+    threshold: number,
+    detectedAt: string,
+  ): string[] {
+    const associated = this.testRepository
+      .listByProject(page.projectId)
+      .filter((test) => {
+        const referencedByStep = test.flowItems.some(
+          (item) => item.type === "action" && item.pageId === page.id,
+        );
+        const isStartPage = (() => {
+          try {
+            return (
+              normalizeAnalyzedPageUrl(test.startUrl) === page.normalizedUrl
+            );
+          } catch {
+            return false;
+          }
+        })();
+        return referencedByStep || isStartPage;
+      });
+    for (const test of associated) {
+      this.testRepository.update({
+        ...test,
+        status: "invalidated",
+        updatedAt: detectedAt,
+        invalidation: {
+          pageId: page.id,
+          pageVersionId: version.id,
+          detectedAt,
+          score,
+          threshold,
+        },
+      });
+    }
+    return associated.map(({ id }) => id);
   }
 
   private resolveArtifactPath(portablePath: string): string {

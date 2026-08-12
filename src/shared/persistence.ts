@@ -53,6 +53,7 @@ export interface PageVersion {
   accessibilityFilePath: string;
   analysisFilePath: string;
   semanticHash: string;
+  change?: SemanticChangeSummary;
 }
 
 export type TestStatus = "draft" | "valid" | "invalidated";
@@ -82,6 +83,16 @@ export interface TestDefinition {
   createdAt: string;
   updatedAt: string;
   flowItems: TestFlowItem[];
+  postRunChecks?: import("./post-run-checks.js").TestPostRunChecks;
+  invalidation?: TestInvalidation;
+}
+
+export interface TestInvalidation {
+  pageId: string;
+  pageVersionId: string;
+  detectedAt: string;
+  score: number;
+  threshold: number;
 }
 
 export interface TestVersion {
@@ -107,6 +118,9 @@ export interface TestRun {
   browserType: BrowserType;
   pageVersionIds: string[];
   warnings?: JsonValue[];
+  datasetSnapshot?: JsonValue;
+  postRunResult?: JsonValue;
+  error?: JsonValue;
 }
 
 export interface StepRunResult {
@@ -152,3 +166,4 @@ import type {
   TestDataset as DeclarativeTestDataset,
   TestFlowItem,
 } from "./test-model.js";
+import type { SemanticChangeSummary } from "./page-analysis.js";

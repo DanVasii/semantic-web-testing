@@ -22,6 +22,7 @@ export const recorderInitScript = ({
   let lastScrollX = scrollX;
   let lastScrollY = scrollY;
   const pendingInputs = new WeakMap<Element, string>();
+  let lastPendingInput: Element | undefined;
 
   const compact = (value: string | null | undefined): string | undefined => {
     const result = value?.replace(/\s+/g, " ").trim();
@@ -140,6 +141,9 @@ export const recorderInitScript = ({
       repeatedContainer === null
         ? undefined
         : simpleContainerLocator(repeatedContainer);
+    const heading = element.matches("h1, h2, h3, h4, h5, h6")
+      ? element
+      : element.querySelector("h1, h2, h3, h4, h5, h6");
     const result: RecorderElementSnapshot = {
       tagName: element.tagName.toLowerCase(),
       dataAttributes,
@@ -152,6 +156,7 @@ export const recorderInitScript = ({
       text: compact(htmlElement.innerText ?? element.textContent),
       label: compact(labels),
       role: implicitRole(element),
+      actionText: compact(heading?.textContent),
       ariaLabel: compact(element.getAttribute("aria-label")),
       placeholder: compact(element.getAttribute("placeholder")),
       title: compact(element.getAttribute("title")),
@@ -187,12 +192,14 @@ export const recorderInitScript = ({
     }
   };
 
-  const emit = (event: Omit<RecorderRawEvent, "timestamp" | "url">): void => {
+  const emit = async (
+    event: Omit<RecorderRawEvent, "timestamp" | "url">,
+  ): Promise<void> => {
     if (!active || blocked) return;
     const binding = recorderGlobal[bindingName];
     if (typeof binding !== "function") return;
     setBlocked(true);
-    void (binding as (value: RecorderRawEvent) => Promise<void>)({
+    await (binding as (value: RecorderRawEvent) => Promise<void>)({
       ...event,
       url: location.href,
       timestamp: new Date().toISOString(),
@@ -204,11 +211,100 @@ export const recorderInitScript = ({
   const isInternal = (element: Element): boolean =>
     element.closest("[data-semantic-recorder-internal]") !== null;
 
-  const flushInput = (element: Element): void => {
+  const nativeClickableTags = new Set(["button", "summary"]);
+  const clickableRoles = new Set([
+    "button",
+    "checkbox",
+    "gridcell",
+    "link",
+    "menuitem",
+    "option",
+    "radio",
+    "switch",
+    "tab",
+    "treeitem",
+  ]);
+  const clickableDataAttributes = [
+    "data-action",
+    "data-click",
+    "data-command",
+    "data-date",
+  ];
+
+  const hasPointerCursor = (element: Element): boolean => {
+    if (!(element instanceof HTMLElement || element instanceof SVGElement)) {
+      return false;
+    }
+    const style = getComputedStyle(element);
+    return style.pointerEvents !== "none" && style.cursor === "pointer";
+  };
+
+  const isPointerBoundary = (element: Element): boolean => {
+    if (!hasPointerCursor(element)) return false;
+    const parent = element.parentElement;
+    return parent === null || !hasPointerCursor(parent);
+  };
+
+  const isExplicitlyClickable = (element: Element): boolean => {
+    const tagName = element.tagName.toLowerCase();
+    if (nativeClickableTags.has(tagName)) return true;
+    if (tagName === "a" && element.hasAttribute("href")) return true;
+    if (
+      ["input", "select", "textarea"].includes(tagName) ||
+      clickableRoles.has(element.getAttribute("role") ?? "") ||
+      element.hasAttribute("onclick") ||
+      clickableDataAttributes.some((attribute) =>
+        element.hasAttribute(attribute),
+      )
+    ) {
+      return true;
+    }
+    const tabIndex = element.getAttribute("tabindex");
+    return tabIndex !== null && Number(tabIndex) >= 0;
+  };
+
+  const resolveClickTarget = (event: MouseEvent): Element | undefined => {
+    const path = event
+      .composedPath()
+      .filter(
+        (candidate): candidate is Element => candidate instanceof Element,
+      );
+    const explicitTarget = path.find(isExplicitlyClickable);
+    if (explicitTarget !== undefined) return explicitTarget;
+
+    const pointerTarget = path.find(isPointerBoundary);
+    if (pointerTarget !== undefined) return pointerTarget;
+
+    const directTarget =
+      event.target instanceof Element ? event.target : undefined;
+    if (
+      directTarget === undefined ||
+      ["body", "html"].includes(directTarget.tagName.toLowerCase()) ||
+      directTarget.closest("label") !== null
+    ) {
+      return undefined;
+    }
+
+    // Clickul utilizatorului este el însuși un semnal comportamental. Acest
+    // fallback acoperă componentele care atașează addEventListener pe div/span
+    // fără rol, tabindex, onclick inline sau cursor:pointer.
+    return directTarget;
+  };
+
+  const takePendingInput = (
+    element: Element | undefined,
+  ): Omit<RecorderRawEvent, "timestamp" | "url"> | undefined => {
+    if (element === undefined) return undefined;
     const value = pendingInputs.get(element);
-    if (value === undefined) return;
+    if (value === undefined) return undefined;
     pendingInputs.delete(element);
-    emit({ type: "fill", target: snapshot(element), value });
+    if (lastPendingInput === element) lastPendingInput = undefined;
+    return { type: "fill", target: snapshot(element), value };
+  };
+
+  const flushInput = (element: Element): void => {
+    const event = takePendingInput(element);
+    if (event !== undefined) void emit(event);
   };
 
   document.addEventListener(
@@ -233,6 +329,7 @@ export const recorderInitScript = ({
           ].includes(event.target.type));
       if (isTextInput) {
         pendingInputs.set(event.target, event.target.value);
+        lastPendingInput = event.target;
       }
     },
     true,
@@ -251,20 +348,20 @@ export const recorderInitScript = ({
       if (!active || blocked || !(event.target instanceof Element)) return;
       if (isInternal(event.target)) return;
       if (event.target instanceof HTMLSelectElement) {
-        emit({
+        void emit({
           type: "select",
           target: snapshot(event.target),
           value: event.target.value,
         });
       } else if (event.target instanceof HTMLInputElement) {
         if (event.target.type === "checkbox") {
-          emit({
+          void emit({
             type: "checkbox",
             target: snapshot(event.target),
             checked: event.target.checked,
           });
         } else if (event.target.type === "radio" && event.target.checked) {
-          emit({
+          void emit({
             type: "radio",
             target: snapshot(event.target),
             checked: true,
@@ -283,10 +380,8 @@ export const recorderInitScript = ({
     "click",
     (event) => {
       if (!active || blocked || !(event.target instanceof Element)) return;
-      const target = event.target.closest(
-        "button, a, input, select, textarea, [role='button'], [role='link']",
-      );
-      if (target === null || isInternal(target)) return;
+      const target = resolveClickTarget(event);
+      if (target === undefined || isInternal(target)) return;
       if (
         target instanceof HTMLInputElement ||
         target instanceof HTMLSelectElement ||
@@ -294,7 +389,7 @@ export const recorderInitScript = ({
       ) {
         return;
       }
-      emit({ type: "click", target: snapshot(target) });
+      void emit({ type: "click", target: snapshot(target) });
     },
     true,
   );
@@ -330,7 +425,7 @@ export const recorderInitScript = ({
         event.shiftKey ? "Shift" : "",
         event.metaKey ? "Meta" : "",
       ].filter(Boolean);
-      emit({
+      void emit({
         type: "press_key",
         target: snapshot(event.target),
         key: [...modifiers, event.key].join("+"),
@@ -349,7 +444,7 @@ export const recorderInitScript = ({
         lastScrollX = scrollX;
         lastScrollY = scrollY;
         if (Math.abs(deltaX) + Math.abs(deltaY) >= 120) {
-          emit({ type: "scroll", scrollX: deltaX, scrollY: deltaY });
+          void emit({ type: "scroll", scrollX: deltaX, scrollY: deltaY });
         }
       }, 450);
     },
@@ -358,6 +453,10 @@ export const recorderInitScript = ({
 
   recorderGlobal[controlName] = {
     setBlocked,
+    flushPending: async () => {
+      const event = takePendingInput(lastPendingInput);
+      if (event !== undefined) await emit(event);
+    },
     stop: () => {
       active = false;
       setBlocked(false);
@@ -397,6 +496,21 @@ export const setRecorderPageBlocked = async (
     },
     { controlName: `${bindingName}Control`, nextBlocked: blocked },
   );
+};
+
+export const flushRecorderPendingInputs = async (
+  page: Page,
+  bindingName: string,
+): Promise<void> => {
+  await page.evaluate(async (controlName) => {
+    const control = (
+      globalThis as unknown as Record<
+        string,
+        { flushPending?: () => Promise<void> } | undefined
+      >
+    )[controlName];
+    await control?.flushPending?.();
+  }, `${bindingName}Control`);
 };
 
 export const stopRecorderCapture = async (

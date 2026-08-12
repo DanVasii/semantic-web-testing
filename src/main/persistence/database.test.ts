@@ -50,10 +50,15 @@ describe("application database", () => {
     expect(tables).toEqual([
       "application_ai_settings",
       "datasets",
+      "global_imap_accounts",
       "imap_accounts",
+      "mysql_cleanup_logs",
+      "mysql_run_diffs",
+      "mysql_run_snapshots",
       "page_versions",
       "pages",
       "project_basic_auth",
+      "project_mysql_settings",
       "project_settings",
       "projects",
       "runs",
@@ -62,7 +67,7 @@ describe("application database", () => {
       "test_versions",
       "tests",
     ]);
-    expect(version.user_version).toBe(15);
+    expect(version.user_version).toBe(21);
     expect(journalCount.count).toBe(APPLICATION_MIGRATIONS.length);
 
     database.close();

@@ -12,12 +12,14 @@ import type {
   TestDefinition,
   TestRun,
 } from "../../shared/persistence.js";
+import { defaultTestPostRunChecks } from "../../shared/post-run-checks.js";
 import {
   type ApplicationDatabase,
   openApplicationDatabase,
 } from "./database.js";
 import {
   DatasetRepository,
+  ImapAccountRepository,
   PageRepository,
   ProjectRepository,
   RunRepository,
@@ -70,6 +72,7 @@ const testDefinition: TestDefinition = {
   workflowState: "ready",
   createdAt: NOW,
   updatedAt: NOW,
+  postRunChecks: defaultTestPostRunChecks(),
   flowItems: [
     {
       id: "step-1",
@@ -137,6 +140,29 @@ describe("ProjectRepository", () => {
     expect(repository.delete(project.id)).toBe(true);
     expect(repository.findById(project.id)).toBeUndefined();
     expect(repository.delete(project.id)).toBe(false);
+  });
+});
+
+describe("ImapAccountRepository", () => {
+  it("persists global IMAP accounts independently of a project", () => {
+    const repository = new ImapAccountRepository(database);
+    const account = {
+      id: "imap-global-1",
+      name: "QA",
+      host: "imap.example.test",
+      port: 993,
+      secure: true,
+      username: "qa@example.test",
+      encryptedPassword: "encrypted",
+      mailbox: "INBOX",
+    };
+
+    repository.save(account);
+
+    expect(repository.list()).toEqual([account]);
+    expect(repository.findById(account.id)).toEqual(account);
+    expect(repository.delete(account.id)).toBe(true);
+    expect(repository.list()).toEqual([]);
   });
 });
 

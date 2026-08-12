@@ -305,6 +305,135 @@ export const APPLICATION_MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    version: 16,
+    name: "create_project_mysql_settings",
+    up(database) {
+      database.exec(`
+        CREATE TABLE project_mysql_settings (
+          project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+          host TEXT NOT NULL,
+          port INTEGER NOT NULL CHECK(port BETWEEN 1 AND 65535),
+          database_name TEXT NOT NULL,
+          username TEXT NOT NULL,
+          encrypted_password TEXT NOT NULL,
+          ssl INTEGER NOT NULL CHECK(ssl IN (0, 1)),
+          identity_config_json TEXT NOT NULL DEFAULT '[]',
+          updated_at TEXT NOT NULL
+        ) STRICT;
+      `);
+    },
+  },
+  {
+    version: 17,
+    name: "create_mysql_run_snapshots_and_cleanup_logs",
+    up(database) {
+      database.exec(`
+        CREATE TABLE mysql_run_snapshots (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK(kind IN ('baseline', 'current')),
+          check_step_id TEXT,
+          captured_at TEXT NOT NULL,
+          tables_json TEXT NOT NULL
+        ) STRICT;
+
+        CREATE UNIQUE INDEX mysql_run_baseline_unique
+          ON mysql_run_snapshots(run_id)
+          WHERE kind = 'baseline';
+
+        CREATE TABLE mysql_run_diffs (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+          check_step_id TEXT NOT NULL,
+          baseline_snapshot_id TEXT NOT NULL
+            REFERENCES mysql_run_snapshots(id) ON DELETE CASCADE,
+          current_snapshot_id TEXT NOT NULL
+            REFERENCES mysql_run_snapshots(id) ON DELETE CASCADE,
+          created_at TEXT NOT NULL,
+          tables_json TEXT NOT NULL
+        ) STRICT;
+
+        CREATE TABLE mysql_cleanup_logs (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+          diff_id TEXT NOT NULL REFERENCES mysql_run_diffs(id) ON DELETE CASCADE,
+          preview_id TEXT NOT NULL,
+          status TEXT NOT NULL
+            CHECK(status IN ('pending', 'completed', 'failed')),
+          started_at TEXT NOT NULL,
+          ended_at TEXT,
+          rows_json TEXT NOT NULL,
+          affected_rows INTEGER NOT NULL DEFAULT 0,
+          error TEXT
+        ) STRICT;
+      `);
+    },
+  },
+  {
+    version: 18,
+    name: "add_test_post_run_checks",
+    up(database) {
+      database.exec(`
+        ALTER TABLE tests
+        ADD COLUMN post_run_checks_json TEXT NOT NULL
+        DEFAULT '{"aiPrompt":"","mysql":{"enabled":false,"tableNames":[],"identities":[]},"imap":{"enabled":false,"accountIds":[],"mailbox":"INBOX","sender":"","recipient":"","subjectEquals":"","subjectContains":"","bodyContains":""}}';
+      `);
+    },
+  },
+  {
+    version: 19,
+    name: "make_imap_accounts_global",
+    up(database) {
+      database.exec(`
+        CREATE TABLE global_imap_accounts (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          host TEXT NOT NULL,
+          port INTEGER NOT NULL CHECK(port BETWEEN 1 AND 65535),
+          secure INTEGER NOT NULL CHECK(secure IN (0, 1)),
+          username TEXT NOT NULL,
+          password TEXT NOT NULL,
+          mailbox TEXT NOT NULL
+        ) STRICT;
+
+        INSERT INTO global_imap_accounts (
+          id, name, host, port, secure, username, password, mailbox
+        )
+        SELECT id, name, host, port, secure, username, password, mailbox
+        FROM imap_accounts;
+      `);
+    },
+  },
+  {
+    version: 20,
+    name: "add_page_change_detection",
+    up(database) {
+      database.exec(`
+        ALTER TABLE page_versions
+        ADD COLUMN change_json TEXT;
+
+        ALTER TABLE tests
+        ADD COLUMN invalidation_json TEXT;
+      `);
+    },
+  },
+  {
+    version: 21,
+    name: "add_run_history_details",
+    up(database) {
+      database.exec(`
+        ALTER TABLE runs
+        ADD COLUMN dataset_snapshot_json TEXT;
+
+        ALTER TABLE runs
+        ADD COLUMN post_run_result_json TEXT;
+
+        ALTER TABLE runs
+        ADD COLUMN error_json TEXT;
+      `);
+    },
+  },
 ];
 
 export const assertValidMigrations = (

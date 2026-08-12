@@ -180,8 +180,23 @@ export const resolveLocator = (
 export const resolveUniqueLocator = async (
   page: Page,
   definition: LocatorDefinition,
+  options: {
+    waitForMs?: number;
+    waitForState?: "attached" | "visible";
+  } = {},
 ): Promise<Locator> => {
   const locator = resolveLocator(page, definition);
+  if (options.waitForMs !== undefined && options.waitForMs > 0) {
+    try {
+      await locator.waitFor({
+        state: options.waitForState ?? "attached",
+        timeout: options.waitForMs,
+      });
+    } catch {
+      // Count-ul de mai jos produce eroarea semantică exactă și permite
+      // runnerului să treacă automat la fallback.
+    }
+  }
   const count = await locator.count();
   if (count !== 1) {
     throw new LocatorResolutionError(

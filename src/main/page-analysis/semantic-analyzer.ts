@@ -426,6 +426,12 @@ const locatorCandidates = (
     "data-cy",
     "data-field",
     "data-component",
+    "data-date",
+    "data-value",
+    "data-id",
+    "data-key",
+    "data-slot",
+    "data-action",
   ];
   for (const attribute of stableDataAttributes) {
     const value = element.attributes[attribute]?.trim();

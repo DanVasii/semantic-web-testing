@@ -2,6 +2,11 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 
 import type { TestDefinition, TestVersion } from "../shared/persistence.js";
+import {
+  defaultTestPostRunChecks,
+  validateTestPostRunChecks,
+  type TestPostRunChecks,
+} from "../shared/post-run-checks.js";
 import { toDeclarativeTestDefinition } from "../shared/test-editor.js";
 import type { TestFlowItem } from "../shared/test-model.js";
 import { validateDeclarativeTest } from "../shared/test-validation.js";
@@ -76,6 +81,7 @@ export class TestsService {
       createdAt: now,
       updatedAt: now,
       flowItems: [],
+      postRunChecks: defaultTestPostRunChecks(),
     };
     return this.testRepository.create(test);
   }
@@ -124,6 +130,36 @@ export class TestsService {
     return this.testRepository.delete(testId);
   }
 
+  public revalidate(projectId: string, testId: string): TestDefinition {
+    const existing = this.get(projectId, testId);
+    if (existing.status !== "invalidated") {
+      throw new Error("Doar un test invalidat poate fi revalidat.");
+    }
+    const updated: TestDefinition = {
+      ...existing,
+      status: "valid",
+      workflowState: "ready",
+      updatedAt: this.options.now().toISOString(),
+    };
+    delete updated.invalidation;
+    return this.testRepository.update(updated);
+  }
+
+  public savePostRunChecks(
+    projectId: string,
+    testId: string,
+    input: TestPostRunChecks,
+  ): TestDefinition {
+    const existing = this.get(projectId, testId);
+    const updated: TestDefinition = {
+      ...existing,
+      version: existing.version + 1,
+      updatedAt: this.options.now().toISOString(),
+      postRunChecks: validateTestPostRunChecks(input),
+    };
+    return this.testRepository.update(updated);
+  }
+
   public async saveFlow(
     projectId: string,
     testId: string,
@@ -138,6 +174,14 @@ export class TestsService {
     flowItems: TestFlowItem[],
   ): Promise<TestDefinition> {
     return this.saveVersionedFlow(projectId, testId, flowItems, "ai");
+  }
+
+  public async importFlow(
+    projectId: string,
+    testId: string,
+    flowItems: TestFlowItem[],
+  ): Promise<TestDefinition> {
+    return this.saveVersionedFlow(projectId, testId, flowItems, "import");
   }
 
   public async undoAiFlow(
@@ -213,8 +257,13 @@ export class TestsService {
   public beginRecording(projectId: string, testId: string): TestDefinition {
     const existing = this.get(projectId, testId);
     if (
-      existing.workflowState !== "not_recorded" &&
-      existing.workflowState !== "recorded"
+      ![
+        "not_recorded",
+        "recording",
+        "recorded",
+        "flow_analyzed",
+        "ready",
+      ].includes(existing.workflowState)
     ) {
       throw new Error("Testul nu poate porni recorderul în starea curentă.");
     }
@@ -285,7 +334,25 @@ export class TestsService {
     if (existing.workflowState !== "recording") return existing;
     return this.testRepository.update({
       ...existing,
-      workflowState: "recorded",
+      workflowState:
+        existing.flowItems.length === 0 ? "not_recorded" : "recorded",
+      updatedAt: this.options.now().toISOString(),
+    });
+  }
+
+  public cancelRecording(
+    projectId: string,
+    testId: string,
+    originalTest: TestDefinition,
+  ): TestDefinition {
+    const existing = this.get(projectId, testId);
+    if (originalTest.projectId !== projectId || originalTest.id !== testId) {
+      throw new Error("Testul original nu aparține înregistrării curente.");
+    }
+    if (existing.workflowState !== "recording") return existing;
+    return this.testRepository.update({
+      ...originalTest,
+      flowItems: structuredClone(originalTest.flowItems),
       updatedAt: this.options.now().toISOString(),
     });
   }

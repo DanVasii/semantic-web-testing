@@ -114,6 +114,14 @@ describe("RunnerPanel", () => {
         }),
       ),
       retryRunStep: vi.fn().mockResolvedValue(snapshot()),
+      skipRunStep: vi.fn().mockResolvedValue(
+        snapshot({
+          state: "paused_on_error",
+          run: { ...run, status: "failed" },
+          canStop: true,
+          canRetry: true,
+        }),
+      ),
     } as unknown as SemanticAppApi;
     render(<RunnerPanel api={api} project={project} test={test} />);
 
@@ -130,7 +138,7 @@ describe("RunnerPanel", () => {
     expect(screen.getByText("Execuție pas cu pas")).not.toBeNull();
     expect(screen.getByText("În curs")).not.toBeNull();
     await user.click(
-      await screen.findByRole("button", { name: "Oprește rularea" }),
+      await screen.findByRole("button", { name: "Oprește testul" }),
     );
     expect(api.stopRun).toHaveBeenCalledWith(run.id);
 
@@ -143,17 +151,313 @@ describe("RunnerPanel", () => {
             code: "locator_ambiguous",
             message: "Locator ambiguu.",
             count: 2,
+            stepId: "step-1",
+            operation: "click",
+            technicalDetails: "StepExecutionError: Locator ambiguu.",
+            occurredAt: "2026-07-24T12:01:00.000Z",
+            retryable: true,
           },
-          canStop: false,
+          canStop: true,
           canRetry: true,
         }),
       );
     });
     expect(screen.getByText("Locator ambiguu. (2 rezultate)")).not.toBeNull();
+    expect(screen.getByText("Rularea este oprită la eroare")).not.toBeNull();
+    expect(screen.getByText("Poate fi reîncercată")).not.toBeNull();
+    expect(screen.getByText("Detalii tehnice")).not.toBeNull();
+    expect(
+      screen.getByText(/Browserul rămâne deschis pentru verificare/),
+    ).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "Sari peste pas" }));
+    expect(api.skipRunStep).toHaveBeenCalledWith(run.id);
     await user.click(
       screen.getByRole("button", { name: "Reîncearcă pasul curent" }),
     );
     expect(api.retryRunStep).toHaveBeenCalledWith(run.id);
+  });
+
+  it("selects the recorder dataset and its matching global IMAP account automatically", async () => {
+    const user = userEvent.setup();
+    const startRun = vi.fn().mockResolvedValue(snapshot());
+    const imapTest: TestDefinition = {
+      ...test,
+      postRunChecks: {
+        aiPrompt: "",
+        mysql: {
+          enabled: false,
+          tableNames: [],
+          identities: [],
+        },
+        imap: {
+          enabled: true,
+          accountIds: [],
+          mailbox: "INBOX",
+          sender: "",
+          recipient: "",
+          subjectEquals: "",
+          subjectContains: "Confirmare",
+          bodyContains: "",
+        },
+      },
+    };
+    const api = {
+      getRunnerStatus: vi.fn().mockResolvedValue({
+        state: "idle",
+        currentStepIndex: -1,
+        totalSteps: 0,
+        canStop: false,
+        canRetry: false,
+      }),
+      listTestRuns: vi.fn().mockResolvedValue([]),
+      listDatasets: vi.fn().mockResolvedValue([
+        {
+          id: "dataset-manual",
+          testId: test.id,
+          name: "Client manual",
+          values: {},
+          createdAt: "2026-07-24T10:00:00.000Z",
+          updatedAt: "2026-07-24T10:00:00.000Z",
+        },
+        {
+          id: "dataset-recorder",
+          testId: test.id,
+          name: "Înregistrare recorder",
+          values: {
+            customer_email: {
+              type: "fixed",
+              value: "ana@example.test",
+            },
+          },
+          createdAt: "2026-07-24T10:00:00.000Z",
+          updatedAt: "2026-07-24T10:00:00.000Z",
+        },
+      ]),
+      listRunStepResults: vi.fn().mockResolvedValue([]),
+      listImapAccounts: vi.fn().mockResolvedValue([
+        {
+          id: "imap-ana",
+          name: "Ana",
+          host: "imap.example.test",
+          port: 993,
+          secure: true,
+          username: "ana@example.test",
+          mailbox: "INBOX",
+          passwordConfigured: true,
+        },
+      ]),
+      onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
+      startRun,
+    } as unknown as SemanticAppApi;
+    render(<RunnerPanel api={api} project={project} test={imapTest} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Rulează testul" }),
+    );
+    const datasetSelect = screen.getByRole<HTMLSelectElement>("combobox", {
+      name: "Dataset",
+    });
+    await waitFor(() => {
+      expect(datasetSelect.value).toBe("dataset-recorder");
+      expect(
+        screen.getByRole<HTMLInputElement>("checkbox", { name: /Ana/i })
+          .checked,
+      ).toBe(true);
+    });
+    await user.click(screen.getByRole("button", { name: "Pornește rularea" }));
+
+    expect(startRun).toHaveBeenCalledWith({
+      projectId: project.id,
+      testId: test.id,
+      datasetId: "dataset-recorder",
+      mode: "automatic",
+      waitBeforeStart: false,
+      postRun: {
+        mysql: false,
+        imap: true,
+        imapAccountIds: ["imap-ana"],
+        ai: false,
+        provider: "none",
+        model: "",
+      },
+    });
+  });
+
+  it("previews and explicitly sends a temporary AI plan before running", async () => {
+    const user = userEvent.setup();
+    const dynamicTest: TestDefinition = {
+      ...test,
+      testMode: "dynamic_ai",
+    };
+    const proposal = {
+      summary: "Selectează temporar 15 septembrie.",
+      changes: [
+        {
+          stepId: "step-1",
+          patch: {
+            primaryLocator: {
+              type: "data_attribute" as const,
+              attribute: "data-testid",
+              operator: "equals" as const,
+              value: "calendar-day-2027-09-15",
+            },
+          },
+          rationale: "Alege data cerută.",
+        },
+      ],
+      insertions: [
+        {
+          anchorStepId: "step-1",
+          position: "before" as const,
+          action: {
+            actionType: "click" as const,
+            title: "Navighează dinamic la septembrie",
+            humanDescription: "Apasă Next până la luna cerută.",
+            whyExplanation: "Folosește markerul vizual.",
+            primaryLocator: {
+              type: "data_attribute" as const,
+              attribute: "data-testid",
+              operator: "equals" as const,
+              value: "calendar-next-month",
+            },
+            repeatUntil: {
+              target: {
+                type: "css" as const,
+                operator: "equals" as const,
+                value: "#calendar-heading",
+              },
+              operator: "equals" as const,
+              value: "septembrie 2027",
+              maxAttempts: 24,
+            },
+          },
+          rationale: "Pasul lipsește din flow.",
+        },
+      ],
+    };
+    const previewAiRunPlan = vi.fn().mockResolvedValue({
+      request: {
+        task: "adapt_run",
+        provider: "gemini",
+        model: "gemini-flash",
+        systemInstruction: "JSON only",
+        prompt: "Adapt run",
+        outputSchema: {},
+        contextPreview: {},
+        estimatedInputTokens: 140,
+        originalContextBytes: 700,
+        sentContextBytes: 500,
+        omittedPaths: [],
+      },
+      stepIds: ["step-1"],
+      pageIds: [],
+    });
+    const generateAiRunPlan = vi.fn().mockResolvedValue({
+      provider: "gemini",
+      model: "gemini-flash",
+      proposal,
+      usage: { inputTokens: 150, outputTokens: 50, totalTokens: 200 },
+    });
+    const runtimeFlowItems: TestDefinition["flowItems"] = [
+      {
+        id: "ai-run-insert-1",
+        type: "action",
+        actionType: "click",
+        title: "Navighează dinamic la septembrie",
+        humanDescription: "Apasă Next până la luna cerută.",
+        whyExplanation: "Folosește markerul vizual.",
+        target: {
+          primary: {
+            type: "data_attribute",
+            attribute: "data-testid",
+            operator: "equals",
+            value: "calendar-next-month",
+          },
+        },
+        repeatUntil: {
+          target: {
+            type: "css",
+            operator: "equals",
+            value: "#calendar-heading",
+          },
+          operator: "equals",
+          value: "septembrie 2027",
+          maxAttempts: 24,
+        },
+        fallbacks: [],
+        enabled: true,
+      },
+      ...dynamicTest.flowItems,
+    ];
+    const startRun = vi.fn().mockResolvedValue(
+      snapshot({
+        currentStepId: "ai-run-insert-1",
+        totalSteps: 2,
+        flowItems: runtimeFlowItems,
+      }),
+    );
+    const api = {
+      getRunnerStatus: vi.fn().mockResolvedValue({
+        state: "idle",
+        currentStepIndex: -1,
+        totalSteps: 0,
+        canStop: false,
+        canRetry: false,
+      }),
+      listTestRuns: vi.fn().mockResolvedValue([]),
+      listDatasets: vi.fn().mockResolvedValue([]),
+      listRunStepResults: vi.fn().mockResolvedValue([]),
+      onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
+      getAiSettings: vi.fn().mockResolvedValue({
+        provider: "gemini",
+        ollama: { baseUrl: "http://127.0.0.1:11434", model: "" },
+        gemini: { model: "gemini-flash", apiKeyConfigured: true },
+      }),
+      listAiModels: vi
+        .fn()
+        .mockResolvedValue([
+          { id: "gemini-flash", displayName: "Gemini Flash" },
+        ]),
+      previewAiRunPlan,
+      generateAiRunPlan,
+      startRun,
+    } as unknown as SemanticAppApi;
+    render(<RunnerPanel api={api} project={project} test={dynamicTest} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Rulează testul" }),
+    );
+    await user.type(
+      screen.getByRole("textbox", {
+        name: "Ce trebuie schimbat la rularea aceasta?",
+      }),
+      "Selectează 15 septembrie 2027.",
+    );
+    await user.click(screen.getByRole("button", { name: "1. Preview AI" }));
+    expect(previewAiRunPlan).toHaveBeenCalled();
+    expect(generateAiRunPlan).not.toHaveBeenCalled();
+    expect(await screen.findByText(/140 tokeni estimați/)).not.toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "2. Trimite la AI" }));
+    expect(await screen.findByText(/200 tokeni/)).not.toBeNull();
+    expect(screen.getByText(/1 pași adăugați temporar/)).not.toBeNull();
+    expect(
+      screen.getByText("Pas nou: Navighează dinamic la septembrie"),
+    ).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "Pornește rularea" }));
+    expect(screen.getByText("2 pași")).not.toBeNull();
+
+    expect(startRun).toHaveBeenCalledWith({
+      projectId: project.id,
+      testId: test.id,
+      mode: "automatic",
+      waitBeforeStart: false,
+      aiPlan: {
+        baseVersion: test.version,
+        instruction: "Selectează 15 septembrie 2027.",
+        proposal,
+      },
+    });
   });
 
   it("shows persisted run history and step logs", async () => {
@@ -400,42 +704,48 @@ describe("RunnerPanel", () => {
     ).not.toBeNull();
   });
 
-  it("shows the wipe configuration and its structured failure log", async () => {
+  it("offers selective wipe only from the post-run dialog", async () => {
     const user = userEvent.setup();
-    const failedWipe: RunnerSnapshot = {
-      state: "failed",
-      currentStepIndex: -1,
+    const completed: RunnerSnapshot = {
+      state: "completed",
+      run: {
+        id: "run-1",
+        projectId: project.id,
+        testId: test.id,
+        testVersion: test.version,
+        startedAt: "2026-07-25T10:00:00.000Z",
+        endedAt: "2026-07-25T10:00:02.000Z",
+        status: "passed",
+        browserType: "chromium",
+        pageVersionIds: [],
+      },
+      currentStepIndex: 1,
       totalSteps: 1,
       canStop: false,
       canRetry: false,
-      error: {
-        code: "wipe_failed",
-        message: "Wipe critic eșuat.",
-      },
-      wipe: {
+    };
+    const afterWipe: RunnerSnapshot = {
+      ...completed,
+      cleanup: {
         origin: "https://example.test",
-        status: "failed",
+        status: "completed",
         entries: [
           {
             resource: "cookies",
             status: "cleared",
-            message: "Cookie-urile au fost șterse.",
+            message: "Cookie-urile origin-ului au fost șterse.",
             count: 2,
-          },
-          {
-            resource: "indexedDB",
-            status: "failed",
-            message: "Ștergerea este blocată.",
           },
         ],
       },
     };
     const api = {
-      getRunnerStatus: vi.fn().mockResolvedValue(failedWipe),
+      getRunnerStatus: vi.fn().mockResolvedValue(completed),
       listTestRuns: vi.fn().mockResolvedValue([]),
       listDatasets: vi.fn().mockResolvedValue([]),
       listRunStepResults: vi.fn().mockResolvedValue([]),
       onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
+      manualWipeRunData: vi.fn().mockResolvedValue(afterWipe),
     } as unknown as SemanticAppApi;
     render(
       <RunnerPanel
@@ -445,10 +755,20 @@ describe("RunnerPanel", () => {
       />,
     );
 
-    expect(await screen.findByLabelText("Log wipe")).not.toBeNull();
-    expect(screen.getByText("Curățare eșuată critic")).not.toBeNull();
-    expect(screen.getByText(/Ștergerea este blocată/)).not.toBeNull();
-    await user.click(screen.getByRole("button", { name: "Rulează testul" }));
-    expect(screen.getByText("Activ")).not.toBeNull();
+    await user.click(
+      await screen.findByRole("button", { name: "Verificări post-run" }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: "Verificări post-run" }),
+    ).not.toBeNull();
+    expect(
+      screen.queryByRole("checkbox", { name: /Wipe înainte de test/ }),
+    ).toBeNull();
+    await user.click(screen.getByRole("checkbox", { name: "Cookies" }));
+    await user.click(
+      screen.getByRole("button", { name: "Wipe date selectate" }),
+    );
+    expect(api.manualWipeRunData).toHaveBeenCalledWith("run-1", ["cookies"]);
+    expect(await screen.findByText("Wipe finalizat")).not.toBeNull();
   });
 });

@@ -1,5 +1,12 @@
 import type { StepRunResult, TestRun } from "./persistence.js";
-import type { LocatorDefinition } from "./test-model.js";
+import type { ImapMatchedMessage } from "./imap.js";
+import type { AiRunPlanProposal } from "./ai.js";
+import type { MySqlCleanupRowSelection, MySqlRunDetails } from "./mysql.js";
+import type { LocatorDefinition, TestFlowItem } from "./test-model.js";
+import type {
+  PostRunAiEvaluation,
+  RunPostRunSelection,
+} from "./post-run-checks.js";
 
 export const RUNNER_STATES = [
   "idle",
@@ -15,6 +22,7 @@ export const RUNNER_STATES = [
   "waiting_for_manual_intervention",
   "waiting_for_mysql_check",
   "waiting_for_imap_check",
+  "waiting_for_ai_analysis",
   "paused_on_error",
   "completed",
   "failed",
@@ -28,11 +36,15 @@ export type RunMode = (typeof RUN_MODES)[number];
 
 export type RunnerErrorCode =
   | "browser_unavailable"
+  | "browser_disconnected"
+  | "navigation_timeout"
   | "dataset_missing"
   | "invalid_test"
   | "locator_not_found"
   | "locator_ambiguous"
   | "missing_data"
+  | "mysql_failed"
+  | "imap_failed"
   | "wipe_failed"
   | "step_failed"
   | "unsupported_step";
@@ -42,6 +54,22 @@ export interface RunnerErrorDetails {
   message: string;
   count?: number;
   stepId?: string;
+  operation?: string;
+  technicalDetails?: string;
+  causeMessage?: string;
+  occurredAt?: string;
+  retryable?: boolean;
+}
+
+export class RunnerError extends Error {
+  public constructor(
+    public readonly code: RunnerErrorCode,
+    message: string,
+    public readonly details: Omit<RunnerErrorDetails, "code" | "message"> = {},
+  ) {
+    super(message);
+    this.name = "RunnerError";
+  }
 }
 
 export interface FallbackDecision {
@@ -80,6 +108,17 @@ export type WipeResource =
   | "serviceWorkers"
   | "permissions";
 
+export const MANUAL_WIPE_RESOURCES = [
+  "cookies",
+  "localStorage",
+  "sessionStorage",
+  "indexedDB",
+  "cacheStorage",
+  "serviceWorkers",
+] as const satisfies readonly WipeResource[];
+
+export type ManualWipeResource = (typeof MANUAL_WIPE_RESOURCES)[number];
+
 export interface WipeLogEntry {
   resource: WipeResource;
   status: "cleared" | "skipped" | "failed";
@@ -93,11 +132,24 @@ export interface WipeDetails {
   entries: WipeLogEntry[];
 }
 
+export interface ImapRunDetails {
+  stepId: string;
+  status: "waiting" | "matched" | "abandoned";
+  message: string;
+  startedAt: string;
+  lastCheckedAt?: string;
+  matchedAt?: string;
+  accountId?: string;
+  accountName?: string;
+  matchedMessages?: ImapMatchedMessage[];
+}
+
 export interface RunnerSnapshot {
   state: RunnerState;
   run?: TestRun;
   currentStepIndex: number;
   totalSteps: number;
+  flowItems?: TestFlowItem[];
   currentStepId?: string;
   message?: string;
   error?: RunnerErrorDetails;
@@ -105,6 +157,10 @@ export interface RunnerSnapshot {
   pause?: RunnerPauseDetails;
   missingData?: MissingDataDetails;
   wipe?: WipeDetails;
+  cleanup?: WipeDetails;
+  mysql?: MySqlRunDetails;
+  imap?: ImapRunDetails;
+  postRunAi?: PostRunAiEvaluation;
   canStop: boolean;
   canRetry: boolean;
 }
@@ -115,11 +171,23 @@ export interface StartRunInput {
   datasetId?: string;
   mode?: RunMode;
   waitBeforeStart?: boolean;
+  aiPlan?: {
+    baseVersion: number;
+    instruction: string;
+    proposal: AiRunPlanProposal;
+  };
+  postRun?: RunPostRunSelection;
 }
 
 export interface RunDetails {
   snapshot: RunnerSnapshot;
   stepResults: StepRunResult[];
+}
+
+export interface PreviewMySqlCleanupInput {
+  runId: string;
+  diffId: string;
+  rows: MySqlCleanupRowSelection[];
 }
 
 export const isRunnerSnapshot = (value: unknown): value is RunnerSnapshot => {

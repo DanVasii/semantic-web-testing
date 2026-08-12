@@ -29,6 +29,7 @@ const test: TestDefinition = {
 const createApi = (): SemanticAppApi =>
   ({
     listTestVersions: vi.fn().mockResolvedValue([]),
+    loadMySqlSchema: vi.fn(),
     saveTestFlow: vi
       .fn()
       .mockImplementation(
@@ -46,6 +47,25 @@ const createApi = (): SemanticAppApi =>
 afterEach(cleanup);
 
 describe("TestFlowEditor", () => {
+  it("keeps MySQL snapshot configuration outside flow steps", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    render(
+      <TestFlowEditor
+        api={api}
+        projectId={test.projectId}
+        test={test}
+        onTestSaved={vi.fn()}
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText(/Tip pas nou/i), "check");
+    await user.click(screen.getByRole("button", { name: /Adaugă pas/i }));
+    const checkType = screen.getByLabelText(/Tip verificare/i);
+    expect(checkType.querySelector('option[value="mysql"]')).toBeNull();
+    expect(api.loadMySqlSchema).not.toHaveBeenCalled();
+  });
+
   it("allows an unchanged recorded flow to be explicitly approved", async () => {
     const user = userEvent.setup();
     const api = createApi();
@@ -135,11 +155,16 @@ describe("TestFlowEditor", () => {
     await user.click(screen.getByRole("button", { name: "+ Fallback" }));
     expect(screen.getByText("Fallback-uri (1/3)")).not.toBeNull();
     await user.click(screen.getByRole("button", { name: "Duplică" }));
-    expect(screen.getAllByRole("button", { name: "Duplică" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Duplică" })).toHaveLength(1);
+    expect(
+      screen
+        .getByRole("navigation", { name: "Pașii testului" })
+        .querySelectorAll("li"),
+    ).toHaveLength(2);
     await user.click(
       screen.getByRole("button", { name: "Mută pasul 2 în sus" }),
     );
-    await user.click(screen.getAllByLabelText("Activ")[0]!);
+    await user.click(screen.getByLabelText("Activ"));
     await user.click(screen.getByRole("button", { name: "Undo" }));
 
     await user.click(
@@ -292,10 +317,11 @@ describe("TestFlowEditor", () => {
     await user.click(screen.getByRole("button", { name: "+ Adaugă pas" }));
     await user.selectOptions(screen.getByLabelText("Tip pas nou"), "action");
     await user.click(screen.getByRole("button", { name: "+ Adaugă pas" }));
+    await user.click(screen.getByRole("button", { name: /1\. Breakpoint/ }));
     await user.click(
       screen.getByRole("button", { name: "Mută pasul 1 în jos" }),
     );
-    await user.click(screen.getAllByLabelText("Activ")[1]!);
+    await user.click(screen.getByLabelText("Activ"));
     await user.click(
       screen.getByRole("button", { name: "Salvează flow-ul testului" }),
     );

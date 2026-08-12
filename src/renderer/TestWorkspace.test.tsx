@@ -47,7 +47,10 @@ const createApi = (): SemanticAppApi => ({
   getAiSettings: vi.fn(),
   saveAiSettings: vi.fn(),
   testAiConnection: vi.fn(),
+  listAiModels: vi.fn(),
   previewAiRequest: vi.fn(),
+  previewAiRunPlan: vi.fn(),
+  generateAiRunPlan: vi.fn(),
   previewAiStepEdit: vi.fn(),
   generateAiStepEdit: vi.fn(),
   applyAiStepChanges: vi.fn(),
@@ -80,8 +83,28 @@ const createApi = (): SemanticAppApi => ({
   createTest: vi.fn().mockResolvedValue(testDefinition),
   updateTest: vi.fn().mockResolvedValue(testDefinition),
   saveTestFlow: vi.fn().mockResolvedValue(testDefinition),
+  saveTestPostRunChecks: vi.fn().mockResolvedValue(testDefinition),
   listTestVersions: vi.fn().mockResolvedValue([]),
+  revalidateTest: vi.fn().mockResolvedValue(testDefinition),
   deleteTest: vi.fn(),
+  previewTestImport: vi.fn(),
+  confirmTestImport: vi.fn(),
+  exportTestJson: vi.fn(),
+  exportDatasetJson: vi.fn(),
+  exportAllDatasetsJson: vi.fn(),
+  exportPageAnalysisJson: vi.fn(),
+  exportAnalysisBundle: vi.fn(),
+  getMySqlSettings: vi.fn(),
+  saveMySqlSettings: vi.fn(),
+  testMySqlConnection: vi.fn(),
+  loadMySqlSchema: vi.fn(),
+  saveMySqlIdentityConfig: vi.fn(),
+  listImapAccounts: vi.fn().mockResolvedValue([]),
+  listImapMailboxes: vi.fn().mockResolvedValue([]),
+  saveImapAccount: vi.fn(),
+  deleteImapAccount: vi.fn(),
+  testImapConnection: vi.fn(),
+  pollImapDiagnostic: vi.fn(),
   listDatasets: vi.fn().mockResolvedValue([]),
   createDataset: vi.fn(),
   duplicateDataset: vi.fn(),
@@ -91,10 +114,16 @@ const createApi = (): SemanticAppApi => ({
   startRun: vi.fn(),
   stopRun: vi.fn(),
   retryRunStep: vi.fn(),
+  skipRunStep: vi.fn(),
   continueRun: vi.fn(),
   configureRunnerShortcut: vi.fn(),
   runCurrentFallback: vi.fn(),
   skipCurrentFallback: vi.fn(),
+  previewMySqlCleanup: vi.fn(),
+  confirmMySqlCleanup: vi.fn(),
+  pollImapCheck: vi.fn(),
+  abandonImapCheck: vi.fn(),
+  manualWipeRunData: vi.fn(),
   getRunnerStatus: vi.fn().mockResolvedValue({
     state: "idle",
     currentStepIndex: -1,
@@ -104,6 +133,18 @@ const createApi = (): SemanticAppApi => ({
   }),
   listTestRuns: vi.fn().mockResolvedValue([]),
   listRunStepResults: vi.fn().mockResolvedValue([]),
+  listProjectRunHistory: vi.fn().mockResolvedValue([]),
+  getRunHistoryDetails: vi.fn(),
+  deleteRunHistory: vi.fn(),
+  deleteAllRunHistory: vi.fn(),
+  getRunStorageUsage: vi.fn().mockResolvedValue({
+    runCount: 0,
+    metadataBytes: 0,
+    logsBytes: 0,
+    snapshotsBytes: 0,
+    totalBytes: 0,
+  }),
+  purgeRunHistoryData: vi.fn(),
   onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
   startRecorder: vi.fn(),
   stopRecorder: vi.fn(),
@@ -158,9 +199,9 @@ describe("ProjectTestsPanel", () => {
     ).toBe(project.normalizedBaseUrl);
 
     await user.type(screen.getByLabelText("Numele testului"), "Cumpără produs");
-    await user.click(
-      screen.getByRole("checkbox", { name: /Wipe înainte de test/ }),
-    );
+    expect(
+      screen.queryByRole("checkbox", { name: /Wipe înainte de test/ }),
+    ).toBeNull();
     const startUrl = screen.getByLabelText("URL de start");
     await user.clear(startUrl);
     await user.type(startUrl, "https://example.test/products?category=10#list");
@@ -171,7 +212,7 @@ describe("ProjectTestsPanel", () => {
         name: "Cumpără produs",
         startUrl: "https://example.test/products?category=10#list",
         testMode: "recorded",
-        wipeBeforeRun: true,
+        wipeBeforeRun: false,
       });
     });
     expect(onOpenTest).toHaveBeenCalledWith(testDefinition);
@@ -239,9 +280,9 @@ describe("TestDetailPage", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "Editează testul" }));
-    await user.click(
-      screen.getByRole("checkbox", { name: /Wipe înainte de test/ }),
-    );
+    expect(
+      screen.queryByRole("checkbox", { name: /Wipe înainte de test/ }),
+    ).toBeNull();
     const startUrl = screen.getByRole("textbox", { name: "URL de start" });
     await user.clear(startUrl);
     await user.type(startUrl, "https://example.test/cart?coupon=10#summary");
@@ -256,7 +297,7 @@ describe("TestDetailPage", () => {
           description: testDefinition.description,
           startUrl: "https://example.test/cart?coupon=10#summary",
           testMode: "recorded",
-          wipeBeforeRun: true,
+          wipeBeforeRun: false,
         },
       );
     });

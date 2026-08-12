@@ -64,6 +64,7 @@ export interface RecorderElementSnapshot {
   text?: string;
   label?: string;
   role?: string;
+  actionText?: string;
   ariaLabel?: string;
   placeholder?: string;
   title?: string;

@@ -79,6 +79,101 @@ describe("AI providers", () => {
     });
   });
 
+  it("retries Gemini 400 without responseJsonSchema and still validates locally", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 400,
+              message: "Request contains an invalid argument.",
+              status: "INVALID_ARGUMENT",
+            },
+          }),
+          { status: 400 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [{ text: JSON.stringify(analyzeOutput) }],
+                },
+              },
+            ],
+            usageMetadata: {
+              promptTokenCount: 25,
+              candidatesTokenCount: 15,
+              totalTokenCount: 40,
+            },
+          }),
+          { status: 200 },
+        ),
+      );
+    const provider = new GeminiAIProvider({
+      apiKey: "secret-api-key",
+      fetch: fetchMock,
+    });
+
+    const result = await provider.generate(analyzePreview);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const firstRequest = fetchMock.mock.calls[0]?.[1] as
+      RequestInit | undefined;
+    const secondRequest = fetchMock.mock.calls[1]?.[1] as
+      RequestInit | undefined;
+    if (
+      typeof firstRequest?.body !== "string" ||
+      typeof secondRequest?.body !== "string"
+    ) {
+      throw new Error("Expected serialized Gemini requests.");
+    }
+    const firstPayload: unknown = JSON.parse(firstRequest.body);
+    const secondPayload: unknown = JSON.parse(secondRequest.body);
+    expect(firstPayload).toMatchObject({
+      generationConfig: {
+        responseJsonSchema: { type: "object" },
+      },
+    });
+    const serializedFallback = JSON.stringify(secondPayload);
+    expect(serializedFallback).not.toContain("responseJsonSchema");
+    expect(serializedFallback).toContain("Schema JSON exactă");
+    expect(serializedFallback).toContain('\\"type\\":\\"object\\"');
+    expect(result.output).toEqual(analyzeOutput);
+    expect(result.usage.totalTokens).toBe(40);
+  });
+
+  it("Gemini reads final non-thought parts and nested JSON safely", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  { thought: true, text: '"not the final answer"' },
+                  { text: JSON.stringify(JSON.stringify(analyzeOutput)) },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    const provider = new GeminiAIProvider({
+      apiKey: "secret-api-key",
+      fetch: fetchMock,
+    });
+
+    const result = await provider.generate(analyzePreview);
+
+    expect(result.output).toEqual(analyzeOutput);
+  });
+
   it("Ollama sends a non-streaming schema request and validates locator repair", async () => {
     const output = {
       summary: "Locator reparat.",

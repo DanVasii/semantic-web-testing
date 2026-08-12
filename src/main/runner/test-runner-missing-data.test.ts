@@ -318,7 +318,7 @@ describe("TestRunnerService missing data workflow", () => {
         "waiting_after_step",
       );
     });
-    service.stop(started.run!.id);
+    await service.stop(started.run!.id);
 
     expect(datasets.listByTest(test.id)[0]?.values).toEqual({
       customer_email: {

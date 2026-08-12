@@ -130,6 +130,11 @@ describe("AiStepEditorModal", () => {
         gemini: { model: "gemini-flash", apiKeyConfigured: true },
       }),
       testAiConnection: vi.fn(),
+      listAiModels: vi
+        .fn()
+        .mockResolvedValue([
+          { id: "gemini-flash", displayName: "Gemini Flash" },
+        ]),
       previewAiStepEdit,
       generateAiStepEdit,
       applyAiStepChanges,
@@ -148,7 +153,13 @@ describe("AiStepEditorModal", () => {
       />,
     );
 
-    await screen.findByDisplayValue("gemini-flash");
+    await waitFor(() => {
+      expect(
+        screen.getByRole<HTMLSelectElement>("combobox", {
+          name: "Model pentru această cerere",
+        }).value,
+      ).toBe("gemini-flash");
+    });
     await user.type(
       screen.getByLabelText("Ce vrei să schimbe AI la acest pas?"),
       "Clarifică selecția zilei.",

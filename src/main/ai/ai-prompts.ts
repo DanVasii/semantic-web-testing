@@ -10,7 +10,7 @@ import { AI_OUTPUT_SCHEMAS } from "./ai-output.js";
 const MAX_CONTEXT_VALUE_BYTES = 20_000;
 const MAX_STRING_LENGTH = 1_000;
 const MAX_ARRAY_ITEMS = 40;
-const MAX_DEPTH = 6;
+const MAX_DEPTH = 9;
 const sensitiveKeyPattern =
   /password|passphrase|secret|api[_-]?key|authorization|cookie|session|token|rawhtml|html|stylesheet|css|screenshot/i;
 
@@ -79,10 +79,14 @@ const taskInstructions: Record<AiTask, string> = {
     "Analizează un singur pas înregistrat și propune doar denumiri și explicații semantice. Nu executa nimic.",
   edit_step:
     "Editează declarativ pasul selectat conform instrucțiunii utilizatorului. Propune schimbarea pasului curent și numai schimbările downstream strict necesare. Folosește exact ID-urile de pas din context, nu modifica pașii anteriori și nu genera cod.",
+  adapt_run:
+    "Construiește un plan temporar numai pentru următoarea rulare. Poți modifica pașii existenți și poți insera acțiuni declarative lângă un ID existent. Folosește locatorii din flow și semanticInteractionMap; nu inventa locatori și nu transforma un ID valid într-un pas de alt tip. Starea finală a înregistrării NU este starea inițială a rulării. Pentru calendare, folosește markerul vizual lună/an și repeatUntil exclusiv pe controlul real Next sau Previous, nu pe scroll/input și nu un repeat calculat relativ la data înregistrată. Pentru zi folosește șablonul real din calendarRuntimeHints (de exemplu atributul data-date) și înlocuiește data din el; nu presupune convenția calendar-day-YYYY-MM-DD dacă aceasta nu apare în context. Nu folosi containerul calendarului și nu pune datasetValue pe calendar_select. datasetValue este numai pentru select_option. Verificarea condiției are loc la runtime înainte și după fiecare click. Returnează întotdeauna changes și insertions. ATENȚIE: dacă utilizatorul cere orice schimbare, cele două liste NU pot fi ambele goale. Pentru o altă dată, trebuie să existe cel puțin patch-ul sau inserarea zilei și, când luna/anul diferă, planul de navigare sau selectare a anului. Nu modifica testul salvat și nu genera cod.",
   generate_test:
     "Transformă înregistrarea furnizată într-o propunere declarativă de pași de test. Nu genera cod și nu inventa date confidențiale.",
   repair_locator:
     "Propune un locator semantic principal și maximum cinci fallback-uri pentru pasul eșuat. Folosește numai tipurile permise de schemă.",
+  evaluate_post_run:
+    "Evaluează împreună dovezile post-run MySQL și IMAP față de instrucțiunea comună și valorile efective ale datasetului. Corelează valorile dintre dataset, rândurile bazei de date și mesajele primite. Un client existent nu trebuie reinserat: formularea «s-a creat clientul» nu implică un insert nou decât dacă se cere explicit o adresă nouă sau unică. Nu presupune date absente. Pentru fiecare sursă întoarce verdict, explicație și dovezi scurte. Dacă dovezile sunt insuficiente, folosește status inconclusive.",
 };
 
 const systemInstruction =
@@ -93,8 +97,11 @@ export const createAiRequestPreview = (
   input: CreateAiRequestPreviewInput,
 ): AiRequestPreview => {
   const limited = limitContext(input.context);
-  const serializedContext = JSON.stringify(limited.context, null, 2);
-  const outputSchema = structuredClone(AI_OUTPUT_SCHEMAS[input.task]);
+  // Whitespace-ul JSON nu aduce informație modelului, dar este tokenizat și taxat.
+  const serializedContext = JSON.stringify(limited.context);
+  const outputSchema = structuredClone(
+    input.outputSchema ?? AI_OUTPUT_SCHEMAS[input.task],
+  );
   const prompt = [
     taskInstructions[input.task],
     "Contextul permis și limitat este:",

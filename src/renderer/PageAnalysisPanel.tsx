@@ -280,6 +280,36 @@ export const PageAnalysisPanel = ({
               marcate în rezultat.
             </div>
           ) : null}
+          {result.semanticChange ? (
+            <div
+              className={`mt-3 rounded-lg border p-3 text-sm ${
+                result.semanticChange.exceeded
+                  ? "border-amber-300 bg-amber-50 text-amber-950"
+                  : "border-emerald-200 bg-white/80 text-emerald-950"
+              }`}
+              role={result.semanticChange.exceeded ? "alert" : "status"}
+            >
+              <p className="font-semibold">
+                Schimbare semantică:{" "}
+                {Math.round(result.semanticChange.score * 100)}%{" · "}prag{" "}
+                {Math.round(result.semanticChange.threshold * 100)}%
+              </p>
+              <p className="mt-1 text-xs">
+                {result.semanticChange.exceeded
+                  ? `${result.invalidatedTestIds?.length ?? 0} teste asociate au fost invalidate.`
+                  : "Schimbarea este sub prag; testele asociate rămân valide."}
+              </p>
+              <ul className="mt-2 grid gap-1 text-xs sm:grid-cols-2">
+                {result.semanticChange.metrics.map((metric) => (
+                  <li key={metric.category}>
+                    {metric.category.replaceAll("_", " ")}:{" "}
+                    {Math.round(metric.score * 100)}% ({metric.added} adăugate,{" "}
+                    {metric.removed} eliminate)
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -314,6 +344,18 @@ export const PageAnalysisPanel = ({
                   {summary.counts.forms} formulare · {summary.counts.buttons}{" "}
                   butoane
                 </p>
+                {summary.latestChange ? (
+                  <p
+                    className={`mt-2 text-xs font-medium ${
+                      summary.latestChange.exceeded
+                        ? "text-amber-800"
+                        : "text-emerald-700"
+                    }`}
+                  >
+                    Schimbare semantică{" "}
+                    {Math.round(summary.latestChange.score * 100)}%
+                  </p>
+                ) : null}
               </li>
             ))}
           </ul>

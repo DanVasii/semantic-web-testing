@@ -39,7 +39,7 @@ export const App = ({ api = window.semanticApp }: AppProps) => {
   return (
     <main className="min-h-screen bg-app-canvas text-app-ink">
       <header className="border-b border-app-border bg-app-surface">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-6 px-8 py-5">
+        <div className="mx-auto flex max-w-[1480px] items-center justify-between gap-6 px-5 py-4 sm:px-6">
           <div className="flex items-center gap-3">
             <span className="grid h-10 w-10 place-items-center rounded-xl bg-brand-600 font-bold text-white shadow-sm">
               S
@@ -70,7 +70,7 @@ export const App = ({ api = window.semanticApp }: AppProps) => {
         </div>
       </header>
 
-      <div className="mx-auto max-w-6xl px-8 pb-12">
+      <div className="mx-auto max-w-[1480px] px-5 pb-10 sm:px-6">
         <ProjectDashboard api={api} />
       </div>
       <AiSettingsModal

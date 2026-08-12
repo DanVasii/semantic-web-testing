@@ -8,8 +8,11 @@ import { Tabs } from "./components/Tabs.js";
 import { DatasetsPanel } from "./DatasetsPanel.js";
 import { TestFormModal } from "./TestFormModal.js";
 import { TestFlowEditor } from "./TestFlowEditor.js";
+import { TestChecksPanel } from "./TestChecksPanel.js";
 import { RunnerPanel } from "./RunnerPanel.js";
 import { RecorderPanel } from "./RecorderPanel.js";
+import { TestImportModal } from "./TestImportModal.js";
+import { ExportPanel } from "./ExportPanel.js";
 
 export interface ProjectTestsPanelProps {
   api: SemanticAppApi;
@@ -91,13 +94,24 @@ export const ProjectTestsPanel = ({
             start.
           </p>
         </div>
-        <Button
-          onClick={() => {
-            setIsFormOpen(true);
-          }}
-        >
-          + Test nou
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <TestImportModal
+            api={api}
+            projectId={project.id}
+            onImported={(test) => {
+              setTests((current) => [...current, test]);
+              onTestsChanged();
+              onOpenTest(test);
+            }}
+          />
+          <Button
+            onClick={() => {
+              setIsFormOpen(true);
+            }}
+          >
+            + Test nou
+          </Button>
+        </div>
       </div>
 
       {error ? (
@@ -212,6 +226,7 @@ export const TestDetailPage = ({
 }: TestDetailPageProps) => {
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isRevalidating, setIsRevalidating] = useState(false);
   const [editError, setEditError] = useState<string>();
   const activeStage = stageIndex(test.workflowState);
   const analysisSignal =
@@ -244,6 +259,17 @@ export const TestDetailPage = ({
       setIsSaving(false);
     }
   };
+  const revalidateTest = async (): Promise<void> => {
+    setIsRevalidating(true);
+    setEditError(undefined);
+    try {
+      onTestUpdated(await api.revalidateTest(project.id, test.id));
+    } catch {
+      setEditError("Testul nu a putut fi revalidat manual.");
+    } finally {
+      setIsRevalidating(false);
+    }
+  };
 
   return (
     <section className="mt-8">
@@ -270,13 +296,13 @@ export const TestDetailPage = ({
         <span className="font-medium text-app-ink">{test.name}</span>
       </nav>
 
-      <div className="mt-5 rounded-2xl border border-app-border bg-app-surface p-6 shadow-sm">
+      <div className="mt-4 rounded-2xl border border-app-border bg-app-surface p-5 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-5">
           <div>
             <p className="text-xs font-semibold tracking-[0.14em] text-brand-700 uppercase">
               Detalii test
             </p>
-            <h2 className="mt-2 text-3xl font-semibold">{test.name}</h2>
+            <h2 className="mt-1 text-2xl font-semibold">{test.name}</h2>
             {test.description ? (
               <p className="mt-2 max-w-2xl text-sm leading-6 text-app-muted">
                 {test.description}
@@ -308,7 +334,41 @@ export const TestDetailPage = ({
           </p>
         ) : null}
 
-        <dl className="mt-6 grid gap-3 rounded-xl border border-app-border bg-app-canvas p-4 sm:grid-cols-3">
+        {test.status === "invalidated" ? (
+          <div
+            className="mt-5 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950"
+            role="alert"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="font-semibold">
+                  Test invalidat de o schimbare semantică
+                </p>
+                <p className="mt-1 text-sm">
+                  Poți rula în continuare cu warning sau poți confirma manual că
+                  locatorii sunt încă valizi.
+                </p>
+                {test.invalidation ? (
+                  <p className="mt-2 text-xs">
+                    Scor {Math.round(test.invalidation.score * 100)}% · prag{" "}
+                    {Math.round(test.invalidation.threshold * 100)}%
+                  </p>
+                ) : null}
+              </div>
+              <Button
+                variant="secondary"
+                disabled={isRevalidating}
+                onClick={() => {
+                  void revalidateTest();
+                }}
+              >
+                {isRevalidating ? "Se revalidează..." : "Revalidează manual"}
+              </Button>
+            </div>
+          </div>
+        ) : null}
+
+        <dl className="mt-5 grid gap-3 rounded-xl border border-app-border bg-slate-50 p-4 sm:grid-cols-3">
           <div>
             <dt className="text-xs text-app-muted">URL de start</dt>
             <dd className="mt-1 break-all text-sm font-medium">
@@ -331,7 +391,7 @@ export const TestDetailPage = ({
           </div>
         </dl>
 
-        <div className="mt-6">
+        <div className="mt-5">
           <h3 className="font-semibold">Fluxul testului</h3>
           <ol className="mt-3 grid gap-3 md:grid-cols-4">
             {flowStages.map((stage, index) => (
@@ -361,7 +421,7 @@ export const TestDetailPage = ({
           onTestUpdated={onTestUpdated}
         />
 
-        <section className="mt-6 rounded-xl border border-app-border bg-app-canvas p-4">
+        <section className="mt-5 rounded-xl border border-app-border bg-slate-50 p-4">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <h3 className="font-semibold">Semafor analiză înregistrare</h3>
@@ -445,6 +505,15 @@ export const TestDetailPage = ({
             ]}
           />
         </div>
+
+        <TestChecksPanel
+          api={api}
+          projectId={project.id}
+          test={test}
+          onTestUpdated={onTestUpdated}
+        />
+
+        <ExportPanel api={api} projectId={project.id} testId={test.id} />
 
         <div className="mt-6 grid gap-4 lg:grid-cols-2">
           <section className="rounded-xl border border-app-border p-4">

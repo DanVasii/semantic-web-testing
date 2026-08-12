@@ -11,6 +11,7 @@ import {
 const locatorStub = (count = 1) => {
   const locator = {
     count: vi.fn().mockResolvedValue(count),
+    waitFor: vi.fn().mockResolvedValue(undefined),
     locator: vi.fn(),
     filter: vi.fn(),
     and: vi.fn(),
@@ -75,6 +76,30 @@ describe("locator resolver", () => {
         count: 3,
       }),
     );
+  });
+
+  it("waits for a delayed element before checking locator uniqueness", async () => {
+    const delayed = locatorStub(1);
+    const page = {
+      locator: vi.fn().mockReturnValue(delayed),
+    } as unknown as Page;
+
+    await expect(
+      resolveUniqueLocator(
+        page,
+        {
+          type: "css",
+          operator: "equals",
+          value: ".loaded-later",
+        },
+        { waitForMs: 5_000 },
+      ),
+    ).resolves.toBe(delayed);
+    expect(delayed.waitFor).toHaveBeenCalledWith({
+      state: "attached",
+      timeout: 5_000,
+    });
+    expect(delayed.count).toHaveBeenCalledAfter(delayed.waitFor);
   });
 
   it("resolves relative and repeated component locators", () => {

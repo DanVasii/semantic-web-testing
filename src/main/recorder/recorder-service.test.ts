@@ -8,7 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PageAnalysisResult } from "../../shared/page-analysis.js";
 import type { Project } from "../../shared/persistence.js";
-import type { RecorderRawEvent } from "../../shared/recorder.js";
+import type {
+  RecorderRawEvent,
+  RecorderSnapshot,
+} from "../../shared/recorder.js";
 import {
   openApplicationDatabase,
   type ApplicationDatabase,
@@ -154,6 +157,24 @@ const waitForState = async (
   throw new Error(`Recorderul nu a ajuns în starea ${state}.`);
 };
 
+const waitForCapturedSteps = async (
+  service: RecorderService,
+  count: number,
+): Promise<void> => {
+  for (let index = 0; index < 40; index += 1) {
+    if (
+      service.getStatus(project.id, "test-1").capturedSteps === count &&
+      service.getStatus(project.id, "test-1").signal === "green"
+    ) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
+  throw new Error(`Recorderul nu a salvat automat ${count} pași.`);
+};
+
 let directory: string;
 let database: ApplicationDatabase;
 let projectRepository: ProjectRepository;
@@ -246,7 +267,7 @@ const createService = (analysis: RecorderAnalysisGateway): RecorderService =>
   );
 
 describe("RecorderService", () => {
-  it("runs start, live analysis, preview, add and Done as a recorder version", async () => {
+  it("runs start, live analysis, automatic save and Done as a recorder version", async () => {
     const analyzeCurrentPage = vi.fn().mockResolvedValue(analysisResult());
     const service = createService({ analyzeCurrentPage });
     const states: string[] = [];
@@ -267,32 +288,21 @@ describe("RecorderService", () => {
     );
 
     page.capture(fillEvent());
-    await waitForState(service, "preview");
-    const preview = service.getStatus(project.id, "test-1");
-    expect(preview).toMatchObject({
-      state: "preview",
-      signal: "red",
-      pendingStep: {
-        step: {
-          actionType: "fill",
-          pageId: "page-1",
-          valueKey: "adresa_e_mail",
-        },
-        capturedValue: "dan@example.test",
-      },
-    });
-
-    const edited = structuredClone(preview.pendingStep);
-    if (edited === undefined) throw new Error("Lipsește pasul în preview.");
-    edited.step.title = "Completează emailul clientului";
-    const added = await service.addStep(project.id, "test-1", edited);
-    expect(added).toMatchObject({
+    await waitForCapturedSteps(service, 1);
+    const recorded = service.getStatus(project.id, "test-1");
+    expect(recorded).toMatchObject({
       state: "recording",
       signal: "green",
       capturedSteps: 1,
-    });
-    expect(added.test.flowItems[0]).toMatchObject({
-      title: "Completează emailul clientului",
+      test: {
+        flowItems: [
+          {
+            actionType: "fill",
+            pageId: "page-1",
+            valueKey: "adresa_e_mail",
+          },
+        ],
+      },
     });
     expect(datasetRepository.listByTest("test-1")[0]?.values).toMatchObject({
       adresa_e_mail: { type: "fixed", value: "dan@example.test" },
@@ -308,11 +318,11 @@ describe("RecorderService", () => {
       "recorder",
     );
     expect(states).toContain("yellow:analyzing");
-    expect(states).toContain("red:preview");
+    expect(states).toContain("green:recording");
     expect(page.evaluateCalls.length).toBeGreaterThan(3);
   });
 
-  it("retries a failed analysis and returns to preview", async () => {
+  it("retries a failed analysis and saves the step automatically", async () => {
     const analyzeCurrentPage = vi
       .fn()
       .mockRejectedValueOnce(new Error("Captura DOM a eșuat."))
@@ -330,7 +340,7 @@ describe("RecorderService", () => {
     });
 
     service.retry(project.id, "test-1");
-    await waitForState(service, "preview");
+    await waitForCapturedSteps(service, 1);
     expect(analyzeCurrentPage).toHaveBeenCalledTimes(2);
   });
 
@@ -361,9 +371,11 @@ describe("RecorderService", () => {
     const stopped = await service.stop(project.id, "test-1");
     expect(stopped).toMatchObject({
       state: "completed",
-      signal: "red",
-      test: { workflowState: "recorded" },
+      signal: "green",
+      canStart: true,
+      test: { workflowState: "not_recorded" },
     });
+    expect(service.getStatus(project.id, "test-1").canStart).toBe(true);
   });
 
   it("invalidates and repeats analysis when navigation changes during capture", async () => {
@@ -377,11 +389,77 @@ describe("RecorderService", () => {
     await service.start(project.id, "test-1");
 
     page.capture(fillEvent());
-    await waitForState(service, "preview");
-    expect(analyzeCurrentPage).toHaveBeenCalledTimes(2);
+    await waitForCapturedSteps(service, 2);
+    expect(analyzeCurrentPage).toHaveBeenCalledTimes(3);
     expect(
-      service.getStatus(project.id, "test-1").pendingStep?.step.pageId,
-    ).toBe("page-2");
-    expect(service.getStatus(project.id, "test-1").queuedEvents).toBe(1);
+      service.getStatus(project.id, "test-1").test.flowItems[0],
+    ).toMatchObject({ pageId: "page-2" });
+    expect(service.getStatus(project.id, "test-1").queuedEvents).toBe(0);
+  });
+
+  it("restores the existing test when a re-recording is stopped empty", async () => {
+    const service = createService({
+      analyzeCurrentPage: vi.fn().mockResolvedValue(analysisResult()),
+    });
+    await service.start(project.id, "test-1");
+    page.capture(fillEvent());
+    await waitForCapturedSteps(service, 1);
+    const completed = await service.stop(project.id, "test-1");
+    const existingStep = completed.test.flowItems[0];
+
+    const restarted = await service.start(project.id, "test-1");
+    expect(restarted).toMatchObject({
+      state: "recording",
+      capturedSteps: 0,
+      test: { workflowState: "recording", flowItems: [] },
+    });
+
+    const cancelled = await service.stop(project.id, "test-1");
+    expect(cancelled).toMatchObject({
+      state: "completed",
+      signal: "green",
+      canStart: true,
+      test: {
+        workflowState: "flow_analyzed",
+        flowItems: [existingStep],
+      },
+    });
+    expect(service.getStatus(project.id, "test-1")).toMatchObject({
+      state: "idle",
+      canStart: true,
+      test: {
+        workflowState: "flow_analyzed",
+        flowItems: [existingStep],
+      },
+    });
+  });
+
+  it("keeps the start action available when browser preparation fails", async () => {
+    vi.mocked(browser.openProjectUrl).mockRejectedValueOnce(
+      new Error("Browser indisponibil."),
+    );
+    const service = createService({
+      analyzeCurrentPage: vi.fn().mockResolvedValue(analysisResult()),
+    });
+    const states: RecorderSnapshot[] = [];
+    service.onStatusChange((value) => {
+      states.push(value);
+    });
+
+    await expect(service.start(project.id, "test-1")).rejects.toThrow(
+      "Browser indisponibil.",
+    );
+
+    expect(states.at(-1)).toMatchObject({
+      state: "idle",
+      signal: "red",
+      canStart: true,
+      error: "Browser indisponibil.",
+    });
+    expect(service.getStatus(project.id, "test-1")).toMatchObject({
+      state: "idle",
+      canStart: true,
+      test: { workflowState: "not_recorded" },
+    });
   });
 });

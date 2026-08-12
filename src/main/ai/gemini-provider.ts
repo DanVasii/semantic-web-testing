@@ -22,6 +22,31 @@ const asObject = (value: unknown): UnknownObject | undefined =>
     ? (value as UnknownObject)
     : undefined;
 
+const fallbackPrompt = (request: AiRequestPreview): string =>
+  [
+    request.prompt,
+    "Schema JSON exactă pe care trebuie să o respecți este:",
+    JSON.stringify(request.outputSchema),
+    "Returnează numai obiectul JSON, fără Markdown, explicații sau proprietăți suplimentare.",
+  ].join("\n\n");
+
+const parseJsonText = (text: string): unknown => {
+  let source = text.trim();
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(source);
+  if (fenced?.[1] !== undefined) source = fenced[1].trim();
+  for (let depth = 0; depth < 2; depth += 1) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(source);
+    } catch {
+      throw new Error("Gemini nu a returnat JSON valid.");
+    }
+    if (typeof parsed !== "string") return parsed;
+    source = parsed.trim();
+  }
+  throw new Error("Gemini nu a returnat un obiect JSON.");
+};
+
 export class GeminiAIProvider implements AIProvider {
   public readonly id = "gemini" as const;
   private readonly endpoint =
@@ -87,9 +112,11 @@ export class GeminiAIProvider implements AIProvider {
       throw new Error("Selectează un model Gemini.");
     }
     const model = request.model.replace(/^models\//, "");
-    const response = await this.options.fetch(
-      `${this.endpoint}/models/${encodeURIComponent(model)}:generateContent`,
-      {
+    const endpoint = `${this.endpoint}/models/${encodeURIComponent(
+      model,
+    )}:generateContent`;
+    const send = (withSchema: boolean): Promise<Response> =>
+      this.options.fetch(endpoint, {
         method: "POST",
         headers: this.headers(),
         signal: AbortSignal.timeout(120_000),
@@ -97,15 +124,25 @@ export class GeminiAIProvider implements AIProvider {
           systemInstruction: {
             parts: [{ text: request.systemInstruction }],
           },
-          contents: [{ role: "user", parts: [{ text: request.prompt }] }],
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { text: withSchema ? request.prompt : fallbackPrompt(request) },
+              ],
+            },
+          ],
           generationConfig: {
             temperature: 0,
             responseMimeType: "application/json",
-            responseJsonSchema: request.outputSchema,
+            ...(withSchema ? { responseJsonSchema: request.outputSchema } : {}),
           },
         }),
-      },
-    );
+      });
+    let response = await send(true);
+    if (!response.ok && response.status === 400) {
+      response = await send(false);
+    }
     await requireSuccessfulResponse(response, "Gemini");
     const body = asObject(await response.json());
     const candidates = Array.isArray(body?.["candidates"])
@@ -115,17 +152,18 @@ export class GeminiAIProvider implements AIProvider {
     const content = asObject(candidate?.["content"]);
     const parts = Array.isArray(content?.["parts"]) ? content["parts"] : [];
     const text = parts
-      .map((part) => asObject(part)?.["text"])
-      .find((value): value is string => typeof value === "string");
-    if (text === undefined) {
+      .map((part) => asObject(part))
+      .filter((part) => part?.["thought"] !== true)
+      .map((part) => part?.["text"])
+      .filter((value): value is string => typeof value === "string")
+      .join("");
+    if (text.length === 0) {
       throw new Error("Gemini nu a returnat conținut JSON.");
     }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      throw new Error("Gemini nu a returnat JSON valid.");
-    }
+    console.info(
+      `[AI][Gemini][${request.task}] răspuns brut:\n${text.slice(0, 50_000)}`,
+    );
+    const parsed = parseJsonText(text);
     const usage = asObject(body?.["usageMetadata"]);
     const inputTokens =
       typeof usage?.["promptTokenCount"] === "number"

@@ -24,7 +24,7 @@ export const Tabs = ({ initialTabId, label, onChange, tabs }: TabsProps) => {
       <div
         role="tablist"
         aria-label={label}
-        className="flex gap-1 rounded-xl bg-stone-100 p-1"
+        className="flex gap-1 rounded-xl bg-slate-100 p-1"
       >
         {tabs.map((tab) => {
           const isActive = tab.id === activeTabId;

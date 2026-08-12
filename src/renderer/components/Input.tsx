@@ -36,7 +36,7 @@ export const Input = ({
         id={inputId}
         aria-describedby={descriptionId}
         aria-invalid={error ? true : undefined}
-        className={`min-h-10 rounded-lg border bg-app-surface px-3 py-2 text-sm text-app-ink shadow-sm outline-none transition-colors placeholder:text-app-muted focus:border-brand-500 focus:ring-2 focus:ring-brand-100 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-app-muted ${
+        className={`min-h-10 rounded-lg border bg-app-surface px-3 py-2 text-sm text-app-ink shadow-sm outline-none transition-colors placeholder:text-app-muted focus:border-brand-500 focus:ring-2 focus:ring-brand-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-app-muted ${
           error ? "border-red-500" : "border-app-border"
         } ${className}`.trim()}
         {...inputProps}

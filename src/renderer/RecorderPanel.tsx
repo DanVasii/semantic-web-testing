@@ -12,6 +12,7 @@ import {
   type LocatorFallback,
 } from "../shared/test-model.js";
 import { Button } from "./components/Button.js";
+import { ConfirmDialog } from "./components/ConfirmDialog.js";
 
 export interface RecorderPanelProps {
   api: SemanticAppApi;
@@ -91,6 +92,7 @@ export const RecorderPanel = ({
   const [primaryJson, setPrimaryJson] = useState("");
   const [fallbacksJson, setFallbacksJson] = useState("");
   const [isWorking, setIsWorking] = useState(false);
+  const [showRerecordConfirm, setShowRerecordConfirm] = useState(false);
   const [error, setError] = useState<string>();
 
   const acceptSnapshot = useCallback(
@@ -203,6 +205,10 @@ export const RecorderPanel = ({
     snapshot.signal === "green" &&
     snapshot.capturedSteps > 0 &&
     snapshot.canStop;
+  const isRerecord =
+    snapshot?.canStart === true &&
+    (snapshot.test.flowItems.length > 0 ||
+      snapshot.test.workflowState !== "not_recorded");
   const editingDisabled = isWorking || snapshot?.signal === "yellow";
   const supportedActions = useMemo(
     () =>
@@ -227,9 +233,9 @@ export const RecorderPanel = ({
         <div>
           <h3 className="font-semibold">Recorder semantic</h3>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-app-muted">
-            După fiecare acțiune stabilă, pagina este blocată scurt, analizată
-            și transformată într-un pas editabil înainte de a fi adăugată în
-            test.
+            După fiecare acțiune stabilă, pagina este blocată doar cât durează
+            analiza. Pasul este salvat automat, apoi poți continua în browser.
+            Editarea completă se face după Done, în etapa de revizuire.
           </p>
         </div>
         <Signal snapshot={snapshot} />
@@ -240,10 +246,14 @@ export const RecorderPanel = ({
           <Button
             disabled={isWorking}
             onClick={() => {
-              void run(() => api.startRecorder(project.id, test.id));
+              if (isRerecord) {
+                setShowRerecordConfirm(true);
+              } else {
+                void run(() => api.startRecorder(project.id, test.id));
+              }
             }}
           >
-            Înregistrează testul
+            {isRerecord ? "Reînregistrează testul" : "Înregistrează testul"}
           </Button>
         ) : null}
         {canFinish ? (
@@ -477,9 +487,26 @@ export const RecorderPanel = ({
 
       <p className="mt-4 text-xs leading-5 text-app-muted">
         Tastarea se finalizează la blur, Enter sau navigare, nu caracter cu
-        caracter. Evenimentele interne ale aplicației sunt ignorate; Back ori o
-        navigare externă invalidează analiza curentă și o reia după stabilizare.
+        caracter. Tab mută focusul și salvează valoarea câmpului ca fill, fără
+        să creeze un pas de tastă separat. Evenimentele interne ale aplicației
+        sunt ignorate; Back ori o navigare externă invalidează analiza curentă
+        și o reia după stabilizare.
       </p>
+
+      <ConfirmDialog
+        open={showRerecordConfirm}
+        title="Reînregistrezi testul?"
+        message="La pornire, pașii existenți sunt înlocuiți de noua înregistrare. Dacă o oprești fără niciun pas, versiunea actuală va fi restaurată."
+        confirmLabel="Reînregistrează"
+        confirmVariant="danger"
+        onCancel={() => {
+          setShowRerecordConfirm(false);
+        }}
+        onConfirm={() => {
+          setShowRerecordConfirm(false);
+          void run(() => api.startRecorder(project.id, test.id));
+        }}
+      />
     </section>
   );
 };

@@ -133,10 +133,17 @@ describe("wipeBrowserStateForOrigin", () => {
     expect(cookieFilter.domain).toBeInstanceOf(RegExp);
     expect(cookieFilter.domain.test(".shop.example.test")).toBe(true);
     expect(cookieFilter.domain.test("other.example.test")).toBe(false);
-    expect(harness.spies.evaluate).toHaveBeenCalledWith(
-      expect.any(Function),
-      "https://shop.example.test:8443",
-    );
+    expect(harness.spies.evaluate).toHaveBeenCalledWith(expect.any(Function), {
+      expectedOrigin: "https://shop.example.test:8443",
+      selectedResources: [
+        "cookies",
+        "localStorage",
+        "sessionStorage",
+        "indexedDB",
+        "cacheStorage",
+        "serviceWorkers",
+      ],
+    });
     expect(harness.spies.setContent).toHaveBeenCalledOnce();
     expect(harness.spies.goto).toHaveBeenCalledOnce();
   });
@@ -163,6 +170,40 @@ describe("wipeBrowserStateForOrigin", () => {
         status: "failed",
       },
     });
+    expect(harness.spies.goto).not.toHaveBeenCalled();
+  });
+
+  it("clears only the manually selected resources", async () => {
+    const harness = createHarness();
+
+    const result = await wipeBrowserStateForOrigin(
+      harness.context,
+      harness.page,
+      "https://shop.example.test:8443/products",
+      { reloadStartPage: false, resources: ["cookies"] },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(harness.spies.clearCookies).toHaveBeenCalledOnce();
+    expect(harness.spies.evaluate).not.toHaveBeenCalled();
+    expect(harness.spies.setContent).not.toHaveBeenCalled();
+    expect(harness.spies.goto).not.toHaveBeenCalled();
+  });
+
+  it("clears the origin after a run without reopening the start page", async () => {
+    const harness = createHarness();
+
+    const result = await wipeBrowserStateForOrigin(
+      harness.context,
+      harness.page,
+      "https://shop.example.test:8443/products",
+      { reloadStartPage: false },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(harness.spies.clearCookies).toHaveBeenCalledOnce();
+    expect(harness.spies.evaluate).toHaveBeenCalledOnce();
+    expect(harness.spies.setContent).toHaveBeenCalledOnce();
     expect(harness.spies.goto).not.toHaveBeenCalled();
   });
 });

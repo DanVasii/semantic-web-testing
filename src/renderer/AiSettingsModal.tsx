@@ -10,6 +10,8 @@ import type {
   SaveAiSettingsInput,
 } from "../shared/ai.js";
 import type { SemanticAppApi } from "../shared/ipc.js";
+import { EXTERNAL_AI_TEST_PROMPT } from "../shared/external-ai-prompt.js";
+import { ImapSettingsPanel } from "./ImapSettingsPanel.js";
 import { Button } from "./components/Button.js";
 import { Input } from "./components/Input.js";
 import { Modal } from "./components/Modal.js";
@@ -117,9 +119,11 @@ export const AiSettingsModal = ({
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [error, setError] = useState<string>();
   const [successMessage, setSuccessMessage] = useState<string>();
+  const [promptCopyMessage, setPromptCopyMessage] = useState<string>();
 
   useEffect(() => {
     if (!open) return;
@@ -127,6 +131,7 @@ export const AiSettingsModal = ({
     setIsLoading(true);
     setError(undefined);
     setSuccessMessage(undefined);
+    setPromptCopyMessage(undefined);
     setConnectionResult(undefined);
     setPreview(undefined);
     setModels([]);
@@ -140,6 +145,23 @@ export const AiSettingsModal = ({
         setOllamaBaseUrl(loaded.ollama.baseUrl);
         setOllamaModel(loaded.ollama.model);
         setGeminiModel(loaded.gemini.model);
+        if (
+          loaded.provider !== "none" &&
+          (loaded.provider !== "gemini" || loaded.gemini.apiKeyConfigured)
+        ) {
+          setIsLoadingModels(true);
+          void api
+            .listAiModels(loaded.provider)
+            .then((loadedModels) => {
+              if (active) setModels(loadedModels);
+            })
+            .catch(() => {
+              // Modelul implicit salvat rămâne disponibil dacă refresh-ul eșuează.
+            })
+            .finally(() => {
+              if (active) setIsLoadingModels(false);
+            });
+        }
       })
       .catch(() => {
         if (active) setError("Setările AI nu au putut fi încărcate.");
@@ -166,7 +188,9 @@ export const AiSettingsModal = ({
         value: "",
         label:
           models.length === 0
-            ? "Testează conexiunea pentru a încărca modelele"
+            ? isLoadingModels
+              ? "Modelele se încarcă automat..."
+              : "Niciun model încărcat"
             : "Selectează modelul",
       },
       ...entries.map((model) => ({
@@ -177,9 +201,27 @@ export const AiSettingsModal = ({
             : `${model.displayName} · ${model.inputTokenLimit.toLocaleString("ro-RO")} tokenuri input`,
       })),
     ];
-  }, [models, selectedModel]);
+  }, [isLoadingModels, models, selectedModel]);
 
-  const save = async (): Promise<AiSettingsSummary | undefined> => {
+  const loadModels = async (
+    nextProvider: Exclude<AiProviderId, "none">,
+  ): Promise<void> => {
+    if (nextProvider === "gemini" && !settings?.gemini.apiKeyConfigured) {
+      return;
+    }
+    setIsLoadingModels(true);
+    try {
+      setModels(await api.listAiModels(nextProvider));
+    } catch {
+      // Testarea explicită a conexiunii va afișa eroarea completă.
+    } finally {
+      setIsLoadingModels(false);
+    }
+  };
+
+  const save = async (
+    loadCatalog = true,
+  ): Promise<AiSettingsSummary | undefined> => {
     setIsSaving(true);
     setError(undefined);
     setSuccessMessage(undefined);
@@ -195,6 +237,9 @@ export const AiSettingsModal = ({
       );
       setSettings(saved);
       setApiKey("");
+      if (loadCatalog && saved.provider !== "none") {
+        setModels(await api.listAiModels(saved.provider));
+      }
       setSuccessMessage("Setările AI au fost salvate local.");
       return saved;
     } catch (caughtError) {
@@ -216,7 +261,7 @@ export const AiSettingsModal = ({
     setSuccessMessage(undefined);
     setConnectionResult(undefined);
     try {
-      const saved = await save();
+      const saved = await save(false);
       if (saved === undefined) return;
       const result = await api.testAiConnection(provider);
       setConnectionResult(result);
@@ -273,11 +318,26 @@ export const AiSettingsModal = ({
     }
   };
 
-  const isBusy = isLoading || isSaving || isTesting || isPreviewing;
+  const isBusy =
+    isLoading || isSaving || isTesting || isLoadingModels || isPreviewing;
   const geminiNeedsKey =
     provider === "gemini" &&
     !settings?.gemini.apiKeyConfigured &&
     apiKey.trim().length === 0;
+
+  const copyExternalAiPrompt = async (): Promise<void> => {
+    try {
+      if (navigator.clipboard === undefined) {
+        throw new Error("Clipboard indisponibil");
+      }
+      await navigator.clipboard.writeText(EXTERNAL_AI_TEST_PROMPT);
+      setPromptCopyMessage("Prompt copiat. Îl poți lipi în orice alt AI.");
+    } catch {
+      setPromptCopyMessage(
+        "Copierea automată nu este disponibilă. Selectează textul manual.",
+      );
+    }
+  };
 
   return (
     <Modal open={open} title="Setări aplicație" size="wide" onClose={onClose}>
@@ -292,9 +352,8 @@ export const AiSettingsModal = ({
                 Provider AI
               </h3>
               <p className="mt-1 text-sm text-app-muted">
-                Nimic nu este trimis automat. Testarea conexiunii listează doar
-                modelele; datele testului vor necesita un click separat de
-                trimitere.
+                Catalogul de modele se încarcă automat, fără date din teste.
+                Datele testului sunt trimise numai după clickul tău explicit.
               </p>
             </div>
             <span className="rounded-full bg-brand-100 px-2.5 py-1 text-xs font-semibold text-brand-800">
@@ -313,10 +372,12 @@ export const AiSettingsModal = ({
                 { value: "gemini", label: "Gemini API" },
               ]}
               onChange={(event) => {
-                setProvider(event.target.value as AiProviderId);
+                const nextProvider = event.target.value as AiProviderId;
+                setProvider(nextProvider);
                 setModels([]);
                 setConnectionResult(undefined);
                 setPreview(undefined);
+                if (nextProvider !== "none") void loadModels(nextProvider);
               }}
             />
             {provider === "none" ? (
@@ -336,7 +397,7 @@ export const AiSettingsModal = ({
                 onChange={(event) => setOllamaBaseUrl(event.target.value)}
               />
               <Select
-                label="Model Ollama"
+                label="Model implicit Ollama"
                 value={ollamaModel}
                 disabled={isBusy}
                 options={modelOptions}
@@ -365,7 +426,7 @@ export const AiSettingsModal = ({
                 onChange={(event) => setApiKey(event.target.value)}
               />
               <Select
-                label="Model Gemini"
+                label="Model implicit Gemini"
                 value={geminiModel}
                 disabled={isBusy}
                 options={modelOptions}
@@ -389,7 +450,7 @@ export const AiSettingsModal = ({
               >
                 {isTesting
                   ? "Se testează..."
-                  : "Testează conexiunea și încarcă modelele"}
+                  : "Testează conexiunea și reîncarcă modelele"}
               </Button>
             ) : null}
             {settings?.gemini.apiKeyConfigured ? (
@@ -496,7 +557,7 @@ export const AiSettingsModal = ({
                 <summary className="cursor-pointer font-semibold text-app-ink">
                   Vezi promptul exact
                 </summary>
-                <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-stone-950 p-3 text-xs text-stone-100">
+                <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-950 p-3 text-xs text-slate-100">
                   {preview.systemInstruction}
                   {"\n\n"}
                   {preview.prompt}
@@ -506,7 +567,7 @@ export const AiSettingsModal = ({
                 <summary className="cursor-pointer font-semibold text-app-ink">
                   Vezi schema strictă de output
                 </summary>
-                <pre className="mt-2 max-h-72 overflow-auto rounded-lg bg-stone-950 p-3 text-xs text-stone-100">
+                <pre className="mt-2 max-h-72 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-100">
                   {JSON.stringify(preview.outputSchema, null, 2)}
                 </pre>
               </details>
@@ -514,20 +575,59 @@ export const AiSettingsModal = ({
           ) : null}
         </section>
 
-        <section className="grid gap-3 sm:grid-cols-2">
+        <section className="rounded-xl border border-app-border bg-white p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold tracking-wide text-brand-700 uppercase">
+                Import / export
+              </p>
+              <h3 className="mt-1 font-semibold text-app-ink">
+                Prompt pentru generarea testelor cu alt AI
+              </h3>
+              <p className="mt-1 max-w-3xl text-sm text-app-muted">
+                Copiază instrucțiunile într-un alt model AI, adaugă scenariul
+                tău, apoi importă JSON-ul rezultat din secțiunea de teste.
+                Promptul descrie structura strictă, locatorii și dataseturile.
+              </p>
+            </div>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                void copyExternalAiPrompt();
+              }}
+            >
+              Copiază promptul
+            </Button>
+          </div>
+          {promptCopyMessage ? (
+            <p className="mt-3 text-sm text-brand-700" role="status">
+              {promptCopyMessage}
+            </p>
+          ) : null}
+          <details className="mt-4 rounded-lg border border-app-border bg-slate-50 p-3">
+            <summary className="cursor-pointer font-semibold text-app-ink">
+              Vezi promptul complet
+            </summary>
+            <textarea
+              className="mt-3 min-h-80 w-full resize-y rounded-lg border border-app-border bg-white p-3 font-mono text-xs leading-5 text-app-ink"
+              readOnly
+              aria-label="Prompt extern pentru generarea testelor"
+              value={EXTERNAL_AI_TEST_PROMPT}
+              onFocus={(event) => event.currentTarget.select()}
+            />
+          </details>
+        </section>
+
+        <section className="grid gap-3">
           <div className="rounded-xl border border-dashed border-app-border p-4">
             <h3 className="font-semibold text-app-ink">MySQL</h3>
             <p className="mt-1 text-sm text-app-muted">
-              Conexiunile MySQL vor fi adăugate aici în etapele V–X.
-            </p>
-          </div>
-          <div className="rounded-xl border border-dashed border-app-border p-4">
-            <h3 className="font-semibold text-app-ink">IMAP</h3>
-            <p className="mt-1 text-sm text-app-muted">
-              Conturile IMAP vor fi adăugate aici în etapele Y–Z.
+              Conexiunea MySQL se configurează separat în pagina fiecărui
+              proiect.
             </p>
           </div>
         </section>
+        <ImapSettingsPanel api={api} />
       </div>
     </Modal>
   );

@@ -137,7 +137,7 @@ export const ProjectBasicAuthSettingsPanel = ({
           className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
             settings?.configured
               ? "bg-emerald-100 text-emerald-800"
-              : "bg-stone-100 text-app-muted"
+              : "bg-slate-100 text-app-muted"
           }`}
         >
           {settings?.configured ? "Configurat" : "Neconfigurat"}

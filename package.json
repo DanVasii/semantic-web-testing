@@ -15,7 +15,10 @@
     "electron:start": "npm run build && electron .",
     "fixture:web": "vite fixtures/web --host 127.0.0.1 --port 4173 --strictPort",
     "fixture:web:build": "vite build fixtures/web --outDir ../../dist/fixture-web --emptyOutDir",
+    "fixture:mysql:setup": "node scripts/setup-mysql-fixture.mjs",
+    "fixture:mysql:api": "node scripts/mysql-fixture-server.mjs",
     "smoke:recorder": "node scripts/smoke-recorder.mjs",
+    "smoke:mysql": "node scripts/smoke-mysql-fixture.mjs",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "lint": "eslint src --max-warnings 0",
@@ -33,7 +36,7 @@
     "@testing-library/user-event": "^14.6.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "electron": "^41.7.1",
+    "electron": "41.7.1",
     "eslint": "^10.7.0",
     "jsdom": "^29.1.1",
     "prettier": "3.9.6",
@@ -47,6 +50,11 @@
     "electron@41.7.1": true
   },
   "dependencies": {
+    "@types/mailparser": "^3.4.6",
+    "imapflow": "^1.5.0",
+    "mailparser": "^3.9.14",
+    "mysql2": "^3.23.1",
+    "nodemailer": "9.0.3",
     "playwright-core": "^1.61.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"

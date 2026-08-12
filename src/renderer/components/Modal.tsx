@@ -43,7 +43,7 @@ export const Modal = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 grid place-items-center bg-stone-950/40 p-6"
+      className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 p-4 sm:p-6"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
           onClose();
@@ -54,8 +54,8 @@ export const Modal = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className={`max-h-[calc(100vh-3rem)] w-full overflow-y-auto rounded-2xl border border-app-border bg-app-surface p-6 shadow-xl ${
-          size === "wide" ? "max-w-5xl" : "max-w-lg"
+        className={`max-h-[calc(100vh-2rem)] w-full overflow-y-auto rounded-2xl border border-app-border bg-app-surface p-5 shadow-2xl sm:max-h-[calc(100vh-3rem)] sm:p-6 ${
+          size === "wide" ? "max-w-6xl" : "max-w-2xl"
         }`}
       >
         <header className="flex items-start justify-between gap-4">

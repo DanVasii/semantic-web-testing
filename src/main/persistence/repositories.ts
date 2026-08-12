@@ -15,6 +15,16 @@ import type {
   TestVersion,
 } from "../../shared/persistence.js";
 import type { ProjectStatistics } from "../../shared/projects.js";
+import type {
+  MySqlCleanupLog,
+  MySqlRunDiff,
+  MySqlRunSnapshot,
+  TableIdentityConfig,
+} from "../../shared/mysql.js";
+import {
+  defaultTestPostRunChecks,
+  normalizeTestPostRunChecks,
+} from "../../shared/post-run-checks.js";
 
 type DatabaseRow = Record<string, unknown>;
 
@@ -80,10 +90,18 @@ const mapPageVersion = (row: DatabaseRow): PageVersion => ({
   accessibilityFilePath: text(row, "accessibility_file_path"),
   analysisFilePath: text(row, "analysis_file_path"),
   semanticHash: text(row, "semantic_hash"),
+  ...(optionalText(row, "change_json") === undefined
+    ? {}
+    : {
+        change: parseJson<NonNullable<PageVersion["change"]>>(
+          optionalText(row, "change_json")!,
+        ),
+      }),
 });
 
 const mapTest = (row: DatabaseRow): TestDefinition => {
   const description = optionalText(row, "description");
+  const invalidation = optionalText(row, "invalidation_json");
 
   return {
     id: text(row, "id"),
@@ -106,6 +124,19 @@ const mapTest = (row: DatabaseRow): TestDefinition => {
     flowItems: parseJson<TestDefinition["flowItems"]>(
       text(row, "flow_items_json"),
     ),
+    postRunChecks: normalizeTestPostRunChecks(
+      parseJson<NonNullable<TestDefinition["postRunChecks"]>>(
+        text(row, "post_run_checks_json"),
+      ),
+    ),
+    ...(invalidation === undefined
+      ? {}
+      : {
+          invalidation:
+            parseJson<NonNullable<TestDefinition["invalidation"]>>(
+              invalidation,
+            ),
+        }),
   };
 };
 
@@ -133,6 +164,9 @@ const mapRun = (row: DatabaseRow): TestRun => {
   const warnings = parseJson<JsonValue[]>(
     optionalText(row, "warnings_json") ?? "[]",
   );
+  const datasetSnapshot = optionalText(row, "dataset_snapshot_json");
+  const postRunResult = optionalText(row, "post_run_result_json");
+  const error = optionalText(row, "error_json");
 
   return {
     id: text(row, "id"),
@@ -146,6 +180,13 @@ const mapRun = (row: DatabaseRow): TestRun => {
     browserType: text(row, "browser_type") as BrowserType,
     pageVersionIds: parseJson<string[]>(text(row, "page_version_ids_json")),
     ...(warnings.length === 0 ? {} : { warnings }),
+    ...(datasetSnapshot === undefined
+      ? {}
+      : { datasetSnapshot: parseJson<JsonValue>(datasetSnapshot) }),
+    ...(postRunResult === undefined
+      ? {}
+      : { postRunResult: parseJson<JsonValue>(postRunResult) }),
+    ...(error === undefined ? {} : { error: parseJson<JsonValue>(error) }),
   };
 };
 
@@ -172,6 +213,45 @@ const mapStepResult = (row: DatabaseRow): StepRunResult => {
   };
 };
 
+const mapMySqlRunSnapshot = (row: DatabaseRow): MySqlRunSnapshot => {
+  const checkStepId = optionalText(row, "check_step_id");
+  return {
+    id: text(row, "id"),
+    runId: text(row, "run_id"),
+    kind: text(row, "kind") as MySqlRunSnapshot["kind"],
+    ...(checkStepId === undefined ? {} : { checkStepId }),
+    capturedAt: text(row, "captured_at"),
+    tables: parseJson<MySqlRunSnapshot["tables"]>(text(row, "tables_json")),
+  };
+};
+
+const mapMySqlRunDiff = (row: DatabaseRow): MySqlRunDiff => ({
+  id: text(row, "id"),
+  runId: text(row, "run_id"),
+  checkStepId: text(row, "check_step_id"),
+  baselineSnapshotId: text(row, "baseline_snapshot_id"),
+  currentSnapshotId: text(row, "current_snapshot_id"),
+  createdAt: text(row, "created_at"),
+  tables: parseJson<MySqlRunDiff["tables"]>(text(row, "tables_json")),
+});
+
+const mapMySqlCleanupLog = (row: DatabaseRow): MySqlCleanupLog => {
+  const endedAt = optionalText(row, "ended_at");
+  const error = optionalText(row, "error");
+  return {
+    id: text(row, "id"),
+    runId: text(row, "run_id"),
+    diffId: text(row, "diff_id"),
+    previewId: text(row, "preview_id"),
+    status: text(row, "status") as MySqlCleanupLog["status"],
+    startedAt: text(row, "started_at"),
+    ...(endedAt === undefined ? {} : { endedAt }),
+    rows: parseJson<MySqlCleanupLog["rows"]>(text(row, "rows_json")),
+    affectedRows: number(row, "affected_rows"),
+    ...(error === undefined ? {} : { error }),
+  };
+};
+
 export interface ProjectBasicAuthRecord {
   projectId: string;
   origin: string;
@@ -186,6 +266,18 @@ export interface ApplicationAiSettingsRecord {
   ollamaModel: string;
   geminiModel: string;
   encryptedGeminiApiKey?: string;
+  updatedAt: string;
+}
+
+export interface ProjectMySqlSettingsRecord {
+  projectId: string;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  encryptedPassword: string;
+  ssl: boolean;
+  identities: TableIdentityConfig[];
   updatedAt: string;
 }
 
@@ -387,6 +479,154 @@ export class ApplicationAiSettingsRepository {
   }
 }
 
+export interface ImapAccountRecord {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  secure: boolean;
+  username: string;
+  encryptedPassword: string;
+  mailbox: string;
+}
+
+const mapImapAccount = (row: DatabaseRow): ImapAccountRecord => ({
+  id: text(row, "id"),
+  name: text(row, "name"),
+  host: text(row, "host"),
+  port: number(row, "port"),
+  secure: number(row, "secure") === 1,
+  username: text(row, "username"),
+  encryptedPassword: text(row, "password"),
+  mailbox: text(row, "mailbox"),
+});
+
+export class ImapAccountRepository {
+  public constructor(private readonly database: DatabaseSync) {}
+
+  public list(): ImapAccountRecord[] {
+    return asRows(
+      this.database
+        .prepare("SELECT * FROM global_imap_accounts ORDER BY name, id")
+        .all(),
+    ).map(mapImapAccount);
+  }
+
+  public findById(id: string): ImapAccountRecord | undefined {
+    const row = asRow(
+      this.database
+        .prepare("SELECT * FROM global_imap_accounts WHERE id = ?")
+        .get(id),
+    );
+    return row === undefined ? undefined : mapImapAccount(row);
+  }
+
+  public save(record: ImapAccountRecord): ImapAccountRecord {
+    this.database
+      .prepare(
+        `INSERT INTO global_imap_accounts (
+          id, name, host, port, secure, username, password, mailbox
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          name = excluded.name,
+          host = excluded.host,
+          port = excluded.port,
+          secure = excluded.secure,
+          username = excluded.username,
+          password = excluded.password,
+          mailbox = excluded.mailbox`,
+      )
+      .run(
+        record.id,
+        record.name,
+        record.host,
+        record.port,
+        record.secure ? 1 : 0,
+        record.username,
+        record.encryptedPassword,
+        record.mailbox,
+      );
+    return record;
+  }
+
+  public delete(id: string): boolean {
+    return (
+      this.database
+        .prepare("DELETE FROM global_imap_accounts WHERE id = ?")
+        .run(id).changes > 0
+    );
+  }
+}
+
+export class ProjectMySqlSettingsRepository {
+  public constructor(private readonly database: DatabaseSync) {}
+
+  public findByProjectId(
+    projectId: string,
+  ): ProjectMySqlSettingsRecord | undefined {
+    const row = asRow(
+      this.database
+        .prepare("SELECT * FROM project_mysql_settings WHERE project_id = ?")
+        .get(projectId),
+    );
+    if (row === undefined) return undefined;
+    return {
+      projectId: text(row, "project_id"),
+      host: text(row, "host"),
+      port: number(row, "port"),
+      database: text(row, "database_name"),
+      username: text(row, "username"),
+      encryptedPassword: text(row, "encrypted_password"),
+      ssl: number(row, "ssl") === 1,
+      identities: parseJson<TableIdentityConfig[]>(
+        text(row, "identity_config_json"),
+      ),
+      updatedAt: text(row, "updated_at"),
+    };
+  }
+
+  public upsert(
+    record: ProjectMySqlSettingsRecord,
+  ): ProjectMySqlSettingsRecord {
+    this.database
+      .prepare(
+        `INSERT INTO project_mysql_settings (
+          project_id, host, port, database_name, username, encrypted_password,
+          ssl, identity_config_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(project_id) DO UPDATE SET
+          host = excluded.host,
+          port = excluded.port,
+          database_name = excluded.database_name,
+          username = excluded.username,
+          encrypted_password = excluded.encrypted_password,
+          ssl = excluded.ssl,
+          identity_config_json = excluded.identity_config_json,
+          updated_at = excluded.updated_at`,
+      )
+      .run(
+        record.projectId,
+        record.host,
+        record.port,
+        record.database,
+        record.username,
+        record.encryptedPassword,
+        record.ssl ? 1 : 0,
+        json(record.identities),
+        record.updatedAt,
+      );
+    return record;
+  }
+
+  public delete(projectId: string): boolean {
+    return (
+      this.database
+        .prepare("DELETE FROM project_mysql_settings WHERE project_id = ?")
+        .run(projectId).changes > 0
+    );
+  }
+}
+
 export class PageRepository {
   public constructor(private readonly database: DatabaseSync) {}
 
@@ -466,8 +706,8 @@ export class PageRepository {
         `INSERT INTO page_versions (
           id, page_id, version_number, created_at, normalized_url,
           dom_file_path, css_file_path, accessibility_file_path,
-          analysis_file_path, semantic_hash
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          analysis_file_path, semantic_hash, change_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         version.id,
@@ -480,6 +720,7 @@ export class PageRepository {
         version.accessibilityFilePath,
         version.analysisFilePath,
         version.semanticHash,
+        version.change === undefined ? null : json(version.change),
       );
     return version;
   }
@@ -517,8 +758,9 @@ export class TestRepository {
         `INSERT INTO tests (
           id, project_id, name, description, status, version, test_mode,
           wipe_before_run, start_mode, start_url, normalized_start_url,
-          workflow_state, created_at, updated_at, flow_items_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          workflow_state, created_at, updated_at, flow_items_json,
+          post_run_checks_json, invalidation_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         test.id,
@@ -536,6 +778,8 @@ export class TestRepository {
         test.createdAt,
         test.updatedAt,
         json(test.flowItems),
+        json(test.postRunChecks ?? defaultTestPostRunChecks()),
+        test.invalidation === undefined ? null : json(test.invalidation),
       );
     return test;
   }
@@ -564,7 +808,7 @@ export class TestRepository {
           name = ?, description = ?, status = ?, version = ?,
           test_mode = ?, wipe_before_run = ?, start_mode = ?, start_url = ?,
           normalized_start_url = ?, workflow_state = ?, updated_at = ?,
-          flow_items_json = ?
+          flow_items_json = ?, post_run_checks_json = ?, invalidation_json = ?
         WHERE id = ?`,
       )
       .run(
@@ -580,6 +824,8 @@ export class TestRepository {
         test.workflowState,
         test.updatedAt,
         json(test.flowItems),
+        json(test.postRunChecks ?? defaultTestPostRunChecks()),
+        test.invalidation === undefined ? null : json(test.invalidation),
         test.id,
       );
     return test;
@@ -686,8 +932,9 @@ export class RunRepository {
       .prepare(
         `INSERT INTO runs (
           id, project_id, test_id, test_version, dataset_id, started_at,
-          ended_at, status, browser_type, page_version_ids_json, warnings_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ended_at, status, browser_type, page_version_ids_json, warnings_json,
+          dataset_snapshot_json, post_run_result_json, error_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         run.id,
@@ -701,6 +948,9 @@ export class RunRepository {
         run.browserType,
         json(run.pageVersionIds),
         json(run.warnings ?? []),
+        run.datasetSnapshot === undefined ? null : json(run.datasetSnapshot),
+        run.postRunResult === undefined ? null : json(run.postRunResult),
+        run.error === undefined ? null : json(run.error),
       );
     return run;
   }
@@ -754,10 +1004,145 @@ export class RunRepository {
     return { ...run, warnings };
   }
 
+  public updateDatasetSnapshot(id: string, snapshot: JsonValue): boolean {
+    return (
+      this.database
+        .prepare("UPDATE runs SET dataset_snapshot_json = ? WHERE id = ?")
+        .run(json(snapshot), id).changes > 0
+    );
+  }
+
+  public updatePostRunResult(id: string, result: JsonValue): boolean {
+    return (
+      this.database
+        .prepare("UPDATE runs SET post_run_result_json = ? WHERE id = ?")
+        .run(json(result), id).changes > 0
+    );
+  }
+
+  public updateError(id: string, error: JsonValue | undefined): boolean {
+    return (
+      this.database
+        .prepare("UPDATE runs SET error_json = ? WHERE id = ?")
+        .run(error === undefined ? null : json(error), id).changes > 0
+    );
+  }
+
   public delete(id: string): boolean {
     return (
       this.database.prepare("DELETE FROM runs WHERE id = ?").run(id).changes > 0
     );
+  }
+
+  public deleteMany(projectId: string, runIds: string[]): number {
+    const uniqueIds = [...new Set(runIds)].filter((id) => id.length > 0);
+    if (uniqueIds.length === 0) return 0;
+    const placeholders = uniqueIds.map(() => "?").join(", ");
+    return Number(
+      this.database
+        .prepare(
+          `DELETE FROM runs
+           WHERE project_id = ? AND id IN (${placeholders})`,
+        )
+        .run(projectId, ...uniqueIds).changes,
+    );
+  }
+
+  public deleteAllByProject(projectId: string): number {
+    return Number(
+      this.database
+        .prepare("DELETE FROM runs WHERE project_id = ?")
+        .run(projectId).changes,
+    );
+  }
+
+  public getStorageUsage(projectId: string): {
+    metadataBytes: number;
+    logsBytes: number;
+    snapshotsBytes: number;
+    runCount: number;
+  } {
+    const metadata = this.database
+      .prepare(
+        `SELECT
+          COUNT(*) AS run_count,
+          COALESCE(SUM(
+            LENGTH(page_version_ids_json) + LENGTH(warnings_json) +
+            LENGTH(COALESCE(dataset_snapshot_json, '')) +
+            LENGTH(COALESCE(post_run_result_json, '')) +
+            LENGTH(COALESCE(error_json, ''))
+          ), 0) AS bytes
+         FROM runs WHERE project_id = ?`,
+      )
+      .get(projectId) as DatabaseRow;
+    const logs = this.database
+      .prepare(
+        `SELECT COALESCE(SUM(LENGTH(step_results.logs_json)), 0) AS bytes
+         FROM step_results
+         JOIN runs ON runs.id = step_results.run_id
+         WHERE runs.project_id = ?`,
+      )
+      .get(projectId) as DatabaseRow;
+    const snapshots = this.database
+      .prepare(
+        `SELECT
+          COALESCE((
+            SELECT SUM(LENGTH(mysql_run_snapshots.tables_json))
+            FROM mysql_run_snapshots
+            JOIN runs ON runs.id = mysql_run_snapshots.run_id
+            WHERE runs.project_id = ?
+          ), 0) +
+          COALESCE((
+            SELECT SUM(LENGTH(mysql_run_diffs.tables_json))
+            FROM mysql_run_diffs
+            JOIN runs ON runs.id = mysql_run_diffs.run_id
+            WHERE runs.project_id = ?
+          ), 0) AS bytes`,
+      )
+      .get(projectId, projectId) as DatabaseRow;
+    return {
+      metadataBytes: number(metadata, "bytes"),
+      logsBytes: number(logs, "bytes"),
+      snapshotsBytes: number(snapshots, "bytes"),
+      runCount: number(metadata, "run_count"),
+    };
+  }
+
+  public purgeLogs(projectId: string): number {
+    return Number(
+      this.database
+        .prepare(
+          `UPDATE step_results SET logs_json = '[]'
+           WHERE run_id IN (SELECT id FROM runs WHERE project_id = ?)
+             AND logs_json <> '[]'`,
+        )
+        .run(projectId).changes,
+    );
+  }
+
+  public purgeSnapshots(projectId: string): number {
+    const snapshotCount = number(
+      this.database
+        .prepare(
+          `SELECT COUNT(*) AS count FROM mysql_run_snapshots
+           WHERE run_id IN (SELECT id FROM runs WHERE project_id = ?)`,
+        )
+        .get(projectId) as DatabaseRow,
+      "count",
+    );
+    this.database
+      .prepare(
+        `DELETE FROM mysql_run_snapshots
+         WHERE run_id IN (SELECT id FROM runs WHERE project_id = ?)`,
+      )
+      .run(projectId);
+    this.database
+      .prepare(
+        `UPDATE runs SET page_version_ids_json = '[]'
+         WHERE project_id = ? AND page_version_ids_json <> '[]'`,
+      )
+      .run(projectId);
+    return snapshotCount;
   }
 
   public createStepResult(result: StepRunResult): StepRunResult {
@@ -792,5 +1177,133 @@ export class RunRepository {
         )
         .all(runId),
     ).map(mapStepResult);
+  }
+}
+
+export class MySqlRunDataRepository {
+  public constructor(private readonly database: DatabaseSync) {}
+
+  public createSnapshot(snapshot: MySqlRunSnapshot): MySqlRunSnapshot {
+    this.database
+      .prepare(
+        `INSERT INTO mysql_run_snapshots (
+          id, run_id, kind, check_step_id, captured_at, tables_json
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        snapshot.id,
+        snapshot.runId,
+        snapshot.kind,
+        snapshot.checkStepId ?? null,
+        snapshot.capturedAt,
+        json(snapshot.tables),
+      );
+    return structuredClone(snapshot);
+  }
+
+  public findBaseline(runId: string): MySqlRunSnapshot | undefined {
+    const row = asRow(
+      this.database
+        .prepare(
+          `SELECT * FROM mysql_run_snapshots
+           WHERE run_id = ? AND kind = 'baseline'`,
+        )
+        .get(runId),
+    );
+    return row === undefined ? undefined : mapMySqlRunSnapshot(row);
+  }
+
+  public createDiff(diff: MySqlRunDiff): MySqlRunDiff {
+    this.database
+      .prepare(
+        `INSERT INTO mysql_run_diffs (
+          id, run_id, check_step_id, baseline_snapshot_id,
+          current_snapshot_id, created_at, tables_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        diff.id,
+        diff.runId,
+        diff.checkStepId,
+        diff.baselineSnapshotId,
+        diff.currentSnapshotId,
+        diff.createdAt,
+        json(diff.tables),
+      );
+    return structuredClone(diff);
+  }
+
+  public findDiff(id: string): MySqlRunDiff | undefined {
+    const row = asRow(
+      this.database
+        .prepare("SELECT * FROM mysql_run_diffs WHERE id = ?")
+        .get(id),
+    );
+    return row === undefined ? undefined : mapMySqlRunDiff(row);
+  }
+
+  public listDiffs(runId: string): MySqlRunDiff[] {
+    return asRows(
+      this.database
+        .prepare(
+          `SELECT * FROM mysql_run_diffs
+           WHERE run_id = ? ORDER BY created_at, id`,
+        )
+        .all(runId),
+    ).map(mapMySqlRunDiff);
+  }
+
+  public createCleanupLog(log: MySqlCleanupLog): MySqlCleanupLog {
+    this.database
+      .prepare(
+        `INSERT INTO mysql_cleanup_logs (
+          id, run_id, diff_id, preview_id, status, started_at, ended_at,
+          rows_json, affected_rows, error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        log.id,
+        log.runId,
+        log.diffId,
+        log.previewId,
+        log.status,
+        log.startedAt,
+        log.endedAt ?? null,
+        json(log.rows),
+        log.affectedRows,
+        log.error ?? null,
+      );
+    return structuredClone(log);
+  }
+
+  public updateCleanupLog(log: MySqlCleanupLog): MySqlCleanupLog {
+    const result = this.database
+      .prepare(
+        `UPDATE mysql_cleanup_logs
+         SET status = ?, ended_at = ?, affected_rows = ?, error = ?
+         WHERE id = ?`,
+      )
+      .run(
+        log.status,
+        log.endedAt ?? null,
+        log.affectedRows,
+        log.error ?? null,
+        log.id,
+      );
+    if (result.changes !== 1) {
+      throw new Error("Jurnalul cleanup MySQL nu există.");
+    }
+    return structuredClone(log);
+  }
+
+  public listCleanupLogs(runId: string): MySqlCleanupLog[] {
+    return asRows(
+      this.database
+        .prepare(
+          `SELECT * FROM mysql_cleanup_logs
+           WHERE run_id = ? ORDER BY started_at, id`,
+        )
+        .all(runId),
+    ).map(mapMySqlCleanupLog);
   }
 }

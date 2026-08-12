@@ -1,5 +1,7 @@
 import type { BrowserContext, Page } from "playwright-core";
 
+import type { AiProviderId } from "../../shared/ai.js";
+import type { ImapMatchedMessage } from "../../shared/imap.js";
 import type {
   BrowserLaunchOptions,
   BrowserManagerStatus,
@@ -15,8 +17,18 @@ import type {
   TestDefinition,
   TestRun,
 } from "../../shared/persistence.js";
+import type {
+  MySqlCleanupPreview,
+  MySqlCleanupRowSelection,
+  MySqlRunDetails,
+  MySqlRunDiff,
+  MySqlRunSnapshot,
+} from "../../shared/mysql.js";
 import {
+  MANUAL_WIPE_RESOURCES,
   RUN_MODES,
+  type ManualWipeResource,
+  type ImapRunDetails,
   type MissingDataDetails,
   type RunnerErrorDetails,
   type RunMode,
@@ -24,6 +36,11 @@ import {
   type StartRunInput,
   type WipeDetails,
 } from "../../shared/runner.js";
+import { normalizeTestPostRunChecks } from "../../shared/post-run-checks.js";
+import type {
+  PostRunAiEvaluation,
+  PostRunAiEvaluationInput,
+} from "../../shared/post-run-checks.js";
 import {
   assertShortcutAvailable,
   withContinueShortcut,
@@ -31,10 +48,12 @@ import {
 import { toDeclarativeTestDefinition } from "../../shared/test-editor.js";
 import type {
   ActionStep,
+  CheckStep,
   LocatorFallback,
   TestFlowItem,
 } from "../../shared/test-model.js";
 import { validateDeclarativeTest } from "../../shared/test-validation.js";
+import { applyAiRunPlan } from "../ai/ai-run-planning-service.js";
 import {
   DatasetRepository,
   PageRepository,
@@ -44,6 +63,7 @@ import {
 } from "../persistence/repositories.js";
 import { materializeDataset } from "./dataset-values.js";
 import { inspectMissingInput, readManualInputValue } from "./missing-data.js";
+import { classifyRunnerError } from "./runner-errors.js";
 import {
   executeFlowItem,
   StepExecutionError,
@@ -67,6 +87,46 @@ export interface TestRunnerServiceOptions {
   createId: () => string;
   now: () => Date;
   random?: () => number;
+  mysql?: RunnerMySqlGateway;
+  imap?: RunnerImapGateway;
+  postRunAi?: RunnerPostRunAiGateway;
+}
+
+export interface RunnerMySqlGateway {
+  captureBaseline: (
+    projectId: string,
+    runId: string,
+    steps: Extract<TestFlowItem, { type: "check" }>[],
+  ) => Promise<MySqlRunSnapshot | undefined>;
+  check: (
+    projectId: string,
+    runId: string,
+    step: Extract<TestFlowItem, { type: "check" }>,
+  ) => Promise<MySqlRunDiff>;
+  getRunDetails: (runId: string) => MySqlRunDetails;
+  previewCleanup: (
+    runId: string,
+    diffId: string,
+    selections: MySqlCleanupRowSelection[],
+  ) => MySqlCleanupPreview;
+  confirmCleanup: (
+    projectId: string,
+    runId: string,
+    previewId: string,
+  ) => Promise<unknown>;
+}
+
+export interface RunnerImapGateway {
+  check: (
+    projectId: string,
+    runId: string,
+    step: CheckStep,
+    testStartedAt: string,
+  ) => Promise<{ matched: boolean; message: string; evidence?: JsonValue }>;
+}
+
+export interface RunnerPostRunAiGateway {
+  evaluate: (input: PostRunAiEvaluationInput) => Promise<PostRunAiEvaluation>;
 }
 
 export type RunnerStatusListener = (snapshot: RunnerSnapshot) => void;
@@ -83,6 +143,16 @@ interface RunnerSession {
   mode: RunMode;
   pendingFallback?: PendingFallback;
   pendingMissingData?: PendingMissingData;
+  postRunItems: CheckStep[];
+  postRunIndex: number;
+  pendingImap?: PendingImap;
+  postRunAiRequested: boolean;
+  postRunProvider?: AiProviderId;
+  postRunModel?: string;
+  postRunEvidence: {
+    mysql?: JsonValue;
+    imap?: JsonValue;
+  };
 }
 
 interface PendingFallback {
@@ -99,6 +169,11 @@ interface PendingMissingData {
   details: MissingDataDetails;
 }
 
+interface PendingImap {
+  item: CheckStep;
+  startedAt: string;
+}
+
 const activeBrowserStates = new Set([
   "starting",
   "running",
@@ -108,6 +183,9 @@ const activeBrowserStates = new Set([
 
 const copySnapshot = (snapshot: RunnerSnapshot): RunnerSnapshot => ({
   ...snapshot,
+  ...(snapshot.flowItems === undefined
+    ? {}
+    : { flowItems: structuredClone(snapshot.flowItems) }),
   ...(snapshot.wipe === undefined
     ? {}
     : {
@@ -116,6 +194,21 @@ const copySnapshot = (snapshot: RunnerSnapshot): RunnerSnapshot => ({
           entries: snapshot.wipe.entries.map((entry) => ({ ...entry })),
         },
       }),
+  ...(snapshot.cleanup === undefined
+    ? {}
+    : {
+        cleanup: {
+          ...snapshot.cleanup,
+          entries: snapshot.cleanup.entries.map((entry) => ({ ...entry })),
+        },
+      }),
+  ...(snapshot.mysql === undefined
+    ? {}
+    : { mysql: structuredClone(snapshot.mysql) }),
+  ...(snapshot.imap === undefined ? {} : { imap: { ...snapshot.imap } }),
+  ...(snapshot.postRunAi === undefined
+    ? {}
+    : { postRunAi: structuredClone(snapshot.postRunAi) }),
   ...(snapshot.run === undefined ? {} : { run: { ...snapshot.run } }),
   ...(snapshot.error === undefined ? {} : { error: { ...snapshot.error } }),
   ...(snapshot.fallback === undefined
@@ -142,6 +235,77 @@ const jsonError = (error: RunnerErrorDetails): JsonValue => ({
   ...(error.count === undefined ? {} : { count: error.count }),
   ...(error.stepId === undefined ? {} : { stepId: error.stepId }),
 });
+
+const configuredPostRunItems = (
+  test: TestDefinition,
+  selection: StartRunInput["postRun"],
+): CheckStep[] => {
+  const checks = normalizeTestPostRunChecks(test.postRunChecks);
+  const mysqlEnabled = selection?.mysql ?? checks.mysql.enabled;
+  const imapEnabled = selection?.imap ?? checks.imap.enabled;
+  const result: CheckStep[] = [];
+  if (mysqlEnabled && checks.mysql.tableNames.length > 0) {
+    result.push({
+      id: `post-run:mysql:${test.id}`,
+      type: "check",
+      checkType: "mysql",
+      title: "MySQL snapshot post-run",
+      humanDescription:
+        "Compară tabelele configurate cu baseline-ul capturat înainte de rulare.",
+      config: {
+        tableNames: [...checks.mysql.tableNames],
+        identities: structuredClone(checks.mysql.identities),
+      },
+      enabled: true,
+    });
+  }
+  const accountIds = selection?.imapAccountIds ?? checks.imap.accountIds;
+  if (imapEnabled && accountIds.length > 0) {
+    result.push(
+      ...accountIds.map<CheckStep>((accountId, index) => ({
+        id: `post-run:imap:${test.id}:${index + 1}`,
+        type: "check",
+        checkType: "imap",
+        title: `Ascultare e-mail post-run ${index + 1}`,
+        humanDescription:
+          "Așteaptă un mesaj primit după momentul pornirii testului.",
+        config: {
+          accountId,
+          mailbox: checks.imap.mailbox,
+          receivedAfterTestStart: true as const,
+          ...(checks.imap.sender.length === 0
+            ? {}
+            : { sender: checks.imap.sender }),
+          ...(checks.imap.recipient.length === 0
+            ? {}
+            : { recipient: checks.imap.recipient }),
+          ...(checks.imap.subjectEquals.length === 0
+            ? {}
+            : { subjectEquals: checks.imap.subjectEquals }),
+          ...(checks.imap.subjectContains.length === 0
+            ? {}
+            : { subjectContains: checks.imap.subjectContains }),
+          ...(checks.imap.bodyContains.length === 0
+            ? {}
+            : { bodyContains: checks.imap.bodyContains }),
+        },
+        enabled: true,
+      })),
+    );
+  }
+  if (result.length === 0 && selection === undefined) {
+    return test.flowItems.filter(
+      (item): item is CheckStep =>
+        item.type === "check" &&
+        item.enabled &&
+        (item.checkType === "mysql" || item.checkType === "imap"),
+    );
+  }
+  return result;
+};
+
+const accountIdForImapStep = (item: CheckStep): string | undefined =>
+  "accountId" in item.config ? item.config.accountId : undefined;
 
 export class TestRunnerService {
   private readonly listeners = new Set<RunnerStatusListener>();
@@ -175,7 +339,23 @@ export class TestRunnerService {
     }
 
     const project = this.requireProject(input.projectId);
-    const test = this.requireTest(input.projectId, input.testId);
+    const storedTest = this.requireTest(input.projectId, input.testId);
+    let test = storedTest;
+    let datasetOverrides: Record<string, string> = {};
+    if (input.aiPlan !== undefined) {
+      if (
+        storedTest.testMode !== "dynamic_ai" ||
+        input.aiPlan.baseVersion !== storedTest.version ||
+        input.aiPlan.instruction.trim().length === 0
+      ) {
+        throw new Error(
+          "Planul AI nu corespunde versiunii curente a testului.",
+        );
+      }
+      const applied = applyAiRunPlan(storedTest, input.aiPlan.proposal);
+      test = applied.test;
+      datasetOverrides = applied.datasetOverrides;
+    }
     const mode = input.mode ?? "automatic";
     if (!(RUN_MODES as readonly string[]).includes(mode)) {
       throw new Error("Modul de rulare nu este valid.");
@@ -183,6 +363,52 @@ export class TestRunnerService {
     const datasets = this.datasetRepository.listByTest(test.id);
     const dataset = this.selectDataset(datasets, input.datasetId);
     this.assertRunnable(test, datasets);
+    const datasetValues = {
+      ...materializeDataset(dataset, {
+        createId: this.options.createId,
+        now: this.options.now,
+        random: this.options.random ?? Math.random,
+      }),
+      ...datasetOverrides,
+    };
+    const startedAt = this.options.now().toISOString();
+    const invalidationWarning =
+      test.status === "invalidated"
+        ? {
+            code: "test_invalidated",
+            message:
+              "Testul rulează cu warning după o schimbare semantică a paginii.",
+            ...(test.invalidation === undefined
+              ? {}
+              : {
+                  pageId: test.invalidation.pageId,
+                  pageVersionId: test.invalidation.pageVersionId,
+                  score: test.invalidation.score,
+                  threshold: test.invalidation.threshold,
+                }),
+          }
+        : undefined;
+    const run: TestRun = {
+      id: this.options.createId(),
+      projectId: project.id,
+      testId: test.id,
+      testVersion: test.version,
+      ...(dataset === undefined ? {} : { datasetId: dataset.id }),
+      startedAt,
+      status: "running",
+      browserType: project.browserConfig.browserType,
+      pageVersionIds: this.findPageVersionIds(test.flowItems),
+      ...(invalidationWarning === undefined
+        ? {}
+        : { warnings: [invalidationWarning] }),
+      datasetSnapshot: {
+        ...(dataset === undefined
+          ? {}
+          : { id: dataset.id, name: dataset.name }),
+        values: structuredClone(datasetValues),
+      },
+    };
+    this.runRepository.create(run);
     this.publishForTest(project.id, test.id, {
       state: "preparing",
       currentStepIndex: -1,
@@ -192,62 +418,95 @@ export class TestRunnerService {
       canRetry: false,
     });
 
-    let wipe: WipeDetails | undefined;
     try {
       this.publishForTest(project.id, test.id, {
         state: "browser_starting",
         currentStepIndex: -1,
         totalSteps: test.flowItems.length,
-        message: "Se pregătește browserul.",
+        message: "Se verifică sesiunea de browser deschisă.",
         canStop: false,
         canRetry: false,
       });
       await this.prepareBrowser(project, test);
       const page = this.browser.getRunnerPage(project.id);
-      const context = this.browser.getRunnerContext(project.id);
-      if (test.wipeBeforeRun) {
-        this.publishForTest(project.id, test.id, {
-          state: "browser_starting",
-          currentStepIndex: -1,
-          totalSteps: test.flowItems.length,
-          message: `Se curăță origin-ul ${new URL(test.startUrl).origin}.`,
-          canStop: false,
-          canRetry: false,
-        });
+      const postRunItems = configuredPostRunItems(test, input.postRun);
+      const normalizedPostRunChecks = normalizeTestPostRunChecks(
+        test.postRunChecks,
+      );
+      const configuredImapItems = postRunItems.filter(
+        (item) => item.checkType === "imap",
+      );
+      console.info("[IMAP][runner] Configurare la pornirea run-ului", {
+        runId: run.id,
+        testId: test.id,
+        runStartedAt: run.startedAt,
+        requested: {
+          enabled: input.postRun?.imap ?? false,
+          accountIds: input.postRun?.imapAccountIds ?? [],
+        },
+        saved: {
+          enabled: normalizedPostRunChecks.imap.enabled,
+          accountIds: normalizedPostRunChecks.imap.accountIds,
+          mailbox: normalizedPostRunChecks.imap.mailbox,
+        },
+        scheduledChecks: configuredImapItems.map((item) => ({
+          stepId: item.id,
+          accountId: accountIdForImapStep(item) ?? "",
+          mailbox: "mailbox" in item.config ? (item.config.mailbox ?? "") : "",
+        })),
+      });
+      if (input.postRun?.imap === true && configuredImapItems.length === 0) {
+        console.warn(
+          "[IMAP][runner] IMAP a fost cerut, dar nu a fost programat niciun check. Verifică selecția conturilor.",
+          {
+            runId: run.id,
+            selectedAccountIds: input.postRun.imapAccountIds ?? [],
+          },
+        );
+      }
+      const mysqlChecks = postRunItems.filter(
+        (item): item is Extract<TestFlowItem, { type: "check" }> =>
+          item.type === "check" && item.checkType === "mysql" && item.enabled,
+      );
+      let mysql: MySqlRunDetails | undefined;
+      if (mysqlChecks.length > 0) {
+        if (this.options.mysql === undefined) {
+          const endedAt = this.options.now().toISOString();
+          this.runRepository.updateStatus(run.id, "failed", endedAt);
+          throw new StepExecutionError(
+            "mysql_failed",
+            "Runtime-ul MySQL nu este configurat.",
+          );
+        }
         try {
-          wipe = await wipeBrowserStateForOrigin(context, page, test.startUrl);
+          await this.options.mysql.captureBaseline(
+            project.id,
+            run.id,
+            mysqlChecks,
+          );
+          mysql = this.options.mysql.getRunDetails(run.id);
         } catch (error) {
-          if (error instanceof WipeError) wipe = error.result;
+          const endedAt = this.options.now().toISOString();
+          this.runRepository.updateStatus(run.id, "failed", endedAt);
           throw error;
         }
       }
-
-      const startedAt = this.options.now().toISOString();
-      const run: TestRun = {
-        id: this.options.createId(),
-        projectId: project.id,
-        testId: test.id,
-        testVersion: test.version,
-        ...(dataset === undefined ? {} : { datasetId: dataset.id }),
-        startedAt,
-        status: "running",
-        browserType: project.browserConfig.browserType,
-        pageVersionIds: this.findPageVersionIds(test.flowItems),
-      };
-      this.runRepository.create(run);
       const snapshot: RunnerSnapshot = {
         state: input.waitBeforeStart === true ? "waiting_for_start" : "running",
         run,
         currentStepIndex: 0,
         totalSteps: test.flowItems.length,
+        flowItems: structuredClone(test.flowItems),
         ...(test.flowItems[0] === undefined
           ? {}
           : { currentStepId: test.flowItems[0].id }),
         message:
           input.waitBeforeStart === true
             ? "Browserul este pregătit. Confirmă pornirea testului."
-            : "Rularea a început.",
-        ...(wipe === undefined ? {} : { wipe }),
+            : input.aiPlan === undefined
+              ? "Rularea a început."
+              : `Rularea a început cu planul AI: ${input.aiPlan.proposal.summary}`,
+        ...(mysql === undefined ? {} : { mysql }),
         ...(input.waitBeforeStart === true
           ? {
               pause: {
@@ -268,16 +527,22 @@ export class TestRunnerService {
         project,
         test,
         ...(dataset === undefined ? {} : { dataset }),
-        datasetValues: materializeDataset(dataset, {
-          createId: this.options.createId,
-          now: this.options.now,
-          random: this.options.random ?? Math.random,
-        }),
+        datasetValues,
         page,
         run,
         snapshot,
         stopRequested: false,
         mode,
+        postRunItems,
+        postRunIndex: 0,
+        postRunAiRequested: input.postRun?.ai === true,
+        ...(input.postRun?.provider === undefined
+          ? {}
+          : { postRunProvider: input.postRun.provider }),
+        ...(input.postRun?.model === undefined
+          ? {}
+          : { postRunModel: input.postRun.model }),
+        postRunEvidence: {},
       };
       this.sessions.set(run.id, session);
       this.publish(session, snapshot);
@@ -286,7 +551,10 @@ export class TestRunnerService {
       }
       return copySnapshot(snapshot);
     } catch (error) {
-      const details = this.toRunnerError(error);
+      const details = this.toRunnerError(error, undefined, "browser_start");
+      const endedAt = this.options.now().toISOString();
+      this.runRepository.updateStatus(run.id, "failed", endedAt);
+      this.persistRunError(run.id, details);
       this.publishForTest(project.id, test.id, {
         state:
           this.browser.getStatus().state === "waiting_for_basic_auth"
@@ -296,7 +564,7 @@ export class TestRunnerService {
         totalSteps: test.flowItems.length,
         message: details.message,
         error: details,
-        ...(wipe === undefined ? {} : { wipe }),
+        run: { ...run, status: "failed", endedAt },
         canStop: false,
         canRetry: false,
       });
@@ -304,10 +572,16 @@ export class TestRunnerService {
     }
   }
 
-  public stop(runId: string): RunnerSnapshot {
+  public stop(runId: string): Promise<RunnerSnapshot> {
     const session = this.requireSession(runId);
     if (!session.snapshot.canStop) {
       throw new Error("Rularea nu poate fi oprită în starea curentă.");
+    }
+    if (
+      session.pendingImap !== undefined &&
+      session.snapshot.state === "waiting_for_imap_check"
+    ) {
+      return Promise.resolve(this.failPendingImap(session));
     }
     session.stopRequested = true;
     const endedAt = this.options.now().toISOString();
@@ -320,6 +594,7 @@ export class TestRunnerService {
     delete snapshotWithoutError.missingData;
     delete session.pendingFallback;
     delete session.pendingMissingData;
+    delete session.pendingImap;
     this.publish(session, {
       ...snapshotWithoutError,
       state: "stopped",
@@ -328,7 +603,7 @@ export class TestRunnerService {
       canStop: false,
       canRetry: false,
     });
-    return copySnapshot(session.snapshot);
+    return Promise.resolve(copySnapshot(session.snapshot));
   }
 
   public retry(runId: string): RunnerSnapshot {
@@ -343,11 +618,65 @@ export class TestRunnerService {
     };
     delete session.run.endedAt;
     this.runRepository.updateStatus(runId, "running");
+    this.runRepository.updateError(runId, undefined);
+    const retryingSnapshot = { ...session.snapshot };
+    delete retryingSnapshot.error;
     this.publish(session, {
-      ...session.snapshot,
+      ...retryingSnapshot,
       state: "running",
       run: session.run,
       message: "Se reîncearcă pasul curent.",
+      canStop: true,
+      canRetry: false,
+    });
+    void this.continueRun(session);
+    return copySnapshot(session.snapshot);
+  }
+
+  public skipCurrentStep(runId: string): RunnerSnapshot {
+    const session = this.requireSession(runId);
+    if (
+      !["paused_on_error", "failed", "waiting_for_fallback_decision"].includes(
+        session.snapshot.state,
+      )
+    ) {
+      throw new Error("Pasul curent nu poate fi sărit în starea curentă.");
+    }
+    const item = session.test.flowItems[session.snapshot.currentStepIndex];
+    if (item === undefined) {
+      throw new Error("Pasul curent nu mai există.");
+    }
+
+    session.stopRequested = false;
+    delete session.pendingFallback;
+    delete session.pendingMissingData;
+    session.run = { ...session.run, status: "running" };
+    delete session.run.endedAt;
+    this.runRepository.updateStatus(runId, "running");
+    const warningMessage = `Pasul ${session.snapshot.currentStepIndex + 1} a fost sărit manual: ${item.title ?? item.id}.`;
+    session.run = this.runRepository.addWarning(session.run.id, {
+      code: "step_skipped_manually",
+      stepId: item.id,
+      message: warningMessage,
+    });
+    this.saveStepResult(
+      session,
+      item,
+      "skipped",
+      { logs: [{ level: "warning", message: warningMessage }] },
+      this.options.now().toISOString(),
+    );
+    session.snapshot.currentStepIndex += 1;
+
+    const resumedSnapshot = { ...session.snapshot };
+    delete resumedSnapshot.error;
+    delete resumedSnapshot.fallback;
+    delete resumedSnapshot.pause;
+    this.publish(session, {
+      ...resumedSnapshot,
+      state: "running",
+      run: session.run,
+      message: "Pasul a fost sărit. Rularea continuă.",
       canStop: true,
       canRetry: false,
     });
@@ -424,6 +753,46 @@ export class TestRunnerService {
     return normalized;
   }
 
+  public previewMySqlCleanup(
+    runId: string,
+    diffId: string,
+    rows: MySqlCleanupRowSelection[],
+  ): RunnerSnapshot {
+    const session = this.requireSession(runId);
+    if (this.options.mysql === undefined) {
+      throw new Error("Runtime-ul MySQL nu este configurat.");
+    }
+    const preview = this.options.mysql.previewCleanup(runId, diffId, rows);
+    const details = this.options.mysql.getRunDetails(runId);
+    this.publish(session, {
+      ...session.snapshot,
+      mysql: { ...details, cleanupPreview: preview },
+      message: "Preview-ul cleanup este pregătit. Confirmă explicit ștergerea.",
+    });
+    return copySnapshot(session.snapshot);
+  }
+
+  public async confirmMySqlCleanup(
+    runId: string,
+    previewId: string,
+  ): Promise<RunnerSnapshot> {
+    const session = this.requireSession(runId);
+    if (this.options.mysql === undefined) {
+      throw new Error("Runtime-ul MySQL nu este configurat.");
+    }
+    await this.options.mysql.confirmCleanup(
+      session.project.id,
+      runId,
+      previewId,
+    );
+    this.publish(session, {
+      ...session.snapshot,
+      mysql: this.options.mysql.getRunDetails(runId),
+      message: "Cleanup-ul MySQL a fost verificat și finalizat.",
+    });
+    return copySnapshot(session.snapshot);
+  }
+
   public async runCurrentFallback(runId: string): Promise<RunnerSnapshot> {
     const session = this.requireFallbackSession(runId);
     const pending = session.pendingFallback;
@@ -447,11 +816,18 @@ export class TestRunnerService {
         fallback.locator,
       );
     } catch (error) {
-      const details = this.toRunnerError(error, pending.item.id);
+      const details = this.toRunnerError(
+        error,
+        pending.item.id,
+        `fallback_${pending.item.actionType}`,
+      );
       pending.logs.push({
         level: "warning",
         message: `Fallback-ul ${pending.index + 1} a eșuat: ${details.message}`,
       });
+      if (session.stopRequested) {
+        return copySnapshot(session.snapshot);
+      }
       pending.index += 1;
       if (pending.index >= pending.item.fallbacks.length) {
         return this.finalizeExhaustedFallbacks(session, details);
@@ -607,6 +983,14 @@ export class TestRunnerService {
         continue;
       }
 
+      if (
+        item.type === "check" &&
+        (item.checkType === "mysql" || item.checkType === "imap")
+      ) {
+        session.snapshot.currentStepIndex += 1;
+        continue;
+      }
+
       if (item.type === "breakpoint") {
         const previous = session.test.flowItems[index - 1];
         const next = session.test.flowItems[index + 1];
@@ -654,7 +1038,16 @@ export class TestRunnerService {
         session.snapshot.currentStepIndex += 1;
         if (this.pauseAfterStep(session, item)) return;
       } catch (error) {
-        let details = this.toRunnerError(error, item.id);
+        if (session.stopRequested) return;
+        let details = this.toRunnerError(
+          error,
+          item.id,
+          item.type === "action"
+            ? item.actionType
+            : item.type === "check"
+              ? item.checkType
+              : item.type,
+        );
         if (details.code === "missing_data" && item.type === "action") {
           try {
             const missingData = await inspectMissingInput(session.page, item);
@@ -679,7 +1072,11 @@ export class TestRunnerService {
             });
             return;
           } catch (inspectionError) {
-            details = this.toRunnerError(inspectionError, item.id);
+            details = this.toRunnerError(
+              inspectionError,
+              item.id,
+              "inspect_missing_input",
+            );
           }
         }
         if (
@@ -700,6 +1097,9 @@ export class TestRunnerService {
             ],
           };
           this.publishFallbackDecision(session, details);
+          if (session.mode === "automatic") {
+            await this.runFallbacksAutomatically(session);
+          }
           return;
         }
         this.saveStepResult(
@@ -713,25 +1113,285 @@ export class TestRunnerService {
         const endedAt = this.options.now().toISOString();
         session.run = { ...session.run, status: "failed", endedAt };
         this.runRepository.updateStatus(session.run.id, "failed", endedAt);
+        this.persistRunError(session.run.id, details);
         this.publish(session, {
           ...session.snapshot,
           state: "paused_on_error",
           run: session.run,
           message: details.message,
           error: details,
-          canStop: false,
-          canRetry: true,
+          canStop: true,
+          canRetry: details.retryable !== false,
         });
         return;
       }
     }
 
     if (session.stopRequested) return;
+    await this.continuePostRun(session);
+  }
+
+  private async continuePostRun(session: RunnerSession): Promise<void> {
+    await Promise.resolve();
+    console.info("[IMAP][runner] Intrare în etapa post-run", {
+      runId: session.run.id,
+      nextIndex: session.postRunIndex,
+      checks: session.postRunItems.map((item) => ({
+        stepId: item.id,
+        type: item.checkType,
+        accountId:
+          item.checkType === "imap"
+            ? (accountIdForImapStep(item) ?? "")
+            : undefined,
+      })),
+    });
+    while (session.postRunIndex < session.postRunItems.length) {
+      if (session.stopRequested) return;
+      const item = session.postRunItems[session.postRunIndex];
+      if (item === undefined) break;
+      const stepStartedAt = this.options.now().toISOString();
+
+      if (item.checkType === "imap") {
+        console.info("[IMAP][runner] Check-ul a intrat în așteptare", {
+          runId: session.run.id,
+          stepId: item.id,
+          accountId: accountIdForImapStep(item) ?? "",
+          mailbox: "mailbox" in item.config ? (item.config.mailbox ?? "") : "",
+          receivedAfter: session.run.startedAt,
+        });
+        session.pendingImap = { item, startedAt: stepStartedAt };
+        const imap: ImapRunDetails = {
+          stepId: item.id,
+          accountId: accountIdForImapStep(item) ?? "",
+          status: "waiting",
+          message:
+            this.options.imap === undefined
+              ? "Conectorul IMAP va fi configurat în setările etapelor Y–Z. Poți abandona verificarea pentru această rulare."
+              : "Se așteaptă mesajul care corespunde filtrelor IMAP.",
+          startedAt: stepStartedAt,
+        };
+        this.publish(session, {
+          ...session.snapshot,
+          state: "waiting_for_imap_check",
+          imap,
+          currentStepId: item.id,
+          message: imap.message,
+          canStop: true,
+          canRetry: false,
+        });
+        return;
+      }
+
+      if (this.options.mysql === undefined) {
+        this.failPostRunCheck(
+          session,
+          item,
+          stepStartedAt,
+          new StepExecutionError(
+            "mysql_failed",
+            "Runtime-ul MySQL nu este configurat.",
+          ),
+        );
+        return;
+      }
+
+      try {
+        this.publish(session, {
+          ...session.snapshot,
+          state: "waiting_for_mysql_check",
+          currentStepId: item.id,
+          message: "Se capturează și se compară snapshot-ul MySQL.",
+          canStop: true,
+          canRetry: false,
+        });
+        const diff = await this.options.mysql.check(
+          session.project.id,
+          session.run.id,
+          item,
+        );
+        const inserted = diff.tables.reduce(
+          (total, table) => total + table.inserted.length,
+          0,
+        );
+        const deleted = diff.tables.reduce(
+          (total, table) => total + table.deleted.length,
+          0,
+        );
+        const updated = diff.tables.reduce(
+          (total, table) => total + table.updated.length,
+          0,
+        );
+        this.saveStepResult(
+          session,
+          item,
+          "passed",
+          {
+            logs: [
+              {
+                level: "info",
+                message: `Diff MySQL: ${inserted} inserate, ${deleted} șterse, ${updated} actualizate.`,
+                diffId: diff.id,
+              },
+            ],
+          },
+          stepStartedAt,
+        );
+        session.postRunIndex += 1;
+        session.snapshot = {
+          ...session.snapshot,
+          mysql: this.options.mysql.getRunDetails(session.run.id),
+        };
+        session.postRunEvidence.mysql = JSON.parse(
+          JSON.stringify(session.snapshot.mysql),
+        ) as JsonValue;
+        this.persistPostRunResult(session);
+      } catch (error) {
+        this.failPostRunCheck(session, item, stepStartedAt, error);
+        return;
+      }
+    }
+
+    if (session.postRunAiRequested) {
+      try {
+        await this.evaluatePostRunWithAi(session);
+      } catch (error) {
+        const details = this.toRunnerError(error, undefined, "post_run_ai");
+        const endedAt = this.options.now().toISOString();
+        session.run = { ...session.run, status: "failed", endedAt };
+        this.runRepository.updateStatus(session.run.id, "failed", endedAt);
+        this.persistRunError(session.run.id, details);
+        this.publish(session, {
+          ...session.snapshot,
+          state: "paused_on_error",
+          run: session.run,
+          error: details,
+          message: `Evaluarea AI post-run a eșuat: ${details.message}`,
+          canStop: true,
+          canRetry: details.retryable !== false,
+        });
+        return;
+      }
+    }
+    this.finalizeRun(session);
+  }
+
+  private async evaluatePostRunWithAi(session: RunnerSession): Promise<void> {
+    const checks = normalizeTestPostRunChecks(session.test.postRunChecks);
+    const hasEvidence =
+      session.postRunEvidence.mysql !== undefined ||
+      session.postRunEvidence.imap !== undefined;
+    if (!hasEvidence || checks.aiPrompt.length === 0) return;
+    if (this.options.postRunAi === undefined) {
+      throw new Error("Evaluatorul AI post-run nu este configurat.");
+    }
+    this.publish(session, {
+      ...session.snapshot,
+      state: "waiting_for_ai_analysis",
+      message: "AI evaluează rezultatele DB și e-mail conform instrucțiunilor.",
+      canStop: true,
+      canRetry: false,
+    });
+    const evaluation = await this.options.postRunAi.evaluate({
+      projectId: session.project.id,
+      testId: session.test.id,
+      runId: session.run.id,
+      prompt: checks.aiPrompt,
+      dataset: {
+        ...(session.dataset === undefined
+          ? {}
+          : { id: session.dataset.id, name: session.dataset.name }),
+        values: structuredClone(session.datasetValues),
+      },
+      evidence: structuredClone(session.postRunEvidence),
+      ...(session.postRunProvider === undefined
+        ? {}
+        : { provider: session.postRunProvider }),
+      ...(session.postRunModel === undefined
+        ? {}
+        : { model: session.postRunModel }),
+    });
+    session.snapshot = {
+      ...session.snapshot,
+      postRunAi: evaluation,
+    };
+    this.persistPostRunResult(session);
+    if (evaluation.status === "inconclusive") {
+      session.run = this.runRepository.addWarning(session.run.id, {
+        code: "post_run_ai_inconclusive",
+        status: evaluation.status,
+        message: evaluation.summary,
+      });
+    }
+  }
+
+  private failPostRunCheck(
+    session: RunnerSession,
+    item: CheckStep,
+    startedAt: string,
+    error: unknown,
+  ): void {
+    const details = this.toRunnerError(
+      error,
+      item.id,
+      `post_run_${item.checkType}`,
+    );
+    this.saveStepResult(
+      session,
+      item,
+      "failed",
+      { logs: [{ level: "error", message: details.message }] },
+      startedAt,
+      details,
+    );
+    const endedAt = this.options.now().toISOString();
+    session.run = { ...session.run, status: "failed", endedAt };
+    this.runRepository.updateStatus(session.run.id, "failed", endedAt);
+    this.persistRunError(session.run.id, details);
+    this.persistPostRunResult(session);
+    this.publish(session, {
+      ...session.snapshot,
+      state: "paused_on_error",
+      run: session.run,
+      message: details.message,
+      error: details,
+      ...(this.options.mysql === undefined
+        ? session.snapshot.mysql === undefined
+          ? {}
+          : { mysql: session.snapshot.mysql }
+        : { mysql: this.options.mysql.getRunDetails(session.run.id) }),
+      canStop: true,
+      canRetry: details.retryable !== false,
+    });
+  }
+
+  private persistPostRunResult(session: RunnerSession): void {
+    const result = JSON.parse(
+      JSON.stringify({
+        evidence: session.postRunEvidence,
+        ...(session.snapshot.mysql === undefined
+          ? {}
+          : { mysql: session.snapshot.mysql }),
+        ...(session.snapshot.imap === undefined
+          ? {}
+          : { imap: session.snapshot.imap }),
+        ...(session.snapshot.postRunAi === undefined
+          ? {}
+          : { ai: session.snapshot.postRunAi }),
+      }),
+    ) as JsonValue;
+    this.runRepository.updatePostRunResult(session.run.id, result);
+    session.run = { ...session.run, postRunResult: result };
+  }
+
+  private finalizeRun(session: RunnerSession): void {
+    this.persistPostRunResult(session);
     const endedAt = this.options.now().toISOString();
     const finalStatus =
-      (session.run.warnings?.length ?? 0) > 0
-        ? "passed_with_warnings"
-        : "passed";
+      session.snapshot.postRunAi?.status === "failed"
+        ? "failed"
+        : (session.run.warnings?.length ?? 0) > 0
+          ? "passed_with_warnings"
+          : "passed";
     session.run = { ...session.run, status: finalStatus, endedAt };
     this.runRepository.updateStatus(session.run.id, finalStatus, endedAt);
     const completedSnapshot = { ...session.snapshot };
@@ -741,13 +1401,15 @@ export class TestRunnerService {
     delete completedSnapshot.missingData;
     this.publish(session, {
       ...completedSnapshot,
-      state: "completed",
+      state: finalStatus === "failed" ? "failed" : "completed",
       run: session.run,
       currentStepIndex: session.test.flowItems.length,
       message:
-        finalStatus === "passed_with_warnings"
-          ? "Testul a trecut cu warning-uri."
-          : "Testul a trecut.",
+        finalStatus === "failed"
+          ? "Testul a eșuat la evaluarea AI post-run."
+          : finalStatus === "passed_with_warnings"
+            ? "Testul a trecut cu warning-uri. Verifică etapa post-run."
+            : "Testul a trecut. Verifică etapa post-run.",
       canStop: false,
       canRetry: false,
     });
@@ -777,6 +1439,302 @@ export class TestRunnerService {
       ...(fallbackIndex === undefined ? {} : { fallbackIndex }),
       logs: execution.logs,
     });
+  }
+
+  public async manualWipe(
+    runId: string,
+    resources: ManualWipeResource[],
+  ): Promise<RunnerSnapshot> {
+    const session = this.requireSession(runId);
+    if (
+      !["completed", "stopped", "failed", "paused_on_error"].includes(
+        session.snapshot.state,
+      )
+    ) {
+      throw new Error("Wipe-ul manual este disponibil numai după rulare.");
+    }
+    if (resources.length === 0) {
+      throw new Error("Selectează cel puțin un tip de date pentru wipe.");
+    }
+    const allowed = new Set<ManualWipeResource>(MANUAL_WIPE_RESOURCES);
+    if (resources.some((resource) => !allowed.has(resource))) {
+      throw new Error("Selecția pentru wipe conține o resursă necunoscută.");
+    }
+
+    let cleanup: WipeDetails;
+    try {
+      cleanup = await wipeBrowserStateForOrigin(
+        this.browser.getRunnerContext(session.project.id),
+        session.page,
+        session.test.startUrl,
+        { reloadStartPage: false, resources },
+      );
+    } catch (error) {
+      cleanup =
+        error instanceof WipeError
+          ? error.result
+          : {
+              origin: new URL(session.test.startUrl).origin,
+              status: "failed" as const,
+              entries: [
+                {
+                  resource: "navigation" as const,
+                  status: "failed" as const,
+                  message:
+                    error instanceof Error
+                      ? error.message
+                      : "Curățarea sesiunii a eșuat.",
+                },
+              ],
+            };
+    }
+    this.publish(session, {
+      ...session.snapshot,
+      cleanup,
+      message:
+        cleanup.status === "completed"
+          ? "Wipe-ul manual selectat a fost finalizat."
+          : "Wipe-ul manual a întâmpinat erori. Verifică rezultatele.",
+    });
+    return copySnapshot(session.snapshot);
+  }
+
+  public async pollImapCheck(runId: string): Promise<RunnerSnapshot> {
+    console.info("[IMAP][runner] Poll solicitat de interfață", {
+      runId,
+      requestedAt: this.options.now().toISOString(),
+    });
+    const session = this.requireSession(runId);
+    const pending = session.pendingImap;
+    if (
+      pending === undefined ||
+      session.snapshot.state !== "waiting_for_imap_check"
+    ) {
+      console.warn("[IMAP][runner] Poll ignorat: nu există un check pending", {
+        runId,
+        state: session.snapshot.state,
+        hasPendingImap: pending !== undefined,
+      });
+      throw new Error("Nu există o verificare IMAP în așteptare.");
+    }
+
+    const checkedAt = this.options.now().toISOString();
+    if (this.options.imap === undefined) {
+      console.warn("[IMAP][runner] Conectorul IMAP nu este disponibil", {
+        runId,
+        stepId: pending.item.id,
+      });
+      this.publish(session, {
+        ...session.snapshot,
+        imap: {
+          ...(session.snapshot.imap ?? {
+            stepId: pending.item.id,
+            status: "waiting" as const,
+            message: "Conectorul IMAP nu este configurat.",
+            startedAt: pending.startedAt,
+          }),
+          lastCheckedAt: checkedAt,
+        },
+      });
+      return copySnapshot(session.snapshot);
+    }
+
+    console.info("[IMAP][runner] Execută interogarea IMAP", {
+      runId,
+      stepId: pending.item.id,
+      accountId: accountIdForImapStep(pending.item) ?? "",
+      receivedAfter: session.run.startedAt,
+    });
+    let result: Awaited<ReturnType<RunnerImapGateway["check"]>>;
+    try {
+      result = await this.options.imap.check(
+        session.project.id,
+        session.run.id,
+        pending.item,
+        session.run.startedAt,
+      );
+    } catch (error) {
+      console.error("[IMAP][runner] Interogarea IMAP a eșuat", {
+        runId,
+        stepId: pending.item.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+    console.info("[IMAP][runner] Rezultat poll IMAP", {
+      runId,
+      stepId: pending.item.id,
+      matched: result.matched,
+      message: result.message,
+      hasEvidence: result.evidence !== undefined,
+    });
+    if (!result.matched) {
+      this.publish(session, {
+        ...session.snapshot,
+        imap: {
+          stepId: pending.item.id,
+          accountId: accountIdForImapStep(pending.item) ?? "",
+          status: "waiting",
+          message: result.message,
+          startedAt: pending.startedAt,
+          lastCheckedAt: checkedAt,
+        },
+        message: result.message,
+      });
+      return copySnapshot(session.snapshot);
+    }
+
+    const evidence =
+      result.evidence ??
+      ({
+        matched: true,
+        message: result.message,
+      } satisfies JsonValue);
+    const previousEvidence = session.postRunEvidence.imap;
+    const previousChecks =
+      typeof previousEvidence === "object" &&
+      previousEvidence !== null &&
+      !Array.isArray(previousEvidence) &&
+      "checks" in previousEvidence &&
+      Array.isArray(previousEvidence.checks)
+        ? previousEvidence.checks
+        : [];
+    session.postRunEvidence.imap = {
+      checks: [...previousChecks, evidence],
+    };
+    const evidenceRecord =
+      typeof evidence === "object" &&
+      evidence !== null &&
+      !Array.isArray(evidence)
+        ? evidence
+        : {};
+    const matchedMessages = Array.isArray(evidenceRecord.messages)
+      ? (evidenceRecord.messages as unknown as ImapMatchedMessage[])
+      : [];
+    this.saveStepResult(
+      session,
+      pending.item,
+      "passed",
+      {
+        logs: [{ level: "info", message: result.message, evidence }],
+      },
+      pending.startedAt,
+    );
+    session.postRunIndex += 1;
+    delete session.pendingImap;
+    this.publish(session, {
+      ...session.snapshot,
+      state: "running",
+      imap: {
+        stepId: pending.item.id,
+        accountId: accountIdForImapStep(pending.item) ?? "",
+        status: "matched",
+        message: result.message,
+        startedAt: pending.startedAt,
+        lastCheckedAt: checkedAt,
+        matchedAt: checkedAt,
+        ...(typeof evidenceRecord.accountName === "string"
+          ? { accountName: evidenceRecord.accountName }
+          : {}),
+        ...(matchedMessages.length === 0 ? {} : { matchedMessages }),
+      },
+      message: result.message,
+    });
+    this.persistPostRunResult(session);
+    await this.continuePostRun(session);
+    return copySnapshot(session.snapshot);
+  }
+
+  public async abandonImapCheck(runId: string): Promise<RunnerSnapshot> {
+    const session = this.requireSession(runId);
+    const pending = session.pendingImap;
+    if (
+      pending === undefined ||
+      session.snapshot.state !== "waiting_for_imap_check"
+    ) {
+      throw new Error("Nu există o verificare IMAP în așteptare.");
+    }
+
+    const message = `Verificarea IMAP „${pending.item.title}” a fost abandonată manual.`;
+    session.run = this.runRepository.addWarning(session.run.id, {
+      code: "imap_check_abandoned",
+      stepId: pending.item.id,
+      message,
+    });
+    this.saveStepResult(
+      session,
+      pending.item,
+      "skipped",
+      { logs: [{ level: "warning", message }] },
+      pending.startedAt,
+    );
+    session.postRunIndex += 1;
+    delete session.pendingImap;
+    this.publish(session, {
+      ...session.snapshot,
+      state: "running",
+      run: session.run,
+      imap: {
+        stepId: pending.item.id,
+        status: "abandoned",
+        message,
+        startedAt: pending.startedAt,
+        lastCheckedAt: this.options.now().toISOString(),
+      },
+      message,
+    });
+    this.persistPostRunResult(session);
+    await this.continuePostRun(session);
+    return copySnapshot(session.snapshot);
+  }
+
+  private failPendingImap(session: RunnerSession): RunnerSnapshot {
+    const pending = session.pendingImap;
+    if (pending === undefined) {
+      throw new Error("Nu există o verificare IMAP în așteptare.");
+    }
+    const endedAt = this.options.now().toISOString();
+    const message = `Verificarea IMAP „${pending.item.title}” a fost oprită manual și a eșuat.`;
+    const error: RunnerErrorDetails = {
+      code: "imap_failed",
+      stepId: pending.item.id,
+      message,
+      operation: "post_run_imap",
+      technicalDetails: "Verificarea IMAP a fost oprită manual.",
+      occurredAt: endedAt,
+      retryable: false,
+    };
+    this.saveStepResult(
+      session,
+      pending.item,
+      "failed",
+      { logs: [{ level: "error", message }] },
+      pending.startedAt,
+      error,
+    );
+    session.stopRequested = true;
+    session.run = { ...session.run, status: "failed", endedAt };
+    this.runRepository.updateStatus(session.run.id, "failed", endedAt);
+    this.persistRunError(session.run.id, error);
+    delete session.pendingImap;
+    this.publish(session, {
+      ...session.snapshot,
+      state: "failed",
+      run: session.run,
+      imap: {
+        stepId: pending.item.id,
+        accountId: accountIdForImapStep(pending.item) ?? "",
+        status: "abandoned",
+        message,
+        startedAt: pending.startedAt,
+        lastCheckedAt: endedAt,
+      },
+      error,
+      message,
+      canStop: false,
+      canRetry: false,
+    });
+    return copySnapshot(session.snapshot);
   }
 
   private async continueMissingData(
@@ -878,6 +1836,13 @@ export class TestRunnerService {
     this.datasetRepository.update(updated);
     session.dataset = updated;
     session.datasetValues[valueKey] = value === null ? "" : String(value);
+    const datasetSnapshot = {
+      id: updated.id,
+      name: updated.name,
+      values: structuredClone(session.datasetValues),
+    };
+    this.runRepository.updateDatasetSnapshot(session.run.id, datasetSnapshot);
+    session.run = { ...session.run, datasetSnapshot };
   }
 
   private pauseAfterStep(session: RunnerSession, item: TestFlowItem): boolean {
@@ -934,6 +1899,18 @@ export class TestRunnerService {
     });
   }
 
+  private async runFallbacksAutomatically(
+    session: RunnerSession,
+  ): Promise<void> {
+    while (
+      !session.stopRequested &&
+      session.pendingFallback !== undefined &&
+      session.snapshot.state === "waiting_for_fallback_decision"
+    ) {
+      await this.runCurrentFallback(session.run.id);
+    }
+  }
+
   private finalizeExhaustedFallbacks(
     session: RunnerSession,
     lastError: RunnerErrorDetails,
@@ -966,17 +1943,18 @@ export class TestRunnerService {
     const endedAt = this.options.now().toISOString();
     session.run = { ...session.run, status: "failed", endedAt };
     this.runRepository.updateStatus(session.run.id, "failed", endedAt);
+    this.persistRunError(session.run.id, exhaustedError);
     delete session.pendingFallback;
     const failedSnapshot = { ...session.snapshot };
     delete failedSnapshot.fallback;
     this.publish(session, {
       ...failedSnapshot,
-      state: "failed",
+      state: "paused_on_error",
       run: session.run,
       message: exhaustedError.message,
       error: exhaustedError,
-      canStop: false,
-      canRetry: false,
+      canStop: true,
+      canRetry: exhaustedError.retryable !== false,
     });
     return copySnapshot(session.snapshot);
   }
@@ -1007,39 +1985,10 @@ export class TestRunnerService {
       throw new Error("Browserul activ aparține altui proiect.");
     }
     if (!activeBrowserStates.has(status.state)) {
-      const detections = await this.browser.detectAvailableBrowsers();
-      const detected = detections.find(
-        (candidate) =>
-          candidate.id === project.browserConfig.browserType &&
-          candidate.installed &&
-          candidate.supported,
+      throw new StepExecutionError(
+        "browser_unavailable",
+        "Deschide browserul proiectului din secțiunea Browser înainte să pornești testul.",
       );
-      if (detected === undefined) {
-        throw new StepExecutionError(
-          "browser_unavailable",
-          "Browserul configurat nu este disponibil.",
-        );
-      }
-      await this.browser.launch({
-        projectId: project.id,
-        browser: detected.id,
-        source: detected.source,
-        sessionMode: project.browserConfig.sessionMode,
-        ...(detected.executablePath === undefined
-          ? {}
-          : { executablePath: detected.executablePath }),
-        ...(project.browserConfig.profilePath === undefined
-          ? {}
-          : { profilePath: project.browserConfig.profilePath }),
-        ...(project.browserConfig.remoteDebuggingPort === undefined
-          ? {}
-          : {
-              remoteDebuggingPort: project.browserConfig.remoteDebuggingPort,
-            }),
-        ...(project.browserConfig.viewport === undefined
-          ? {}
-          : { viewport: project.browserConfig.viewport }),
-      });
     }
     const navigation = await this.browser.openProjectUrl(
       project.id,
@@ -1056,7 +2005,7 @@ export class TestRunnerService {
     );
     if (
       !validation.valid ||
-      test.status !== "valid" ||
+      (test.status !== "valid" && test.status !== "invalidated") ||
       test.workflowState !== "ready"
     ) {
       throw new StepExecutionError(
@@ -1148,26 +2097,22 @@ export class TestRunnerService {
     for (const listener of this.listeners) listener(copySnapshot(snapshot));
   }
 
-  private toRunnerError(error: unknown, stepId?: string): RunnerErrorDetails {
-    if (error instanceof WipeError) {
-      return {
-        code: "wipe_failed",
-        message: error.message,
-      };
-    }
-    if (error instanceof StepExecutionError) {
-      return {
-        code: error.code,
-        message: error.message,
-        ...(error.count === undefined ? {} : { count: error.count }),
-        ...(stepId === undefined ? {} : { stepId }),
-      };
-    }
-    return {
-      code: "step_failed",
-      message:
-        error instanceof Error ? error.message : "Eroare necunoscută la run.",
+  private toRunnerError(
+    error: unknown,
+    stepId?: string,
+    operation?: string,
+  ): RunnerErrorDetails {
+    return classifyRunnerError(error, {
       ...(stepId === undefined ? {} : { stepId }),
-    };
+      ...(operation === undefined ? {} : { operation }),
+      now: this.options.now,
+    });
+  }
+
+  private persistRunError(runId: string, details: RunnerErrorDetails): void {
+    this.runRepository.updateError(
+      runId,
+      structuredClone(details) as unknown as JsonValue,
+    );
   }
 }

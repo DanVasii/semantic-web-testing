@@ -65,6 +65,37 @@ describe("buildRecorderStep", () => {
     expect(draft.step.whyExplanation.length).toBeGreaterThan(20);
   });
 
+  it("uses the card heading instead of all descendant text for a custom clickable card", () => {
+    const cardText =
+      "ADOLESCENȚI LA CABINET 60 MIN TEEN SKIN RITUAL Pentru pielea sensibilă, predispusă la erupții, puncte negre și inflamații hormonale. 450,00 lei";
+    const draft = build(
+      event("click", {
+        target: {
+          tagName: "div",
+          actionText: "TEEN SKIN RITUAL",
+          text: cardText,
+          dataAttributes: {},
+          cssPath: "section > div:nth-of-type(2)",
+        },
+      }),
+    );
+
+    expect(draft.step.title).toBe("Apasă TEEN SKIN RITUAL");
+    expect(draft.step.humanDescription).toBe(
+      "Apasă elementul „TEEN SKIN RITUAL”.",
+    );
+    expect(draft.step.target?.primary).toMatchObject({
+      type: "text",
+      operator: "equals",
+      value: "TEEN SKIN RITUAL",
+    });
+    expect(draft.step.fallbacks.map(({ locator }) => locator)).toContainEqual({
+      type: "text",
+      operator: "equals",
+      value: cardText,
+    });
+  });
+
   it("captures only the final fill value and maps it to a semantic dataset key", () => {
     const draft = build(event("fill", { value: "dan@example.test" }));
 
@@ -110,6 +141,42 @@ describe("buildRecorderStep", () => {
       expect(draft.capturedValue).toBe(value);
     },
   );
+
+  it("uses the selected radio value together with its group name", () => {
+    const draft = build(
+      event("radio", {
+        value: "premium",
+        target: {
+          tagName: "input",
+          inputType: "radio",
+          name: "customer_plan",
+          label: "Premium",
+          role: "radio",
+          dataAttributes: {
+            "data-field": "customer_plan",
+          },
+          cssPath: 'input[name="customer_plan"]',
+        },
+      }),
+    );
+
+    expect(draft.step.target?.primary).toEqual({
+      type: "css",
+      operator: "equals",
+      value: 'input[type="radio"][name="customer_plan"][value="premium"]',
+    });
+    expect(draft.step.fallbacks.map(({ locator }) => locator)).toContainEqual({
+      type: "label",
+      operator: "equals",
+      value: "Premium",
+    });
+    expect(draft.step.fallbacks.map(({ locator }) => locator)).toContainEqual({
+      type: "role",
+      role: "radio",
+      operator: "equals",
+      value: "Premium",
+    });
+  });
 
   it("captures special key presses", () => {
     const draft = build(event("press_key", { key: "Escape" }));
@@ -175,6 +242,38 @@ describe("buildRecorderStep", () => {
     });
     expect(JSON.stringify(draft.step.target?.primary)).not.toContain(
       "nth-child",
+    );
+  });
+
+  it("does not create an invalid repeated-component locator without a distinguishing filter", () => {
+    const draft = build(
+      event("click", {
+        target: {
+          tagName: "div",
+          text: "22",
+          dataAttributes: {
+            "data-date": "2026-10-22",
+          },
+          cssPath: "#calendar > div:nth-of-type(22)",
+          repeated: {
+            containerLocator: {
+              type: "css",
+              operator: "equals",
+              value: ".cal-cell",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(draft.step.target?.primary).toEqual({
+      type: "data_attribute",
+      attribute: "data-date",
+      operator: "equals",
+      value: "2026-10-22",
+    });
+    expect(JSON.stringify(draft.step.target?.primary)).not.toContain(
+      "repeated_component",
     );
   });
 });

@@ -59,7 +59,23 @@
         data-component="customer-form"
       >
         <h2 id="fixture-form-title">Formular de verificare</h2>
-        <form action="/submit" method="post" data-testid="fixture-form">
+        <form
+          action="/api/appointments"
+          method="post"
+          data-testid="fixture-form"
+        >
+          <label for="customer-name">Nume client</label>
+          <input
+            id="customer-name"
+            name="customer_name"
+            type="text"
+            placeholder="Ana Popescu"
+            autocomplete="name"
+            maxlength="120"
+            required
+            data-field="customer_name"
+          />
+
           <label for="customer-email">Email client</label>
           <input
             id="customer-email"
@@ -115,6 +131,8 @@
           <select name="service" aria-label="Serviciu" data-field="service">
             <option value="">Alege serviciul</option>
             <option value="semantic" selected>Testare semantică</option>
+            <option value="automation">Automatizare browser</option>
+            <option value="database">Validare bază de date</option>
           </select>
 
           <button
@@ -125,7 +143,61 @@
             Trimite formularul
           </button>
           <button type="button" disabled>Acțiune indisponibilă</button>
+          <p
+            id="fixture-database-status"
+            class="database-status"
+            data-testid="fixture-database-status"
+            role="status"
+            aria-live="polite"
+          >
+            checking database...
+          </p>
+          <p
+            id="fixture-smtp-status"
+            class="database-status"
+            data-testid="fixture-smtp-status"
+            role="status"
+            aria-live="polite"
+          >
+            checking SMTP...
+          </p>
         </form>
+      </section>
+
+      <section
+        class="target-card"
+        aria-labelledby="fixture-database-title"
+        data-testid="fixture-database"
+      >
+        <div class="fixture-section-heading">
+          <div>
+            <h2 id="fixture-database-title">Programări salvate în MySQL</h2>
+            <p class="calendar-help">
+              Ultimele rânduri inserate de formular în baza semantic_fixture.
+            </p>
+          </div>
+          <button type="button" id="refresh-appointments">
+            Reîncarcă programările
+          </button>
+        </div>
+        <div class="fixture-table-scroll">
+          <table class="fixture-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Email</th>
+                <th>Plan</th>
+                <th>Serviciu</th>
+                <th>Data</th>
+                <th>Ora</th>
+              </tr>
+            </thead>
+            <tbody
+              id="fixture-appointments-body"
+              data-testid="fixture-appointments"
+            ></tbody>
+          </table>
+        </div>
       </section>
 
       <section
@@ -228,10 +300,26 @@
           </p>
         </div>
         <div class="time-slot-list" aria-label="Ore disponibile">
-          <button type="button" class="time-slot">09:00</button>
-          <button type="button" class="time-slot">10:30</button>
-          <button type="button" class="time-slot">12:00</button>
+          <button type="button" class="time-slot" data-time="09:00">
+            09:00
+          </button>
+          <button type="button" class="time-slot" data-time="10:30">
+            10:30
+          </button>
+          <button type="button" class="time-slot" data-time="12:00">
+            12:00
+          </button>
         </div>
+        <input id="appointment-time" name="appointment_time" type="hidden" />
+        <p
+          id="time-selection"
+          class="calendar-selection"
+          data-testid="time-selection"
+          role="status"
+          aria-live="polite"
+        >
+          Nicio oră selectată
+        </p>
       </section>
 
       <section
@@ -241,8 +329,8 @@
       >
         <h2 id="fixture-wipe-title">Stare pentru verificarea wipe</h2>
         <p>
-          Populează storage-ul origin-ului, rulează un test cu wipe activ, apoi
-          verifică raportul după reîncărcare.
+          Populează storage-ul origin-ului, finalizează testul, apoi folosește
+          wipe-ul manual selectiv din verificările post-run.
         </p>
         <div class="fixture-actions">
           <button type="button" id="seed-storage">
@@ -269,5 +357,6 @@ se încarcă...</pre>
     </footer>
     <script type="module" src="/fixture-calendar.js"></script>
     <script type="module" src="/fixture-storage.js"></script>
+    <script type="module" src="/fixture-mysql.js"></script>
   </body>
 </html>

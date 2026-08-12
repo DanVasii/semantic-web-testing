@@ -48,6 +48,88 @@ const stepChangeSchema: JsonValue = {
   required: ["stepId", "patch", "rationale"],
 };
 
+const runStepPatchSchema: JsonValue = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    primaryLocator: simpleLocatorSchema,
+    repeat: { type: "integer", minimum: 0, maximum: 24 },
+    repeatUntil: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        target: simpleLocatorSchema,
+        operator: { type: "string", enum: [...MATCH_OPERATORS] },
+        value: { type: "string" },
+        maxAttempts: { type: "integer", minimum: 1, maximum: 24 },
+      },
+      required: ["target", "operator", "value", "maxAttempts"],
+    },
+    datasetValue: { type: "string" },
+  },
+};
+
+const runStepChangeSchema: JsonValue = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    stepId: { type: "string" },
+    patch: runStepPatchSchema,
+    rationale: { type: "string" },
+  },
+  required: ["stepId", "patch", "rationale"],
+};
+
+const runStepInsertionSchema: JsonValue = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    anchorStepId: { type: "string" },
+    position: { type: "string", enum: ["before", "after"] },
+    action: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        actionType: {
+          type: "string",
+          enum: [
+            "click",
+            "calendar_select",
+            "select_option",
+            "wait_for_element",
+          ],
+        },
+        title: { type: "string" },
+        humanDescription: { type: "string" },
+        whyExplanation: { type: "string" },
+        primaryLocator: simpleLocatorSchema,
+        datasetValue: { type: "string" },
+        repeat: { type: "integer", minimum: 0, maximum: 24 },
+        repeatUntil: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            target: simpleLocatorSchema,
+            operator: { type: "string", enum: [...MATCH_OPERATORS] },
+            value: { type: "string" },
+            maxAttempts: { type: "integer", minimum: 1, maximum: 24 },
+          },
+          required: ["target", "operator", "value", "maxAttempts"],
+        },
+      },
+      required: [
+        "actionType",
+        "title",
+        "humanDescription",
+        "whyExplanation",
+        "primaryLocator",
+      ],
+    },
+    rationale: { type: "string" },
+  },
+  required: ["anchorStepId", "position", "action", "rationale"],
+};
+
 export const AI_OUTPUT_SCHEMAS: Record<AiTask, JsonValue> = {
   analyze_step: {
     type: "object",
@@ -80,6 +162,24 @@ export const AI_OUTPUT_SCHEMAS: Record<AiTask, JsonValue> = {
       },
     },
     required: ["summary", "currentStepChange", "downstreamChanges"],
+  },
+  adapt_run: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      summary: { type: "string" },
+      changes: {
+        type: "array",
+        maxItems: 30,
+        items: runStepChangeSchema,
+      },
+      insertions: {
+        type: "array",
+        maxItems: 20,
+        items: runStepInsertionSchema,
+      },
+    },
+    required: ["summary", "changes", "insertions"],
   },
   generate_test: {
     type: "object",
@@ -133,6 +233,37 @@ export const AI_OUTPUT_SCHEMAS: Record<AiTask, JsonValue> = {
       "rationale",
     ],
   },
+  evaluate_post_run: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      status: {
+        type: "string",
+        enum: ["passed", "failed", "inconclusive"],
+      },
+      summary: { type: "string" },
+      findings: {
+        type: "array",
+        maxItems: 20,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            source: { type: "string", enum: ["mysql", "imap"] },
+            passed: { type: "boolean" },
+            message: { type: "string" },
+            evidence: {
+              type: "array",
+              maxItems: 20,
+              items: { type: "string" },
+            },
+          },
+          required: ["source", "passed", "message", "evidence"],
+        },
+      },
+    },
+    required: ["status", "summary", "findings"],
+  },
 };
 
 type JsonObject = { [key: string]: JsonValue };
@@ -146,11 +277,20 @@ const requireExactKeys = (
   optional: readonly string[] = [],
 ): void => {
   const allowed = new Set([...required, ...optional]);
-  if (
-    required.some((key) => !(key in value)) ||
-    Object.keys(value).some((key) => !allowed.has(key))
-  ) {
-    throw new Error("Output-ul AI nu respectă schema strictă.");
+  const missing = required.filter((key) => !(key in value));
+  const unexpected = Object.keys(value).filter((key) => !allowed.has(key));
+  if (missing.length > 0 || unexpected.length > 0) {
+    const details = [
+      missing.length === 0 ? "" : `lipsesc: ${missing.join(", ")}`,
+      unexpected.length === 0
+        ? ""
+        : `nu sunt permise: ${unexpected.join(", ")}`,
+    ]
+      .filter(Boolean)
+      .join("; ");
+    throw new Error(
+      `Output-ul AI nu respectă schema strictă (${details.slice(0, 300)}).`,
+    );
   }
 };
 
@@ -298,6 +438,254 @@ export const validateAiStepEditProposal = (
   return value as unknown as AiStepEditProposal;
 };
 
+const validateRunRepeatUntil = (value: JsonValue | undefined): void => {
+  if (!isObject(value)) {
+    throw new Error("Planul AI conține o condiție de repetare invalidă.");
+  }
+  requireExactKeys(value, ["target", "operator", "value", "maxAttempts"]);
+  validateSimpleLocator(value.target);
+  const operator = requireString(value.operator, "operator de oprire", 100);
+  if (!(MATCH_OPERATORS as readonly string[]).includes(operator)) {
+    throw new Error("Planul AI conține un operator de oprire nepermis.");
+  }
+  requireString(value.value, "valoare de oprire", 1_000);
+  if (
+    typeof value.maxAttempts !== "number" ||
+    !Number.isInteger(value.maxAttempts) ||
+    value.maxAttempts < 1 ||
+    value.maxAttempts > 24
+  ) {
+    throw new Error("Planul AI conține o limită de repetare invalidă.");
+  }
+};
+
+export const validateAiRunPlanProposal = (
+  value: unknown,
+): import("../../shared/ai.js").AiRunPlanProposal => {
+  if (!isObject(value)) {
+    throw new Error("Planul AI de rulare trebuie să fie un obiect JSON.");
+  }
+  assertNoArbitraryCode(value);
+  requireExactKeys(value, ["summary", "changes", "insertions"]);
+  const summary = requireString(value.summary, "rezumat plan");
+  if (!Array.isArray(value.changes) || value.changes.length > 30) {
+    throw new Error("Planul AI conține o listă de schimbări invalidă.");
+  }
+  const changes = value.changes.map((change) => {
+    if (!isObject(change)) {
+      throw new Error("Planul AI conține o schimbare invalidă.");
+    }
+    requireExactKeys(change, ["stepId", "patch", "rationale"]);
+    const stepId = requireString(change.stepId, "ID pas", 200);
+    const rationale = requireString(change.rationale, "motivație");
+    if (!isObject(change.patch)) {
+      throw new Error("Planul AI conține un patch invalid.");
+    }
+    requireExactKeys(
+      change.patch,
+      [],
+      ["primaryLocator", "repeat", "repeatUntil", "datasetValue"],
+    );
+    if (Object.keys(change.patch).length === 0) {
+      throw new Error("Planul AI conține un patch gol.");
+    }
+    if (change.patch.primaryLocator !== undefined) {
+      validateSimpleLocator(change.patch.primaryLocator);
+    }
+    if (
+      change.patch.repeat !== undefined &&
+      (typeof change.patch.repeat !== "number" ||
+        !Number.isInteger(change.patch.repeat) ||
+        change.patch.repeat < 0 ||
+        change.patch.repeat > 24)
+    ) {
+      throw new Error("Planul AI conține un număr de repetări invalid.");
+    }
+    if (change.patch.repeatUntil !== undefined) {
+      validateRunRepeatUntil(change.patch.repeatUntil);
+    }
+    if (
+      change.patch.repeat !== undefined &&
+      change.patch.repeatUntil !== undefined
+    ) {
+      throw new Error(
+        "Planul AI nu poate combina repeat cu repeatUntil în același pas.",
+      );
+    }
+    if (
+      change.patch.datasetValue !== undefined &&
+      (typeof change.patch.datasetValue !== "string" ||
+        change.patch.datasetValue.length > 1_000)
+    ) {
+      throw new Error("Planul AI conține o valoare temporară invalidă.");
+    }
+    return {
+      stepId,
+      patch: {
+        ...(change.patch.primaryLocator === undefined
+          ? {}
+          : {
+              primaryLocator: structuredClone(
+                change.patch.primaryLocator,
+              ) as import("../../shared/ai.js").AiRunStepPatch["primaryLocator"],
+            }),
+        ...(change.patch.repeat === undefined
+          ? {}
+          : { repeat: change.patch.repeat }),
+        ...(change.patch.repeatUntil === undefined
+          ? {}
+          : {
+              repeatUntil: structuredClone(
+                change.patch.repeatUntil,
+              ) as NonNullable<
+                import("../../shared/ai.js").AiRunStepPatch["repeatUntil"]
+              >,
+            }),
+        ...(change.patch.datasetValue === undefined
+          ? {}
+          : { datasetValue: change.patch.datasetValue }),
+      },
+      rationale,
+    };
+  });
+  if (new Set(changes.map(({ stepId }) => stepId)).size !== changes.length) {
+    throw new Error("Planul AI modifică același pas de mai multe ori.");
+  }
+  if (!Array.isArray(value.insertions) || value.insertions.length > 20) {
+    throw new Error("Planul AI conține o listă de inserări invalidă.");
+  }
+  const insertions = value.insertions.map((insertion) => {
+    if (!isObject(insertion)) {
+      throw new Error("Planul AI conține o inserare invalidă.");
+    }
+    requireExactKeys(insertion, [
+      "anchorStepId",
+      "position",
+      "action",
+      "rationale",
+    ]);
+    const anchorStepId = requireString(
+      insertion.anchorStepId,
+      "ID pas ancoră",
+      200,
+    );
+    const position = requireString(insertion.position, "poziție inserare", 20);
+    if (position !== "before" && position !== "after") {
+      throw new Error("Planul AI conține o poziție de inserare invalidă.");
+    }
+    const rationale = requireString(insertion.rationale, "motivație inserare");
+    if (!isObject(insertion.action)) {
+      throw new Error("Planul AI conține o acțiune inserată invalidă.");
+    }
+    requireExactKeys(
+      insertion.action,
+      [
+        "actionType",
+        "title",
+        "humanDescription",
+        "whyExplanation",
+        "primaryLocator",
+      ],
+      ["datasetValue", "repeat", "repeatUntil"],
+    );
+    const actionType = requireString(
+      insertion.action.actionType,
+      "tip acțiune inserată",
+      100,
+    );
+    if (
+      ![
+        "click",
+        "calendar_select",
+        "select_option",
+        "wait_for_element",
+      ].includes(actionType)
+    ) {
+      throw new Error("Planul AI conține o acțiune inserată nepermisă.");
+    }
+    const title = requireString(insertion.action.title, "titlu inserare", 300);
+    const humanDescription = requireString(
+      insertion.action.humanDescription,
+      "descriere inserare",
+    );
+    const whyExplanation = requireString(
+      insertion.action.whyExplanation,
+      "explicație inserare",
+    );
+    validateSimpleLocator(insertion.action.primaryLocator);
+    if (
+      insertion.action.repeat !== undefined &&
+      (typeof insertion.action.repeat !== "number" ||
+        !Number.isInteger(insertion.action.repeat) ||
+        insertion.action.repeat < 0 ||
+        insertion.action.repeat > 24)
+    ) {
+      throw new Error("Planul AI conține repeat invalid într-o inserare.");
+    }
+    if (insertion.action.repeatUntil !== undefined) {
+      validateRunRepeatUntil(insertion.action.repeatUntil);
+    }
+    if (
+      insertion.action.repeat !== undefined &&
+      insertion.action.repeatUntil !== undefined
+    ) {
+      throw new Error(
+        "Planul AI nu poate combina repeat cu repeatUntil într-o inserare.",
+      );
+    }
+    if (
+      (insertion.action.repeat !== undefined ||
+        insertion.action.repeatUntil !== undefined) &&
+      !["click", "calendar_select"].includes(actionType)
+    ) {
+      throw new Error("Acțiunea inserată nu poate fi repetată.");
+    }
+    const datasetValue =
+      insertion.action.datasetValue === undefined
+        ? undefined
+        : requireString(
+            insertion.action.datasetValue,
+            "valoare inserare",
+            1_000,
+          );
+    if (actionType === "select_option" && datasetValue === undefined) {
+      throw new Error("Selectarea inserată necesită datasetValue.");
+    }
+    if (
+      !["select_option", "calendar_select"].includes(actionType) &&
+      datasetValue !== undefined
+    ) {
+      throw new Error("datasetValue nu este permis pentru acțiunea inserată.");
+    }
+    return {
+      anchorStepId,
+      position,
+      action: {
+        actionType,
+        title,
+        humanDescription,
+        whyExplanation,
+        primaryLocator: structuredClone(
+          insertion.action.primaryLocator,
+        ) as import("../../shared/ai.js").AiRunStepInsertion["action"]["primaryLocator"],
+        ...(datasetValue === undefined ? {} : { datasetValue }),
+        ...(insertion.action.repeat === undefined
+          ? {}
+          : { repeat: insertion.action.repeat }),
+        ...(insertion.action.repeatUntil === undefined
+          ? {}
+          : {
+              repeatUntil: structuredClone(
+                insertion.action.repeatUntil,
+              ) as import("../../shared/ai.js").AiRunStepInsertion["action"]["repeatUntil"],
+            }),
+      },
+      rationale,
+    } as import("../../shared/ai.js").AiRunStepInsertion;
+  });
+  return { summary, changes, insertions };
+};
+
 export const validateAiOutput = (task: AiTask, value: unknown): JsonValue => {
   if (!isObject(value)) {
     throw new Error("Output-ul AI trebuie să fie un obiect JSON.");
@@ -322,6 +710,10 @@ export const validateAiOutput = (task: AiTask, value: unknown): JsonValue => {
 
   if (task === "edit_step") {
     return validateAiStepEditProposal(value) as unknown as JsonValue;
+  }
+
+  if (task === "adapt_run") {
+    return validateAiRunPlanProposal(value) as unknown as JsonValue;
   }
 
   if (task === "generate_test") {
@@ -350,6 +742,34 @@ export const validateAiOutput = (task: AiTask, value: unknown): JsonValue => {
       if (step.targetHint !== undefined) {
         requireString(step.targetHint, "indiciu țintă");
       }
+    }
+    return value;
+  }
+
+  if (task === "evaluate_post_run") {
+    requireExactKeys(value, ["status", "summary", "findings"]);
+    const status = requireString(value.status, "status evaluare", 50);
+    if (!["passed", "failed", "inconclusive"].includes(status)) {
+      throw new Error("Output-ul AI conține un status post-run invalid.");
+    }
+    requireString(value.summary, "rezumat evaluare");
+    if (!Array.isArray(value.findings) || value.findings.length > 20) {
+      throw new Error("Output-ul AI conține findings post-run invalide.");
+    }
+    for (const finding of value.findings) {
+      if (!isObject(finding)) {
+        throw new Error("Output-ul AI conține un finding invalid.");
+      }
+      requireExactKeys(finding, ["source", "passed", "message", "evidence"]);
+      const source = requireString(finding.source, "sursă finding", 20);
+      if (!["mysql", "imap"].includes(source)) {
+        throw new Error("Output-ul AI conține o sursă post-run invalidă.");
+      }
+      if (typeof finding.passed !== "boolean") {
+        throw new Error("Output-ul AI conține un verdict invalid.");
+      }
+      requireString(finding.message, "mesaj finding");
+      requireStringArray(finding.evidence, "dovezi", 20);
     }
     return value;
   }

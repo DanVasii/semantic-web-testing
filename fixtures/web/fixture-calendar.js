@@ -23,6 +23,9 @@ const nextButton = document.querySelector("#calendar-next-month");
 const yearSelect = document.querySelector("#calendar-year");
 const selectedInput = document.querySelector("#appointment-date");
 const selectionStatus = document.querySelector("#calendar-selection");
+const selectedTimeInput = document.querySelector("#appointment-time");
+const timeSelectionStatus = document.querySelector("#time-selection");
+const timeSlots = [...document.querySelectorAll(".time-slot")];
 
 if (
   !(calendar instanceof HTMLElement) ||
@@ -31,7 +34,10 @@ if (
   !(nextButton instanceof HTMLButtonElement) ||
   !(yearSelect instanceof HTMLSelectElement) ||
   !(selectedInput instanceof HTMLInputElement) ||
-  !(selectionStatus instanceof HTMLElement)
+  !(selectionStatus instanceof HTMLElement) ||
+  !(selectedTimeInput instanceof HTMLInputElement) ||
+  !(timeSelectionStatus instanceof HTMLElement) ||
+  timeSlots.some((slot) => !(slot instanceof HTMLButtonElement))
 ) {
   throw new Error("Fixture calendar is missing required elements.");
 }
@@ -51,12 +57,12 @@ const clearSelection = () => {
   selectionStatus.textContent = "Nicio zi selectată";
 };
 
-const selectDay = (button, day) => {
+const selectDay = (dayCell, day) => {
   selectedDate = dateValue(visibleYear, visibleMonth, day);
   selectedInput.value = selectedDate;
   selectionStatus.textContent = `Data selectată: ${day} ${MONTH_NAMES[visibleMonth]} ${visibleYear} (${selectedDate})`;
   for (const candidate of calendar.querySelectorAll(".calendar-day")) {
-    const selected = candidate === button;
+    const selected = candidate === dayCell;
     candidate.classList.toggle("calendar-day--selected", selected);
     candidate.setAttribute("aria-selected", String(selected));
   }
@@ -77,34 +83,39 @@ const renderCalendar = () => {
 
   for (let cell = 0; cell < 42; cell += 1) {
     const day = cell - firstWeekday + 1;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "calendar-day";
-    button.setAttribute("role", "gridcell");
+    const dayCell = document.createElement("div");
+    dayCell.className = "calendar-day";
+    dayCell.setAttribute("role", "gridcell");
 
     if (day < 1 || day > daysInMonth) {
-      button.classList.add("calendar-day--outside");
-      button.disabled = true;
-      button.tabIndex = -1;
-      button.setAttribute("aria-hidden", "true");
-      calendar.append(button);
+      dayCell.classList.add("calendar-day--outside");
+      dayCell.setAttribute("aria-disabled", "true");
+      dayCell.setAttribute("aria-hidden", "true");
+      calendar.append(dayCell);
       continue;
     }
 
     const value = dateValue(visibleYear, visibleMonth, day);
-    button.textContent = String(day);
-    button.dataset.date = value;
-    button.dataset.testid = `calendar-day-${value}`;
-    button.setAttribute(
+    dayCell.textContent = String(day);
+    dayCell.tabIndex = 0;
+    dayCell.dataset.date = value;
+    dayCell.dataset.testid = `calendar-day-${value}`;
+    dayCell.setAttribute(
       "aria-label",
       `${day} ${MONTH_NAMES[visibleMonth]} ${visibleYear}`,
     );
-    button.setAttribute("aria-selected", String(selectedDate === value));
+    dayCell.setAttribute("aria-selected", String(selectedDate === value));
     if (selectedDate === value) {
-      button.classList.add("calendar-day--selected");
+      dayCell.classList.add("calendar-day--selected");
     }
-    button.addEventListener("click", () => selectDay(button, day));
-    calendar.append(button);
+    dayCell.addEventListener("click", () => selectDay(dayCell, day));
+    dayCell.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectDay(dayCell, day);
+      }
+    });
+    calendar.append(dayCell);
   }
 };
 
@@ -137,3 +148,17 @@ yearSelect.addEventListener("change", () => {
 });
 
 renderCalendar();
+
+for (const slot of timeSlots) {
+  slot.setAttribute("aria-pressed", "false");
+  slot.addEventListener("click", () => {
+    const time = slot.dataset.time ?? slot.textContent?.trim() ?? "";
+    selectedTimeInput.value = time;
+    timeSelectionStatus.textContent = `Ora selectată: ${time}`;
+    for (const candidate of timeSlots) {
+      const selected = candidate === slot;
+      candidate.classList.toggle("time-slot--selected", selected);
+      candidate.setAttribute("aria-pressed", String(selected));
+    }
+  });
+}

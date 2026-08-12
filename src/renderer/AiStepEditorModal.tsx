@@ -22,6 +22,30 @@ interface AiStepEditorModalProps {
   onApplied: (test: TestDefinition, aiVersion: number) => void;
 }
 
+const aiFieldLabels: Record<string, string> = {
+  actionType: "tipul acțiunii",
+  title: "titlul",
+  humanDescription: "descrierea pasului",
+  whyExplanation: "explicația",
+  target: "locatorul principal",
+  primaryLocator: "locatorul principal",
+  fallbacks: "fallback-urile",
+  repeat: "numărul de repetări",
+  repeatUntil: "condiția de repetare",
+  waitAfter: "așteptarea de după pas",
+  enabled: "starea pasului",
+};
+
+const readableAiValue = (value: unknown): string => {
+  if (value === undefined) return "nesetat";
+  if (value === null) return "gol";
+  if (typeof value === "boolean") return value ? "activ" : "inactiv";
+  if (typeof value === "string" || typeof value === "number") {
+    return `„${String(value)}”`;
+  }
+  return "o configurație nouă";
+};
+
 const fieldClass =
   "mt-1 min-h-10 w-full rounded-lg border border-app-border bg-app-surface px-3 py-2 text-sm focus:border-brand-500 focus:outline-none";
 const labelClass = "block text-xs font-semibold text-app-muted";
@@ -76,6 +100,14 @@ export const AiStepEditorModal = ({
       .then((settings) => {
         setProvider(settings.provider);
         setModel(configuredModel(settings.provider, settings));
+        if (settings.provider !== "none") {
+          void api
+            .listAiModels(settings.provider)
+            .then(setModels)
+            .catch((loadError: unknown) => {
+              setError(errorMessage(loadError));
+            });
+        }
       })
       .catch((loadError: unknown) => {
         setError(errorMessage(loadError));
@@ -104,20 +136,19 @@ export const AiStepEditorModal = ({
     setError(undefined);
   };
 
-  const loadModels = async (): Promise<void> => {
-    if (provider === "none") return;
+  const loadModels = async (
+    nextProvider: AiProviderId = provider,
+    refresh = true,
+  ): Promise<void> => {
+    if (nextProvider === "none") return;
     setBusy("models");
     setError(undefined);
     try {
-      const connection = await api.testAiConnection(provider);
-      if (!connection.success) throw new Error(connection.message);
-      setModels(connection.models);
-      if (
-        connection.models.length > 0 &&
-        !connection.models.some((candidate) => candidate.id === model)
-      ) {
-        setModel(connection.models[0]?.id ?? "");
-      }
+      const loadedModels = await api.listAiModels(nextProvider, refresh);
+      setModels(loadedModels);
+      setModel((current) =>
+        current.length > 0 ? current : (loadedModels[0]?.id ?? ""),
+      );
     } catch (loadError) {
       setError(errorMessage(loadError));
     } finally {
@@ -204,6 +235,9 @@ export const AiStepEditorModal = ({
                 setModel("");
                 setModels([]);
                 invalidateProposal();
+                if (nextProvider !== "none") {
+                  void loadModels(nextProvider, false);
+                }
               }}
             >
               <option value="none">None</option>
@@ -222,6 +256,9 @@ export const AiStepEditorModal = ({
                   invalidateProposal();
                 }}
               >
+                {model.length > 0 && !models.some(({ id }) => id === model) ? (
+                  <option value={model}>{model} · salvat implicit</option>
+                ) : null}
                 {models.map((candidate) => (
                   <option key={candidate.id} value={candidate.id}>
                     {candidate.displayName}
@@ -248,10 +285,10 @@ export const AiStepEditorModal = ({
             disabled={provider === "none" || busy !== undefined}
             onClick={() => void loadModels()}
           >
-            {busy === "models" ? "Se încarcă..." : "Testează și încarcă modele"}
+            {busy === "models" ? "Se încarcă..." : "Reîncarcă modelele"}
           </Button>
           <span className="text-xs text-app-muted">
-            Această verificare listează modelele; nu trimite datele testului.
+            Lista este preîncărcată și nu conține datele testului.
           </span>
         </div>
 
@@ -384,15 +421,24 @@ export const AiStepEditorModal = ({
                       key={`${diff.stepId}-${diff.field}`}
                       className="rounded border border-app-border p-2 text-xs"
                     >
-                      <strong>{diff.field}</strong>
-                      <div className="mt-1 grid gap-1 sm:grid-cols-2">
-                        <pre className="overflow-auto bg-red-50 p-2">
-                          - {JSON.stringify(diff.before)}
-                        </pre>
-                        <pre className="overflow-auto bg-emerald-50 p-2">
-                          + {JSON.stringify(diff.after)}
-                        </pre>
-                      </div>
+                      <strong>{aiFieldLabels[diff.field] ?? diff.field}</strong>
+                      <p className="mt-1 text-app-muted">
+                        Schimbă {readableAiValue(diff.before)} în{" "}
+                        {readableAiValue(diff.after)}.
+                      </p>
+                      <details className="mt-2">
+                        <summary className="cursor-pointer font-semibold">
+                          Compară valorile tehnice
+                        </summary>
+                        <div className="mt-1 grid gap-1 sm:grid-cols-2">
+                          <pre className="overflow-auto rounded bg-red-50 p-2">
+                            - {JSON.stringify(diff.before)}
+                          </pre>
+                          <pre className="overflow-auto rounded bg-emerald-50 p-2">
+                            + {JSON.stringify(diff.after)}
+                          </pre>
+                        </div>
+                      </details>
                     </li>
                   ))}
                 </ul>
@@ -435,9 +481,25 @@ export const AiStepEditorModal = ({
                         <p className="mt-1 text-xs text-app-muted">
                           {change.rationale}
                         </p>
-                        <pre className="mt-2 overflow-auto rounded bg-app-canvas p-2 text-xs">
-                          {JSON.stringify(diffs, null, 2)}
-                        </pre>
+                        <p className="mt-2 text-xs">
+                          {diffs.length === 0
+                            ? "Nu există diferențe efective pentru acest pas."
+                            : `AI propune ${diffs.length} ${
+                                diffs.length === 1 ? "modificare" : "modificări"
+                              }: ${diffs
+                                .map(
+                                  ({ field }) => aiFieldLabels[field] ?? field,
+                                )
+                                .join(", ")}.`}
+                        </p>
+                        <details className="mt-2">
+                          <summary className="cursor-pointer text-xs font-semibold">
+                            Detalii tehnice
+                          </summary>
+                          <pre className="mt-2 overflow-auto rounded bg-slate-950 p-2 text-xs text-slate-100">
+                            {JSON.stringify(diffs, null, 2)}
+                          </pre>
+                        </details>
                       </li>
                     );
                   })}

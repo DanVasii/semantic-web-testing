@@ -14,7 +14,9 @@ import {
   RELATIVE_LOCATOR_RELATIONS,
   SIMPLE_LOCATOR_TYPES,
   type ActionStep,
+  type CheckStep,
   type LocatorDefinition,
+  type MysqlCheckConfig,
   type TestFlowItem,
 } from "../shared/test-model.js";
 import { validateDeclarativeTest } from "../shared/test-validation.js";
@@ -36,6 +38,142 @@ const DATA_INPUT_ACTION_TYPES = new Set<ActionStep["actionType"]>([
   "check",
   "uncheck",
 ]);
+
+const flowItemKindLabel = (item: TestFlowItem): string => {
+  if (item.type === "action") return `Acțiune · ${item.actionType}`;
+  if (item.type === "check") return `Verificare · ${item.checkType}`;
+  if (item.type === "breakpoint") return "Breakpoint";
+  return "Intervenție manuală";
+};
+
+const flowItemTitle = (item: TestFlowItem, index: number): string =>
+  ("title" in item && item.title?.trim()) || `Pas ${index + 1}`;
+
+const flowItemShortDescription = (item: TestFlowItem): string | undefined => {
+  if ("humanDescription" in item && item.humanDescription.trim()) {
+    return item.humanDescription;
+  }
+  if (
+    (item.type === "breakpoint" || item.type === "manual_intervention") &&
+    item.instructions?.trim()
+  ) {
+    return item.instructions;
+  }
+  return undefined;
+};
+
+interface MySqlCheckEditorProps {
+  api: SemanticAppApi;
+  projectId: string;
+  item: CheckStep;
+  onChange: (item: CheckStep) => void;
+}
+
+const MySqlCheckEditor = ({
+  api,
+  projectId,
+  item,
+  onChange,
+}: MySqlCheckEditorProps) => {
+  const [schema, setSchema] =
+    useState<Awaited<ReturnType<SemanticAppApi["loadMySqlSchema"]>>>();
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    let active = true;
+    void api
+      .loadMySqlSchema(projectId)
+      .then((result) => {
+        if (active) setSchema(result);
+      })
+      .catch((reason: unknown) => {
+        if (active) {
+          setError(
+            reason instanceof Error
+              ? reason.message
+              : "Schema MySQL nu a putut fi încărcată.",
+          );
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [api, projectId]);
+
+  if (!("tableNames" in item.config) || !("identities" in item.config)) {
+    return null;
+  }
+
+  const config: MysqlCheckConfig = item.config;
+  const selected = new Set(config.tableNames);
+  return (
+    <fieldset className="mt-3 rounded-lg border border-app-border p-3">
+      <legend className="px-1 text-xs font-semibold">
+        Tabele incluse în check
+      </legend>
+      <p className="text-xs text-app-muted">
+        Baseline-ul complet este capturat o singură dată înainte de primul pas.
+        Fiecare check recitește integral tabelele bifate.
+      </p>
+      {error ? (
+        <p className="mt-2 text-xs text-red-700" role="alert">
+          {error}
+        </p>
+      ) : schema === undefined ? (
+        <p className="mt-2 text-xs text-app-muted">Se încarcă schema...</p>
+      ) : (
+        <div className="mt-3 grid gap-2">
+          {schema.tables.map((table) => {
+            const unavailable = table.identityColumns.length === 0;
+            return (
+              <label
+                key={table.name}
+                className="flex items-start gap-3 rounded-lg border border-app-border bg-app-surface p-3 text-sm"
+              >
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  disabled={unavailable}
+                  checked={selected.has(table.name)}
+                  onChange={(event) => {
+                    const tableNames = event.target.checked
+                      ? [...config.tableNames, table.name]
+                      : config.tableNames.filter((name) => name !== table.name);
+                    const identities = event.target.checked
+                      ? [
+                          ...config.identities.filter(
+                            (identity) => identity.tableName !== table.name,
+                          ),
+                          {
+                            tableName: table.name,
+                            columns: [...table.identityColumns],
+                          },
+                        ]
+                      : config.identities.filter(
+                          (identity) => identity.tableName !== table.name,
+                        );
+                    onChange({
+                      ...item,
+                      config: { tableNames, identities },
+                    });
+                  }}
+                />
+                <span>
+                  <span className="font-semibold">{table.name}</span>
+                  <span className="mt-1 block text-xs text-app-muted">
+                    {unavailable
+                      ? "Configurează identity columns în secțiunea MySQL a proiectului."
+                      : `Identitate AND: ${table.identityColumns.join(" + ")}`}
+                  </span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </fieldset>
+  );
+};
 
 interface LocatorEditorProps {
   locator: LocatorDefinition;
@@ -394,12 +532,24 @@ export const TestFlowEditor = ({
   const [versions, setVersions] = useState<TestVersion[]>([]);
   const [aiStep, setAiStep] = useState<TestFlowItem>();
   const [lastAiVersion, setLastAiVersion] = useState<number>();
+  const [selectedItemId, setSelectedItemId] = useState<string | undefined>(
+    test.flowItems[0]?.id,
+  );
 
   useEffect(() => {
     setItems(clone(test.flowItems));
+    setSelectedItemId(test.flowItems[0]?.id);
     setHistory([]);
     setDirty(false);
   }, [test.id, test.version, test.flowItems]);
+
+  useEffect(() => {
+    setSelectedItemId((current) =>
+      current !== undefined && items.some(({ id }) => id === current)
+        ? current
+        : items[0]?.id,
+    );
+  }, [items]);
 
   useEffect(() => {
     void api
@@ -558,7 +708,9 @@ export const TestFlowEditor = ({
         </label>
         <Button
           onClick={() => {
-            mutate([...items, createFlowItem(addType, createId())]);
+            const nextItem = createFlowItem(addType, createId());
+            mutate([...items, nextItem]);
+            setSelectedItemId(nextItem.id);
           }}
         >
           + Adaugă pas
@@ -613,472 +765,578 @@ export const TestFlowEditor = ({
           Flow-ul nu conține încă pași.
         </p>
       ) : (
-        <ol className="mt-4 grid gap-4">
-          {items.map((item, index) => {
-            const itemIssues = validation.valid
-              ? []
-              : validation.issues.filter((issue) =>
-                  issue.path.startsWith(`$.flowItems[${index}]`),
+        <div className="mt-4 grid items-start gap-4 lg:grid-cols-[minmax(230px,0.65fr)_minmax(0,1.6fr)]">
+          <nav
+            className="max-h-[70vh] overflow-y-auto rounded-xl border border-app-border bg-white p-2 lg:sticky lg:top-4"
+            aria-label="Pașii testului"
+          >
+            <div className="px-2 py-2">
+              <p className="text-xs font-semibold tracking-wide text-brand-700 uppercase">
+                Pași
+              </p>
+              <p className="mt-1 text-xs text-app-muted">
+                Selectează un pas pentru detalii.
+              </p>
+            </div>
+            <ol className="mt-1 grid gap-1.5">
+              {items.map((item, index) => {
+                const selected = item.id === selectedItemId;
+                const description = flowItemShortDescription(item);
+                return (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      className={`w-full rounded-lg border px-3 py-2.5 text-left transition ${
+                        selected
+                          ? "border-brand-500 bg-brand-50 shadow-sm"
+                          : "border-transparent bg-slate-50 hover:border-app-border hover:bg-white"
+                      }`}
+                      aria-current={selected ? "step" : undefined}
+                      onClick={() => {
+                        setSelectedItemId(item.id);
+                      }}
+                    >
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-semibold tracking-wide text-brand-700 uppercase">
+                          {index + 1}. {flowItemKindLabel(item)}
+                        </span>
+                        {!item.enabled ? (
+                          <span className="text-[10px] text-app-muted">
+                            Oprit
+                          </span>
+                        ) : null}
+                      </span>
+                      <strong className="mt-1 block truncate text-sm text-app-ink">
+                        {flowItemTitle(item, index)}
+                      </strong>
+                      {description ? (
+                        <span className="mt-1 line-clamp-2 block text-xs leading-4 text-app-muted">
+                          {description}
+                        </span>
+                      ) : null}
+                    </button>
+                  </li>
                 );
-            return (
-              <li
-                key={item.id}
-                draggable
-                className="rounded-xl border border-app-border bg-app-surface p-4"
-                onDragStart={() => {
-                  setDraggedIndex(index);
-                }}
-                onDragOver={(event) => {
-                  event.preventDefault();
-                }}
-                onDrop={() => {
-                  if (draggedIndex !== undefined) {
-                    moveItem(draggedIndex, index);
-                    setDraggedIndex(undefined);
-                  }
-                }}
-              >
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <span
-                      className="cursor-grab text-app-muted"
-                      title="Trage pentru reordonare"
-                    >
-                      ⋮⋮
-                    </span>
-                    <span className="text-xs font-semibold text-brand-700 uppercase">
-                      {index + 1}. {item.type}
-                    </span>
-                    <label className="flex items-center gap-2 text-xs">
-                      <input
-                        type="checkbox"
-                        checked={item.enabled}
-                        onChange={(event) => {
-                          updateItem(index, {
-                            ...item,
-                            enabled: event.target.checked,
-                          });
-                        }}
-                      />
-                      Activ
-                    </label>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {test.testMode === "dynamic_ai" ? (
-                      <Button
-                        variant="secondary"
-                        disabled={dirty}
-                        title={
-                          dirty
-                            ? "Salvează sau anulează modificările locale înainte de AI."
-                            : "Deschide chat-ul contextual pentru acest pas."
-                        }
-                        onClick={() => {
-                          setAiStep(item);
-                        }}
+              })}
+            </ol>
+          </nav>
+          <ol className="min-w-0">
+            {items.map((item, index) => {
+              if (item.id !== selectedItemId) return null;
+              const itemIssues = validation.valid
+                ? []
+                : validation.issues.filter((issue) =>
+                    issue.path.startsWith(`$.flowItems[${index}]`),
+                  );
+              return (
+                <li
+                  key={item.id}
+                  draggable
+                  className="rounded-xl border border-app-border bg-app-surface p-4"
+                  onDragStart={() => {
+                    setDraggedIndex(index);
+                  }}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                  }}
+                  onDrop={() => {
+                    if (draggedIndex !== undefined) {
+                      moveItem(draggedIndex, index);
+                      setDraggedIndex(undefined);
+                    }
+                  }}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <span
+                        className="cursor-grab text-app-muted"
+                        title="Trage pentru reordonare"
                       >
-                        Editează cu AI
-                      </Button>
-                    ) : null}
-                    <Button
-                      variant="secondary"
-                      disabled={index === 0}
-                      aria-label={`Mută pasul ${index + 1} în sus`}
-                      onClick={() => {
-                        moveItem(index, index - 1);
-                      }}
-                    >
-                      ↑
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      disabled={index === items.length - 1}
-                      aria-label={`Mută pasul ${index + 1} în jos`}
-                      onClick={() => {
-                        moveItem(index, index + 1);
-                      }}
-                    >
-                      ↓
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      onClick={() => {
-                        const duplicate = clone(item);
-                        duplicate.id = createId();
-                        const next = [...items];
-                        next.splice(index + 1, 0, duplicate);
-                        mutate(next);
-                      }}
-                    >
-                      Duplică
-                    </Button>
-                    <Button
-                      variant="danger"
-                      onClick={() => {
-                        mutate(
-                          items.filter((_, itemIndex) => itemIndex !== index),
-                        );
-                      }}
-                    >
-                      Șterge
-                    </Button>
-                  </div>
-                </div>
-
-                {"title" in item ? (
-                  <div className="mt-3 grid gap-3 lg:grid-cols-3">
-                    <label className={labelClass}>
-                      Titlu
-                      <input
-                        className={fieldClass}
-                        value={item.title ?? ""}
-                        onChange={(event) => {
-                          updateItem(index, {
-                            ...item,
-                            title: event.target.value,
-                          });
-                        }}
-                      />
-                    </label>
-                    {"humanDescription" in item ? (
-                      <label className={labelClass}>
-                        Descriere umană
-                        <textarea
-                          className={fieldClass}
-                          value={item.humanDescription}
+                        ⋮⋮
+                      </span>
+                      <span className="text-xs font-semibold text-brand-700 uppercase">
+                        {index + 1}. {item.type}
+                      </span>
+                      <label className="flex items-center gap-2 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={item.enabled}
                           onChange={(event) => {
                             updateItem(index, {
                               ...item,
-                              humanDescription: event.target.value,
+                              enabled: event.target.checked,
                             });
                           }}
                         />
+                        Activ
                       </label>
-                    ) : null}
-                    {"whyExplanation" in item ? (
-                      <label className={labelClass}>
-                        De ce?
-                        <textarea
-                          className={fieldClass}
-                          value={item.whyExplanation}
-                          onChange={(event) => {
-                            updateItem(index, {
-                              ...item,
-                              whyExplanation: event.target.value,
-                            });
-                          }}
-                        />
-                      </label>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                {item.type === "action" ? (
-                  <>
-                    <label className={`${labelClass} mt-3`}>
-                      Tip acțiune
-                      <select
-                        className={fieldClass}
-                        value={item.actionType}
-                        onChange={(event) => {
-                          const actionType = event.target
-                            .value as ActionStep["actionType"];
-                          updateItem(index, {
-                            ...item,
-                            actionType,
-                            ...(DATA_INPUT_ACTION_TYPES.has(actionType)
-                              ? { valueStrategy: "dataset" as const }
-                              : {}),
-                          });
-                        }}
-                      >
-                        {ACTION_TYPES.map((actionType) => (
-                          <option key={actionType} value={actionType}>
-                            {actionType}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    {DATA_INPUT_ACTION_TYPES.has(item.actionType) ? (
-                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                        <label className={labelClass}>
-                          ID semantic câmp
-                          <input
-                            className={fieldClass}
-                            value={item.inputFieldId ?? ""}
-                            placeholder="ex. customer_email"
-                            onChange={(event) => {
-                              const previousFieldId = item.inputFieldId;
-                              const inputFieldId =
-                                event.target.value.trim() || undefined;
-                              const nextValueKey =
-                                item.valueKey === undefined ||
-                                item.valueKey === previousFieldId
-                                  ? inputFieldId
-                                  : item.valueKey;
-                              const nextItem: ActionStep = { ...item };
-                              delete nextItem.inputFieldId;
-                              delete nextItem.valueKey;
-                              if (inputFieldId !== undefined) {
-                                nextItem.inputFieldId = inputFieldId;
-                              }
-                              if (nextValueKey !== undefined) {
-                                nextItem.valueKey = nextValueKey;
-                              }
-                              nextItem.valueStrategy = "dataset";
-                              if (item.target !== undefined) {
-                                nextItem.target = { ...item.target };
-                                delete nextItem.target.fieldId;
-                                if (inputFieldId !== undefined) {
-                                  nextItem.target.fieldId = inputFieldId;
-                                }
-                              }
-                              updateItem(index, nextItem);
-                            }}
-                          />
-                        </label>
-                        <label className={labelClass}>
-                          Cheie dataset
-                          <input
-                            className={fieldClass}
-                            value={item.valueKey ?? ""}
-                            placeholder="ex. customer_email"
-                            onChange={(event) => {
-                              const valueKey =
-                                event.target.value.trim() || undefined;
-                              const nextItem: ActionStep = { ...item };
-                              delete nextItem.valueKey;
-                              if (valueKey !== undefined) {
-                                nextItem.valueKey = valueKey;
-                              }
-                              nextItem.valueStrategy = "dataset";
-                              updateItem(index, nextItem);
-                            }}
-                          />
-                        </label>
-                        <p className="text-xs text-app-muted sm:col-span-2">
-                          Valoarea este citită din datasetul rulării. Dacă cheia
-                          lipsește, rularea se oprește pentru completare manuală
-                          în browser.
-                        </p>
-                      </div>
-                    ) : null}
-                    {item.target !== undefined ? (
-                      <LocatorEditor
-                        label="Locator principal"
-                        locator={item.target.primary}
-                        onChange={(primary) => {
-                          updateItem(index, {
-                            ...item,
-                            target: { ...item.target, primary },
-                          });
-                        }}
-                      />
-                    ) : (
-                      <Button
-                        className="mt-3"
-                        variant="secondary"
-                        onClick={() => {
-                          updateItem(index, {
-                            ...item,
-                            target: { primary: createSimpleLocator() },
-                          });
-                        }}
-                      >
-                        + Locator principal
-                      </Button>
-                    )}
-                    <div className="mt-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <h4 className="text-sm font-semibold">
-                          Fallback-uri ({item.fallbacks.length}/3)
-                        </h4>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {test.testMode === "dynamic_ai" ? (
                         <Button
                           variant="secondary"
-                          disabled={item.fallbacks.length >= 3}
+                          disabled={dirty}
+                          title={
+                            dirty
+                              ? "Salvează sau anulează modificările locale înainte de AI."
+                              : "Deschide chat-ul contextual pentru acest pas."
+                          }
+                          onClick={() => {
+                            setAiStep(item);
+                          }}
+                        >
+                          Editează cu AI
+                        </Button>
+                      ) : null}
+                      <Button
+                        variant="secondary"
+                        disabled={index === 0}
+                        aria-label={`Mută pasul ${index + 1} în sus`}
+                        onClick={() => {
+                          moveItem(index, index - 1);
+                        }}
+                      >
+                        ↑
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        disabled={index === items.length - 1}
+                        aria-label={`Mută pasul ${index + 1} în jos`}
+                        onClick={() => {
+                          moveItem(index, index + 1);
+                        }}
+                      >
+                        ↓
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        onClick={() => {
+                          const duplicate = clone(item);
+                          duplicate.id = createId();
+                          const next = [...items];
+                          next.splice(index + 1, 0, duplicate);
+                          mutate(next);
+                          setSelectedItemId(duplicate.id);
+                        }}
+                      >
+                        Duplică
+                      </Button>
+                      <Button
+                        variant="danger"
+                        onClick={() => {
+                          mutate(
+                            items.filter((_, itemIndex) => itemIndex !== index),
+                          );
+                        }}
+                      >
+                        Șterge
+                      </Button>
+                    </div>
+                  </div>
+
+                  {"title" in item ? (
+                    <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                      <label className={labelClass}>
+                        Titlu
+                        <input
+                          className={fieldClass}
+                          value={item.title ?? ""}
+                          onChange={(event) => {
+                            updateItem(index, {
+                              ...item,
+                              title: event.target.value,
+                            });
+                          }}
+                        />
+                      </label>
+                      {"humanDescription" in item ? (
+                        <label className={labelClass}>
+                          Descriere umană
+                          <textarea
+                            className={fieldClass}
+                            value={item.humanDescription}
+                            onChange={(event) => {
+                              updateItem(index, {
+                                ...item,
+                                humanDescription: event.target.value,
+                              });
+                            }}
+                          />
+                        </label>
+                      ) : null}
+                      {"whyExplanation" in item ? (
+                        <label className={labelClass}>
+                          De ce?
+                          <textarea
+                            className={fieldClass}
+                            value={item.whyExplanation}
+                            onChange={(event) => {
+                              updateItem(index, {
+                                ...item,
+                                whyExplanation: event.target.value,
+                              });
+                            }}
+                          />
+                        </label>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {item.type === "action" ? (
+                    <>
+                      <label className={`${labelClass} mt-3`}>
+                        Tip acțiune
+                        <select
+                          className={fieldClass}
+                          value={item.actionType}
+                          onChange={(event) => {
+                            const actionType = event.target
+                              .value as ActionStep["actionType"];
+                            updateItem(index, {
+                              ...item,
+                              actionType,
+                              ...(DATA_INPUT_ACTION_TYPES.has(actionType)
+                                ? { valueStrategy: "dataset" as const }
+                                : {}),
+                            });
+                          }}
+                        >
+                          {ACTION_TYPES.map((actionType) => (
+                            <option key={actionType} value={actionType}>
+                              {actionType}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      {DATA_INPUT_ACTION_TYPES.has(item.actionType) ? (
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                          <label className={labelClass}>
+                            ID semantic câmp
+                            <input
+                              className={fieldClass}
+                              value={item.inputFieldId ?? ""}
+                              placeholder="ex. customer_email"
+                              onChange={(event) => {
+                                const previousFieldId = item.inputFieldId;
+                                const inputFieldId =
+                                  event.target.value.trim() || undefined;
+                                const nextValueKey =
+                                  item.valueKey === undefined ||
+                                  item.valueKey === previousFieldId
+                                    ? inputFieldId
+                                    : item.valueKey;
+                                const nextItem: ActionStep = { ...item };
+                                delete nextItem.inputFieldId;
+                                delete nextItem.valueKey;
+                                if (inputFieldId !== undefined) {
+                                  nextItem.inputFieldId = inputFieldId;
+                                }
+                                if (nextValueKey !== undefined) {
+                                  nextItem.valueKey = nextValueKey;
+                                }
+                                nextItem.valueStrategy = "dataset";
+                                if (item.target !== undefined) {
+                                  nextItem.target = { ...item.target };
+                                  delete nextItem.target.fieldId;
+                                  if (inputFieldId !== undefined) {
+                                    nextItem.target.fieldId = inputFieldId;
+                                  }
+                                }
+                                updateItem(index, nextItem);
+                              }}
+                            />
+                          </label>
+                          <label className={labelClass}>
+                            Cheie dataset
+                            <input
+                              className={fieldClass}
+                              value={item.valueKey ?? ""}
+                              placeholder="ex. customer_email"
+                              onChange={(event) => {
+                                const valueKey =
+                                  event.target.value.trim() || undefined;
+                                const nextItem: ActionStep = { ...item };
+                                delete nextItem.valueKey;
+                                if (valueKey !== undefined) {
+                                  nextItem.valueKey = valueKey;
+                                }
+                                nextItem.valueStrategy = "dataset";
+                                updateItem(index, nextItem);
+                              }}
+                            />
+                          </label>
+                          <p className="text-xs text-app-muted sm:col-span-2">
+                            Valoarea este citită din datasetul rulării. Dacă
+                            cheia lipsește, rularea se oprește pentru completare
+                            manuală în browser.
+                          </p>
+                        </div>
+                      ) : null}
+                      {item.target !== undefined ? (
+                        <LocatorEditor
+                          label="Locator principal"
+                          locator={item.target.primary}
+                          onChange={(primary) => {
+                            updateItem(index, {
+                              ...item,
+                              target: { ...item.target, primary },
+                            });
+                          }}
+                        />
+                      ) : (
+                        <Button
+                          className="mt-3"
+                          variant="secondary"
                           onClick={() => {
                             updateItem(index, {
                               ...item,
-                              fallbacks: [
-                                ...item.fallbacks,
-                                {
-                                  locator: createSimpleLocator(),
-                                  humanDescription: "Locator alternativ",
-                                  whyExplanation:
-                                    "Este folosit dacă locatorul principal nu găsește elementul.",
-                                },
-                              ],
+                              target: { primary: createSimpleLocator() },
                             });
                           }}
                         >
-                          + Fallback
+                          + Locator principal
                         </Button>
-                      </div>
-                      {item.fallbacks.map((fallback, fallbackIndex) => (
-                        <div
-                          key={fallbackIndex}
-                          className="mt-3 rounded-lg border border-app-border p-3"
-                        >
-                          <div className="flex justify-end gap-2">
-                            <Button
-                              variant="secondary"
-                              disabled={fallbackIndex === 0}
-                              onClick={() => {
-                                const fallbacks = clone(item.fallbacks);
-                                const [moving] = fallbacks.splice(
-                                  fallbackIndex,
-                                  1,
-                                );
-                                if (moving !== undefined) {
-                                  fallbacks.splice(
-                                    fallbackIndex - 1,
-                                    0,
-                                    moving,
-                                  );
-                                }
-                                updateItem(index, { ...item, fallbacks });
-                              }}
-                            >
-                              ↑
-                            </Button>
-                            <Button
-                              variant="secondary"
-                              disabled={
-                                fallbackIndex === item.fallbacks.length - 1
-                              }
-                              onClick={() => {
-                                const fallbacks = clone(item.fallbacks);
-                                const [moving] = fallbacks.splice(
-                                  fallbackIndex,
-                                  1,
-                                );
-                                if (moving !== undefined) {
-                                  fallbacks.splice(
-                                    fallbackIndex + 1,
-                                    0,
-                                    moving,
-                                  );
-                                }
-                                updateItem(index, { ...item, fallbacks });
-                              }}
-                            >
-                              ↓
-                            </Button>
-                            <Button
-                              variant="danger"
-                              onClick={() => {
-                                updateItem(index, {
-                                  ...item,
-                                  fallbacks: item.fallbacks.filter(
-                                    (_, candidateIndex) =>
-                                      candidateIndex !== fallbackIndex,
-                                  ),
-                                });
-                              }}
-                            >
-                              Șterge fallback
-                            </Button>
-                          </div>
-                          <div className="mt-2 grid gap-3 sm:grid-cols-2">
-                            <label className={labelClass}>
-                              Descriere
-                              <input
-                                className={fieldClass}
-                                value={fallback.humanDescription}
-                                onChange={(event) => {
-                                  const fallbacks = clone(item.fallbacks);
-                                  fallbacks[fallbackIndex] = {
-                                    ...fallback,
-                                    humanDescription: event.target.value,
-                                  };
-                                  updateItem(index, { ...item, fallbacks });
-                                }}
-                              />
-                            </label>
-                            <label className={labelClass}>
-                              De ce?
-                              <input
-                                className={fieldClass}
-                                value={fallback.whyExplanation}
-                                onChange={(event) => {
-                                  const fallbacks = clone(item.fallbacks);
-                                  fallbacks[fallbackIndex] = {
-                                    ...fallback,
-                                    whyExplanation: event.target.value,
-                                  };
-                                  updateItem(index, { ...item, fallbacks });
-                                }}
-                              />
-                            </label>
-                          </div>
-                          <LocatorEditor
-                            label={`Locator fallback ${fallbackIndex + 1}`}
-                            locator={fallback.locator}
-                            onChange={(locator) => {
-                              const fallbacks = clone(item.fallbacks);
-                              fallbacks[fallbackIndex] = {
-                                ...fallback,
-                                locator,
-                              };
-                              updateItem(index, { ...item, fallbacks });
+                      )}
+                      <div className="mt-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <h4 className="text-sm font-semibold">
+                            Fallback-uri ({item.fallbacks.length}/3)
+                          </h4>
+                          <Button
+                            variant="secondary"
+                            disabled={item.fallbacks.length >= 3}
+                            onClick={() => {
+                              updateItem(index, {
+                                ...item,
+                                fallbacks: [
+                                  ...item.fallbacks,
+                                  {
+                                    locator: createSimpleLocator(),
+                                    humanDescription: "Locator alternativ",
+                                    whyExplanation:
+                                      "Este folosit dacă locatorul principal nu găsește elementul.",
+                                  },
+                                ],
+                              });
                             }}
-                          />
+                          >
+                            + Fallback
+                          </Button>
                         </div>
-                      ))}
-                    </div>
-                  </>
-                ) : null}
+                        {item.fallbacks.map((fallback, fallbackIndex) => (
+                          <div
+                            key={fallbackIndex}
+                            className="mt-3 rounded-lg border border-app-border p-3"
+                          >
+                            <div className="flex justify-end gap-2">
+                              <Button
+                                variant="secondary"
+                                disabled={fallbackIndex === 0}
+                                onClick={() => {
+                                  const fallbacks = clone(item.fallbacks);
+                                  const [moving] = fallbacks.splice(
+                                    fallbackIndex,
+                                    1,
+                                  );
+                                  if (moving !== undefined) {
+                                    fallbacks.splice(
+                                      fallbackIndex - 1,
+                                      0,
+                                      moving,
+                                    );
+                                  }
+                                  updateItem(index, { ...item, fallbacks });
+                                }}
+                              >
+                                ↑
+                              </Button>
+                              <Button
+                                variant="secondary"
+                                disabled={
+                                  fallbackIndex === item.fallbacks.length - 1
+                                }
+                                onClick={() => {
+                                  const fallbacks = clone(item.fallbacks);
+                                  const [moving] = fallbacks.splice(
+                                    fallbackIndex,
+                                    1,
+                                  );
+                                  if (moving !== undefined) {
+                                    fallbacks.splice(
+                                      fallbackIndex + 1,
+                                      0,
+                                      moving,
+                                    );
+                                  }
+                                  updateItem(index, { ...item, fallbacks });
+                                }}
+                              >
+                                ↓
+                              </Button>
+                              <Button
+                                variant="danger"
+                                onClick={() => {
+                                  updateItem(index, {
+                                    ...item,
+                                    fallbacks: item.fallbacks.filter(
+                                      (_, candidateIndex) =>
+                                        candidateIndex !== fallbackIndex,
+                                    ),
+                                  });
+                                }}
+                              >
+                                Șterge fallback
+                              </Button>
+                            </div>
+                            <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                              <label className={labelClass}>
+                                Descriere
+                                <input
+                                  className={fieldClass}
+                                  value={fallback.humanDescription}
+                                  onChange={(event) => {
+                                    const fallbacks = clone(item.fallbacks);
+                                    fallbacks[fallbackIndex] = {
+                                      ...fallback,
+                                      humanDescription: event.target.value,
+                                    };
+                                    updateItem(index, { ...item, fallbacks });
+                                  }}
+                                />
+                              </label>
+                              <label className={labelClass}>
+                                De ce?
+                                <input
+                                  className={fieldClass}
+                                  value={fallback.whyExplanation}
+                                  onChange={(event) => {
+                                    const fallbacks = clone(item.fallbacks);
+                                    fallbacks[fallbackIndex] = {
+                                      ...fallback,
+                                      whyExplanation: event.target.value,
+                                    };
+                                    updateItem(index, { ...item, fallbacks });
+                                  }}
+                                />
+                              </label>
+                            </div>
+                            <LocatorEditor
+                              label={`Locator fallback ${fallbackIndex + 1}`}
+                              locator={fallback.locator}
+                              onChange={(locator) => {
+                                const fallbacks = clone(item.fallbacks);
+                                fallbacks[fallbackIndex] = {
+                                  ...fallback,
+                                  locator,
+                                };
+                                updateItem(index, { ...item, fallbacks });
+                              }}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : null}
 
-                {item.type === "check" && "target" in item.config ? (
-                  <LocatorEditor
-                    label="Locator verificare"
-                    locator={item.config.target}
-                    onChange={(target) => {
-                      updateItem(index, {
-                        ...item,
-                        config: { ...item.config, target },
-                      });
-                    }}
-                  />
-                ) : null}
+                  {item.type === "check" ? (
+                    <label className={`${labelClass} mt-3`}>
+                      Tip verificare
+                      <select
+                        className={fieldClass}
+                        value={item.checkType}
+                        onChange={(event) => {
+                          const checkType = event.target
+                            .value as CheckStep["checkType"];
+                          const config =
+                            checkType === "mysql"
+                              ? { tableNames: [], identities: [] }
+                              : checkType === "url"
+                                ? {
+                                    operator: "contains" as const,
+                                    value: "http",
+                                  }
+                                : checkType === "text"
+                                  ? {
+                                      target: createSimpleLocator(),
+                                      operator: "contains" as const,
+                                      value: "text",
+                                    }
+                                  : {
+                                      target: createSimpleLocator(),
+                                      state: "visible" as const,
+                                    };
+                          updateItem(index, { ...item, checkType, config });
+                        }}
+                      >
+                        <option value="element">Element</option>
+                        <option value="text">Text</option>
+                        <option value="url">URL</option>
+                      </select>
+                    </label>
+                  ) : null}
 
-                {item.type === "breakpoint" ||
-                item.type === "manual_intervention" ? (
-                  <label className={`${labelClass} mt-3`}>
-                    Instrucțiuni
-                    <textarea
-                      className={fieldClass}
-                      value={item.instructions ?? ""}
-                      onChange={(event) => {
+                  {item.type === "check" && item.checkType === "mysql" ? (
+                    <MySqlCheckEditor
+                      api={api}
+                      projectId={projectId}
+                      item={item}
+                      onChange={(nextItem) => {
+                        updateItem(index, nextItem);
+                      }}
+                    />
+                  ) : null}
+
+                  {item.type === "check" && "target" in item.config ? (
+                    <LocatorEditor
+                      label="Locator verificare"
+                      locator={item.config.target}
+                      onChange={(target) => {
                         updateItem(index, {
                           ...item,
-                          instructions: event.target.value,
+                          config: { ...item.config, target },
                         });
                       }}
                     />
-                  </label>
-                ) : null}
+                  ) : null}
 
-                <details className="mt-3 rounded-lg bg-app-canvas p-3">
-                  <summary className="cursor-pointer text-sm font-semibold">
-                    Preview tehnic și descriere procedurală
-                  </summary>
-                  <p className="mt-3 text-sm">
-                    {createProceduralDescription(item)}
-                  </p>
-                  <pre className="mt-3 max-h-72 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-100">
-                    {JSON.stringify(item, null, 2)}
-                  </pre>
-                </details>
-                {itemIssues.length > 0 ? (
-                  <p className="mt-3 text-xs text-red-700">
-                    {itemIssues.map((issue) => issue.message).join(" · ")}
-                  </p>
-                ) : null}
-              </li>
-            );
-          })}
-        </ol>
+                  {item.type === "breakpoint" ||
+                  item.type === "manual_intervention" ? (
+                    <label className={`${labelClass} mt-3`}>
+                      Instrucțiuni
+                      <textarea
+                        className={fieldClass}
+                        value={item.instructions ?? ""}
+                        onChange={(event) => {
+                          updateItem(index, {
+                            ...item,
+                            instructions: event.target.value,
+                          });
+                        }}
+                      />
+                    </label>
+                  ) : null}
+
+                  <details className="mt-3 rounded-lg bg-app-canvas p-3">
+                    <summary className="cursor-pointer text-sm font-semibold">
+                      Preview tehnic și descriere procedurală
+                    </summary>
+                    <p className="mt-3 text-sm">
+                      {createProceduralDescription(item)}
+                    </p>
+                    <pre className="mt-3 max-h-72 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-100">
+                      {JSON.stringify(item, null, 2)}
+                    </pre>
+                  </details>
+                  {itemIssues.length > 0 ? (
+                    <p className="mt-3 text-xs text-red-700">
+                      {itemIssues.map((issue) => issue.message).join(" · ")}
+                    </p>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ol>
+        </div>
       )}
 
       <div className="mt-5 border-t border-app-border pt-4">

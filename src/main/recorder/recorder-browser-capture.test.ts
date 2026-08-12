@@ -120,4 +120,119 @@ describe("recorderInitScript", () => {
       target: { name: "first_name" },
     });
   });
+
+  it("flushes the last focused input explicitly before Done", async () => {
+    document.body.innerHTML = `
+      <label for="notes">Observații</label>
+      <input id="notes" name="notes" type="text" />
+    `;
+    const bindingName = "__recorderDoneFlushTest";
+    const controlName = `${bindingName}Control`;
+    Object.defineProperty(globalThis, "CSS", {
+      configurable: true,
+      value: { escape: (value: string) => value },
+    });
+    const recorderGlobal = globalThis as unknown as Record<string, unknown>;
+    const events: RecorderRawEvent[] = [];
+    recorderGlobal[bindingName] = (event: RecorderRawEvent) => {
+      events.push(event);
+      const control = recorderGlobal[controlName] as
+        { setBlocked?: (blocked: boolean) => void } | undefined;
+      control?.setBlocked?.(false);
+      return Promise.resolve();
+    };
+    recorderInitScript({ bindingName, controlName });
+
+    const notes = document.querySelector<HTMLInputElement>("#notes");
+    if (notes === null) throw new Error("Inputul fixture lipsește.");
+    notes.value = "Valoarea finală";
+    notes.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(events).toHaveLength(0);
+
+    const control = recorderGlobal[controlName] as
+      { flushPending?: () => Promise<void> } | undefined;
+    await control?.flushPending?.();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "fill",
+      value: "Valoarea finală",
+      target: { name: "notes" },
+    });
+  });
+
+  it("records custom clickable div and span elements without requiring a button tag", async () => {
+    document.body.innerHTML = `
+      <div
+        class="calendar-day"
+        role="gridcell"
+        tabindex="0"
+        data-date="2026-08-17"
+      ><span>17</span></div>
+      <span id="custom-trigger">Deschide detalii</span>
+      <article data-action="open-treatment">
+        <span>ADOLESCENȚI</span>
+        <h3>TEEN SKIN RITUAL</h3>
+        <p>Pentru pielea sensibilă, predispusă la erupții.</p>
+        <strong>450,00 lei</strong>
+      </article>
+    `;
+    const bindingName = "__recorderCustomClickableTest";
+    const controlName = `${bindingName}Control`;
+    Object.defineProperty(globalThis, "CSS", {
+      configurable: true,
+      value: { escape: (value: string) => value },
+    });
+    const recorderGlobal = globalThis as unknown as Record<string, unknown>;
+    const events: RecorderRawEvent[] = [];
+    recorderGlobal[bindingName] = (event: RecorderRawEvent) => {
+      events.push(event);
+      const control = recorderGlobal[controlName] as
+        { setBlocked?: (blocked: boolean) => void } | undefined;
+      control?.setBlocked?.(false);
+      return Promise.resolve();
+    };
+    recorderInitScript({ bindingName, controlName });
+
+    const dayText = document.querySelector<HTMLElement>(".calendar-day span");
+    const customTrigger =
+      document.querySelector<HTMLElement>("#custom-trigger");
+    const treatmentTitle = document.querySelector<HTMLElement>("article h3");
+    if (dayText === null || customTrigger === null || treatmentTitle === null) {
+      throw new Error("Elementele custom din fixture lipsesc.");
+    }
+
+    dayText.click();
+    await Promise.resolve();
+    customTrigger.click();
+    await Promise.resolve();
+    treatmentTitle.click();
+    await Promise.resolve();
+
+    expect(events).toHaveLength(3);
+    expect(events[0]).toMatchObject({
+      type: "click",
+      target: {
+        tagName: "div",
+        role: "gridcell",
+        dataAttributes: { "data-date": "2026-08-17" },
+      },
+    });
+    expect(events[1]).toMatchObject({
+      type: "click",
+      target: {
+        tagName: "span",
+        id: "custom-trigger",
+        text: "Deschide detalii",
+      },
+    });
+    expect(events[2]).toMatchObject({
+      type: "click",
+      target: {
+        tagName: "article",
+        actionText: "TEEN SKIN RITUAL",
+        dataAttributes: { "data-action": "open-treatment" },
+      },
+    });
+  });
 });

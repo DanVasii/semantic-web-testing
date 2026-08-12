@@ -284,4 +284,74 @@ describe("RecorderPanel", () => {
       test.id,
     );
   });
+
+  it("requires confirmation before replacing an existing recording", async () => {
+    const user = userEvent.setup();
+    const recordedTest: TestDefinition = {
+      ...test,
+      workflowState: "flow_analyzed",
+      flowItems: [
+        {
+          id: "step-1",
+          type: "action",
+          actionType: "click",
+          title: "Continuă",
+          humanDescription: "Apasă butonul Continuă.",
+          whyExplanation: "Continuă scenariul.",
+          target: {
+            primary: {
+              type: "css",
+              operator: "equals",
+              value: "#continue",
+            },
+          },
+          fallbacks: [],
+          enabled: true,
+        },
+      ],
+    };
+    const startRecorder = vi.fn().mockResolvedValue(
+      snapshot({
+        state: "recording",
+        canStart: false,
+        canStop: true,
+        test: {
+          ...recordedTest,
+          workflowState: "recording",
+          flowItems: [],
+        },
+      }),
+    );
+    const api = {
+      getRecorderStatus: vi.fn().mockResolvedValue(
+        snapshot({
+          test: recordedTest,
+          capturedSteps: 1,
+          canStart: true,
+        }),
+      ),
+      onRecorderStatusChange: vi.fn().mockReturnValue(vi.fn()),
+      startRecorder,
+    } as unknown as SemanticAppApi;
+
+    render(
+      <RecorderPanel
+        api={api}
+        project={project}
+        test={recordedTest}
+        onTestUpdated={vi.fn()}
+      />,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "Reînregistrează testul" }),
+    );
+    expect(startRecorder).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("dialog", { name: "Reînregistrezi testul?" }),
+    ).not.toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Reînregistrează" }));
+    expect(startRecorder).toHaveBeenCalledWith(project.id, test.id);
+  });
 });

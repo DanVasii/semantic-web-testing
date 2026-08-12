@@ -101,6 +101,38 @@ const analyze = (
   });
 
 describe("analyzePageSemantics", () => {
+  it("uses stable data attributes for clickable div calendar cells", () => {
+    const body = capturedElement("/html[1]/body[1]", "body");
+    const calendarDay = capturedElement("/html[1]/body[1]/div[1]", "div", {
+      text: "17",
+      attributes: {
+        role: "gridcell",
+        tabindex: "0",
+        "aria-label": "17 august 2026",
+        "data-date": "2026-08-17",
+      },
+      parentPath: body.path,
+    });
+
+    const result = analyze([body, calendarDay], [calendarDay]);
+    const analyzedDay = result.elements.find(
+      (element) => element.path === calendarDay.path,
+    );
+    expect(analyzedDay).toMatchObject({
+      path: calendarDay.path,
+      tag: "div",
+      role: "gridcell",
+      primaryLocator: {
+        strategy: {
+          type: "data_attribute",
+          attribute: "data-date",
+          operator: "equals",
+          value: "2026-08-17",
+        },
+      },
+    });
+  });
+
   it("detects labels, accessible names, roles and unique semantic field IDs", () => {
     const body = capturedElement("/html[1]/body[1]", "body");
     const emailLabel = capturedElement("/html[1]/body[1]/label[1]", "label", {

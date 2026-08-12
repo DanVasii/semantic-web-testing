@@ -11,6 +11,7 @@ import {
 import {
   PageRepository,
   ProjectRepository,
+  TestRepository,
 } from "../persistence/repositories.js";
 import type {
   PageCapture,
@@ -118,6 +119,7 @@ let directory: string;
 let database: ApplicationDatabase;
 let pageRepository: PageRepository;
 let projectRepository: ProjectRepository;
+let testRepository: TestRepository;
 let capture: PageCapture;
 let captureSource: PageCaptureSource;
 let service: PageAnalysisService;
@@ -131,6 +133,7 @@ beforeEach(async () => {
   });
   projectRepository = new ProjectRepository(database.connection);
   pageRepository = new PageRepository(database.connection);
+  testRepository = new TestRepository(database.connection);
   projectRepository.create(project);
   capture = createCapture();
   const getCurrentPageMetadata: PageCaptureSource["getCurrentPageMetadata"] =
@@ -158,6 +161,7 @@ beforeEach(async () => {
   service = new PageAnalysisService(
     projectRepository,
     pageRepository,
+    testRepository,
     captureSource,
     {
       artifactRoot: join(directory, "artifacts"),
@@ -173,6 +177,14 @@ afterEach(() => {
 });
 
 describe("PageAnalysisService", () => {
+  it("returns no current target when the browser has no open web page", async () => {
+    vi.mocked(captureSource.getCurrentPageMetadata).mockRejectedValueOnce(
+      new Error("Nu există o pagină web deschisă pentru analiză."),
+    );
+
+    await expect(service.getCurrentTarget(project.id)).resolves.toBeUndefined();
+  });
+
   it("captures and persists all G artifacts with a page version", async () => {
     const progress = vi.fn();
     const result = await service.analyzeCurrentPage(project.id, progress);
@@ -269,6 +281,63 @@ describe("PageAnalysisService", () => {
     expect(JSON.stringify(aiContext)).not.toContain(capture.css);
   });
 
+  it("adds compact runtime hints for custom calendar controls and date cells", async () => {
+    const marker = {
+      ...element,
+      path: "/html[1]/body[1]/div[1]",
+      parentPath: "/html[1]/body[1]",
+      cssSelector: ".cal-header",
+      tag: "div",
+      text: "‹ Iulie 2026 ›",
+      attributes: { class: "cal-header" },
+      ariaAttributes: {},
+      dataAttributes: {},
+    };
+    const next = {
+      ...element,
+      path: "/html[1]/body[1]/div[1]/button[1]",
+      parentPath: marker.path,
+      cssSelector: "#at-next-month",
+      text: "›",
+      attributes: { id: "at-next-month", class: "cal-nav" },
+      ariaAttributes: {},
+      dataAttributes: {},
+    };
+    const day = {
+      ...element,
+      path: "/html[1]/body[1]/div[2]",
+      parentPath: "/html[1]/body[1]",
+      cssSelector: "#calendar > div:nth-of-type(29)",
+      tag: "div",
+      text: "29",
+      attributes: { "data-date": "2026-07-29", class: "cal-cell" },
+      ariaAttributes: {},
+      dataAttributes: { "data-date": "2026-07-29" },
+    };
+    capture = createCapture({
+      allElements: [marker, next, day],
+      interactiveElements: [next],
+      ariaElements: [],
+      dataElements: [day],
+      statefulElements: [],
+      buttons: [next],
+      links: [],
+    });
+
+    const result = await service.analyzeCurrentPage(project.id);
+    const [context] = await service.getAiSemanticContext(project.id, [
+      result.page.id,
+    ]);
+    const serialized = JSON.stringify(context);
+
+    expect(serialized).toContain('"kind":"calendar_period_marker"');
+    expect(serialized).toContain('"value":".cal-header"');
+    expect(serialized).toContain('"kind":"calendar_next_month"');
+    expect(serialized).toContain('"value":"#at-next-month"');
+    expect(serialized).toContain('"attribute":"data-date"');
+    expect(serialized).toContain('"value":"2026-07-29"');
+  });
+
   it("creates a new version for the same normalized URL", async () => {
     const first = await service.analyzeCurrentPage(project.id);
     now = new Date("2026-07-24T13:00:00.000Z");
@@ -287,10 +356,82 @@ describe("PageAnalysisService", () => {
         .listVersions(first.page.id)
         .map(({ versionNumber }) => versionNumber),
     ).toEqual([2, 1]);
-    expect((await service.getCurrentTarget(project.id)).isAnalyzed).toBe(true);
+    await expect(service.getCurrentTarget(project.id)).resolves.toMatchObject({
+      isAnalyzed: true,
+      latestVersionNumber: 2,
+    });
+  });
+
+  it("invalidates associated tests when the semantic score reaches the threshold", async () => {
+    const first = await service.analyzeCurrentPage(project.id);
+    testRepository.create({
+      id: "test-1",
+      projectId: project.id,
+      name: "Cumpără produs",
+      status: "valid",
+      version: 1,
+      testMode: "recorded",
+      wipeBeforeRun: false,
+      startMode: "base_url",
+      startUrl: capture.url,
+      normalizedStartUrl: capture.url,
+      workflowState: "ready",
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+      flowItems: [
+        {
+          id: "click-buy",
+          type: "action",
+          actionType: "click",
+          title: "Cumpără",
+          humanDescription: "Apasă butonul de cumpărare.",
+          whyExplanation: "Adaugă produsul în coș.",
+          pageId: first.page.id,
+          target: {
+            primary: {
+              type: "role",
+              role: "button",
+              operator: "equals",
+              value: "Cumpără produsul",
+            },
+          },
+          fallbacks: [],
+          enabled: true,
+        },
+      ],
+    });
+    now = new Date("2026-07-24T13:00:00.000Z");
+    const changedElement = {
+      ...element,
+      text: "Rezervă",
+      attributes: { "aria-label": "Rezervă produsul" },
+      ariaAttributes: { "aria-label": "Rezervă produsul" },
+    };
+    capture = createCapture({
+      html: "<html><body><a href='/details'>Detalii</a></body></html>",
+      serializedDom:
+        "<html><head></head><body><a href='/details'>Detalii</a></body></html>",
+      allElements: [changedElement],
+      interactiveElements: [changedElement],
+      ariaElements: [changedElement],
+      buttons: [changedElement],
+    });
+
+    const second = await service.analyzeCurrentPage(project.id);
+
+    expect(second.semanticChange?.exceeded).toBe(true);
+    expect(second.invalidatedTestIds).toEqual(["test-1"]);
+    expect(second.version.change).toEqual(second.semanticChange);
+    expect(testRepository.findById("test-1")).toMatchObject({
+      status: "invalidated",
+      invalidation: {
+        pageId: first.page.id,
+        pageVersionId: second.version.id,
+      },
+    });
     expect(
-      (await service.getCurrentTarget(project.id)).latestVersionNumber,
-    ).toBe(2);
+      (await service.listAnalyzedPages(project.id))[0]?.latestChange,
+    ).toEqual(second.semanticChange);
   });
 
   it("keeps the analysis successful when an external stylesheet is blocked", async () => {

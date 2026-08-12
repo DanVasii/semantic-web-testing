@@ -3,10 +3,14 @@ import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 
 import {
+  flushRecorderPendingInputs,
   installRecorderCapture,
   setRecorderPageBlocked,
   stopRecorderCapture,
 } from "../dist/main/recorder/recorder-browser-capture.js";
+import { buildRecorderStep } from "../dist/main/recorder/recorder-step-builder.js";
+import { resolveUniqueLocator } from "../dist/main/runner/locator-resolver.js";
+import { executeFlowItem } from "../dist/main/runner/step-executor.js";
 
 const fixtureUrl =
   process.env["SEMANTIC_FIXTURE_URL"] ?? "http://127.0.0.1:4173/";
@@ -51,6 +55,16 @@ try {
   await email.press("Tab");
   await waitUntilReady();
 
+  const password = page.locator("#customer-password");
+  await password.fill("saved-on-done");
+  assert.equal(
+    events.length,
+    1,
+    "the active input must stay pending until blur or explicit flush",
+  );
+  await flushRecorderPendingInputs(page, bindingName);
+  await waitUntilReady();
+
   await page.locator('select[name="service"]').selectOption("");
   await waitUntilReady();
   await page.locator('input[name="newsletter"]').uncheck();
@@ -70,6 +84,8 @@ try {
   await page.locator('[data-testid="calendar-next-month"]').click();
   await waitUntilReady();
   await page.locator('[data-testid="calendar-day-2027-08-15"]').click();
+  await waitUntilReady();
+  await page.getByRole("button", { name: "10:30" }).click();
   await waitUntilReady();
 
   await page.evaluate(() => {
@@ -94,6 +110,7 @@ try {
   const types = events.map((event) => event.type);
   assert.deepEqual(types, [
     "fill",
+    "fill",
     "select",
     "checkbox",
     "radio",
@@ -102,32 +119,48 @@ try {
     "select",
     "click",
     "click",
+    "click",
     "scroll",
   ]);
   assert.equal(events[0]?.value, "final@example.test");
   assert.equal(events[0]?.target?.label, "Email client");
-  assert.equal(events[1]?.value, "");
-  assert.equal(events[2]?.checked, false);
-  assert.equal(events[3]?.value, "premium");
+  assert.equal(events[1]?.value, "saved-on-done");
+  assert.equal(events[1]?.target?.label, "Parolă client");
+  assert.equal(events[2]?.value, "");
+  assert.equal(events[3]?.checked, false);
+  assert.equal(events[4]?.value, "premium");
   assert.equal(
-    events[4]?.target?.repeated?.distinguishingText,
+    events[5]?.target?.repeated?.distinguishingText,
     "Masaj Premium",
   );
-  assert.equal(events[5]?.key, "Escape");
+  assert.equal(events[6]?.key, "Escape");
   assert.ok(
     !events.some((event) => event.type === "press_key" && event.key === "Tab"),
     "Tab must move focus without becoming a recorded step",
   );
-  assert.equal(events[6]?.value, "2027");
+  const radioDraft = buildRecorderStep(events[4], {
+    createId: () => "radio-smoke",
+  });
   assert.equal(
-    events[7]?.target?.dataAttributes?.["data-testid"],
+    radioDraft.step.target?.primary?.value,
+    'input[type="radio"][name="customer_plan"][value="premium"]',
+  );
+  const uniqueRadio = await resolveUniqueLocator(
+    page,
+    radioDraft.step.target.primary,
+  );
+  assert.equal(await uniqueRadio.count(), 1);
+  assert.equal(events[7]?.value, "2027");
+  assert.equal(
+    events[8]?.target?.dataAttributes?.["data-testid"],
     "calendar-next-month",
   );
   assert.equal(
-    events[8]?.target?.dataAttributes?.["data-testid"],
+    events[9]?.target?.dataAttributes?.["data-testid"],
     "calendar-day-2027-08-15",
   );
-  assert.ok(Math.abs(events[9]?.scrollY ?? 0) >= 120);
+  assert.equal(events[10]?.target?.text, "10:30");
+  assert.ok(Math.abs(events[11]?.scrollY ?? 0) >= 120);
   assert.equal(
     await page.locator("#appointment-date").inputValue(),
     "2027-08-15",
@@ -137,10 +170,74 @@ try {
       .getByText("Data selectată: 15 august 2027 (2027-08-15)")
       .waitFor();
   });
+  assert.equal(await page.locator("#appointment-time").inputValue(), "10:30");
+  await assert.doesNotReject(async () => {
+    await page.getByText("Ora selectată: 10:30").waitFor();
+  });
 
   await stopRecorderCapture(page, bindingName);
+  await page.locator('[data-testid="calendar-previous-month"]').click();
+  await executeFlowItem(
+    page,
+    {
+      id: "temporary-next-month",
+      type: "action",
+      actionType: "click",
+      title: "Ajunge în septembrie",
+      humanDescription:
+        "Apasă luna următoare până când markerul vizual arată septembrie.",
+      whyExplanation: "Plan AI temporar.",
+      target: {
+        primary: {
+          type: "data_attribute",
+          attribute: "data-testid",
+          operator: "equals",
+          value: "calendar-next-month",
+        },
+      },
+      repeatUntil: {
+        target: {
+          type: "css",
+          operator: "equals",
+          value: "#calendar-heading",
+        },
+        operator: "equals",
+        value: "septembrie 2027",
+        maxAttempts: 24,
+      },
+      fallbacks: [],
+      enabled: true,
+    },
+    {},
+  );
+  await executeFlowItem(
+    page,
+    {
+      id: "temporary-september-day",
+      type: "action",
+      actionType: "click",
+      title: "Alege 15 septembrie",
+      humanDescription: "Alege ziua cerută.",
+      whyExplanation: "Plan AI temporar.",
+      target: {
+        primary: {
+          type: "data_attribute",
+          attribute: "data-testid",
+          operator: "equals",
+          value: "calendar-day-2027-09-15",
+        },
+      },
+      fallbacks: [],
+      enabled: true,
+    },
+    {},
+  );
+  assert.equal(
+    await page.locator("#appointment-date").inputValue(),
+    "2027-09-15",
+  );
   process.stdout.write(
-    `Recorder smoke passed: ${types.join(", ")}; internal events ignored.\n`,
+    `Recorder smoke passed: ${types.join(", ")}; time shown; temporary AI calendar plan reached 2027-09-15.\n`,
   );
 } finally {
   await browser.close();

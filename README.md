@@ -76,6 +76,51 @@ npm run fixture:web:build
 Artefactele sunt generate în `dist/fixture-web` și sunt incluse automat în
 `npm run verify`.
 
+## Fixture MySQL local cu XAMPP
+
+Fixture-ul poate salva formularul direct în MariaDB/MySQL local. Configurația
+implicită este `127.0.0.1:3306`, baza `semantic_fixture`, utilizatorul `root` și
+parola goală. API-ul este disponibil numai pe interfața locală.
+
+Din PowerShell, după pornirea MySQL din XAMPP:
+
+```powershell
+.\scripts\mysql-fixture.ps1 start
+```
+
+Comanda creează sau actualizează schema, pornește API-ul pe
+`http://127.0.0.1:4174` și fixture-ul web pe `http://127.0.0.1:4173`. Nu necesită
+`pnpm`.
+
+Comenzile auxiliare sunt:
+
+```powershell
+.\scripts\mysql-fixture.ps1 status
+.\scripts\mysql-fixture.ps1 reset
+.\scripts\mysql-fixture.ps1 stop
+```
+
+`reset` șterge programările și clienții creați prin fixture, dar păstrează
+sloturile de calendar inițiale.
+
+### E-mail SMTP la trimiterea formularului
+
+Fixture-ul poate trimite o confirmare HTML către adresa introdusă în formular.
+Copiază `.env.fixture.example` ca `.env.fixture`, apoi completează hostul,
+portul, utilizatorul, parola de aplicație și expeditorul SMTP. Fișierul real cu
+secrete este ignorat de Git.
+
+După modificarea configurației, repornește fixture-ul:
+
+```powershell
+.\scripts\mysql-fixture.ps1 stop
+.\scripts\mysql-fixture.ps1 start
+```
+
+Dacă SMTP nu este configurat, programarea se salvează în continuare și interfața
+afișează `SMTP disabled`. Dacă serverul SMTP respinge mesajul, programarea rămâne
+salvată, iar eroarea de trimitere este afișată în statusul formularului.
+
 ## Stadiu
 
 Etapa 0: workspace TypeScript, lint, formatare automată, teste unitare și fixture

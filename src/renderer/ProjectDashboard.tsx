@@ -15,6 +15,8 @@ import { BasicAuthDialog } from "./BasicAuthDialog.js";
 import { ProjectFormModal } from "./ProjectFormModal.js";
 import { PageAnalysisPanel } from "./PageAnalysisPanel.js";
 import { ProjectTestsPanel, TestDetailPage } from "./TestWorkspace.js";
+import { MySqlSettingsPanel } from "./MySqlSettingsPanel.js";
+import { RunHistoryPage } from "./RunHistoryPage.js";
 
 const LAST_PROJECT_STORAGE_KEY = "semantic-app:last-project-id";
 
@@ -45,6 +47,7 @@ export const ProjectDashboard = ({
   const [projects, setProjects] = useState<ProjectOverview[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>();
   const [selectedTest, setSelectedTest] = useState<TestDefinition>();
+  const [isRunHistoryOpen, setIsRunHistoryOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<ProjectOverview>();
   const [deletingProject, setDeletingProject] = useState<ProjectOverview>();
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -183,12 +186,14 @@ export const ProjectDashboard = ({
   const openProject = (projectId: string): void => {
     setSelectedProjectId(projectId);
     setSelectedTest(undefined);
+    setIsRunHistoryOpen(false);
     localStorage.setItem(LAST_PROJECT_STORAGE_KEY, projectId);
   };
 
   const closeProject = (): void => {
     setSelectedProjectId(undefined);
     setSelectedTest(undefined);
+    setIsRunHistoryOpen(false);
     localStorage.removeItem(LAST_PROJECT_STORAGE_KEY);
   };
 
@@ -308,6 +313,16 @@ export const ProjectDashboard = ({
     );
   }
 
+  if (selectedProject && isRunHistoryOpen) {
+    return (
+      <RunHistoryPage
+        api={api}
+        project={selectedProject.project}
+        onBack={() => setIsRunHistoryOpen(false)}
+      />
+    );
+  }
+
   if (selectedProject) {
     return (
       <section className="mt-8" aria-labelledby="project-page-title">
@@ -336,15 +351,23 @@ export const ProjectDashboard = ({
               {selectedProject.project.normalizedBaseUrl}
             </p>
           </div>
-          <Button
-            variant="secondary"
-            onClick={() => {
-              setEditingProject(selectedProject);
-              setIsFormOpen(true);
-            }}
-          >
-            Editează proiectul
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="secondary"
+              onClick={() => setIsRunHistoryOpen(true)}
+            >
+              Istoric rulări
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setEditingProject(selectedProject);
+                setIsFormOpen(true);
+              }}
+            >
+              Editează proiectul
+            </Button>
+          </div>
         </div>
 
         {notification ? (
@@ -636,7 +659,7 @@ const ProjectOverviewPanel = ({
   ];
 
   return (
-    <article className="rounded-2xl border border-app-border bg-app-surface p-6 shadow-sm">
+    <article className="rounded-2xl border border-app-border bg-app-surface p-5 shadow-sm">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-xs font-semibold tracking-[0.14em] text-brand-700 uppercase">
@@ -657,11 +680,11 @@ const ProjectOverviewPanel = ({
         </span>
       </div>
 
-      <div className="mt-6 grid grid-cols-3 gap-3">
+      <div className="mt-5 grid grid-cols-3 gap-3">
         {cards.map((card) => (
           <div
             key={card.label}
-            className="rounded-xl border border-app-border bg-app-canvas p-4"
+            className="rounded-xl border border-app-border bg-slate-50 p-3"
           >
             <p className="text-2xl font-semibold">{card.value}</p>
             <p className="mt-1 text-xs text-app-muted">{card.label}</p>
@@ -669,7 +692,7 @@ const ProjectOverviewPanel = ({
         ))}
       </div>
 
-      <dl className="mt-6 divide-y divide-app-border rounded-xl border border-app-border px-4">
+      <dl className="mt-5 divide-y divide-app-border rounded-xl border border-app-border px-4">
         <OverviewRow
           label="Browser"
           value={project.browserConfig.browserType}
@@ -686,7 +709,7 @@ const ProjectOverviewPanel = ({
           label="Status browser"
           value={formatBrowserStatus(browserStatus, project.id)}
         />
-        <OverviewRow label="Conexiuni" value="Neconfigurate" />
+        <OverviewRow label="Conexiuni" value="Configurabile mai jos" />
       </dl>
 
       <BrowserSelector
@@ -701,6 +724,7 @@ const ProjectOverviewPanel = ({
         project={project}
         onAnalysisCompleted={onPageAnalyzed}
       />
+      <MySqlSettingsPanel api={api} projectId={project.id} />
     </article>
   );
 };

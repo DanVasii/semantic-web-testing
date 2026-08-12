@@ -59,6 +59,8 @@ export interface PageAnalysisResult {
   counts: PageAnalysisCounts;
   inaccessibleStylesheets: InaccessibleStylesheet[];
   artifactDirectory: string;
+  semanticChange?: SemanticChangeSummary;
+  invalidatedTestIds?: string[];
 }
 
 export interface AnalyzedPageSummary {
@@ -67,6 +69,30 @@ export interface AnalyzedPageSummary {
   title: string;
   counts: PageAnalysisCounts;
   inaccessibleStylesheets: InaccessibleStylesheet[];
+  latestChange?: SemanticChangeSummary;
+}
+
+export type SemanticChangeCategory =
+  "dom" | "interactive_elements" | "forms" | "labels" | "repeated_components";
+
+export interface SemanticChangeMetric {
+  category: SemanticChangeCategory;
+  score: number;
+  previousCount: number;
+  currentCount: number;
+  added: number;
+  removed: number;
+}
+
+export interface SemanticChangeSummary {
+  previousPageVersionId: string;
+  currentPageVersionId: string;
+  score: number;
+  threshold: number;
+  exceeded: boolean;
+  metrics: SemanticChangeMetric[];
+  ignoredDynamicIds: number;
+  ignoredTokens: number;
 }
 
 export const normalizeAnalyzedPageUrl = (value: string): string => {
