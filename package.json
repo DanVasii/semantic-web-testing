@@ -5,6 +5,7 @@
   "type": "module",
   "main": "dist/main/index.js",
   "description": "Aplicație desktop pentru testare web semantică end-to-end.",
+  "license": "MIT",
   "engines": {
     "node": ">=22.0.0"
   },

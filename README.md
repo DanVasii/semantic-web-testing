@@ -325,3 +325,7 @@ IMAP checks wait for matching new messages and can require manual abandonment if
 Use synthetic datasets for shared demos. Connection secrets use Electron's local secure-storage facilities where available, while datasets, screenshots, emails, traces, and exports can contain the application data used in a test. Review those artifacts before sharing them, and review the context supplied to an enabled AI provider.
 
 More detail: [integration tutorial](docs/INTEGRATIONS.md) · [detailed product behavior, in Romanian](docs/PRODUCT_LOGIC_REVIEW.ro.md).
+
+## License
+
+Released under the [MIT License](LICENSE).
