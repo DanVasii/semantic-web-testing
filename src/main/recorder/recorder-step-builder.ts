@@ -1,5 +1,6 @@
 import type {
   RecorderElementSnapshot,
+  RecorderFrameContext,
   RecorderRawEvent,
   RecorderStepDraft,
 } from "../../shared/recorder.js";
@@ -91,6 +92,37 @@ const simpleLocatorCandidates = (
       });
     }
   }
+  if (target.id !== undefined && target.id.length > 0) {
+    candidates.push({
+      type: "css",
+      operator: "equals",
+      value: `#${escapeCssIdentifier(target.id)}`,
+    });
+  }
+  if (target.name !== undefined && target.name.length > 0) {
+    const escapedName = escapeCssString(target.name);
+    const typeSelector =
+      target.inputType === undefined
+        ? ""
+        : `[type="${escapeCssString(target.inputType)}"]`;
+    candidates.push({
+      type: "css",
+      operator: "equals",
+      value: `${target.tagName}${typeSelector}[name="${escapedName}"]`,
+    });
+  }
+  if (
+    target.tagName === "a" &&
+    target.href !== undefined &&
+    target.href.length > 0 &&
+    target.href.length <= 500
+  ) {
+    candidates.push({
+      type: "css",
+      operator: "equals",
+      value: `a[href="${escapeCssString(target.href)}"]`,
+    });
+  }
   const label = compactText(target.label);
   if (label !== undefined) {
     candidates.push({ type: "label", operator: "equals", value: label });
@@ -112,23 +144,6 @@ const simpleLocatorCandidates = (
       type: "placeholder",
       operator: "equals",
       value: placeholder,
-    });
-  }
-  if (target.id !== undefined && target.id.length > 0) {
-    candidates.push({
-      type: "css",
-      operator: "equals",
-      value: `#${escapeCssIdentifier(target.id)}`,
-    });
-  }
-  if (target.name !== undefined && target.name.length > 0) {
-    const escapedName = target.name
-      .replaceAll("\\", "\\\\")
-      .replaceAll('"', '\\"');
-    candidates.push({
-      type: "css",
-      operator: "equals",
-      value: `${target.tagName}[name="${escapedName}"]`,
     });
   }
   const title = compactText(target.title);
@@ -176,7 +191,11 @@ const targetDefinition = (
   target: RecorderElementSnapshot,
   fieldId: string | undefined,
   preferredCandidates: SimpleLocator[] = [],
-): Pick<ActionStep, "target" | "fallbacks"> => {
+  frameContext?: RecorderFrameContext,
+): {
+  target: NonNullable<ActionStep["target"]>;
+  fallbacks: LocatorFallback[];
+} => {
   const candidates = [
     ...preferredCandidates,
     ...simpleLocatorCandidates(target),
@@ -217,10 +236,15 @@ const targetDefinition = (
     target: {
       ...(fieldId === undefined ? {} : { fieldId }),
       primary,
+      ...(frameContext === undefined
+        ? {}
+        : { frame: structuredClone(frameContext) }),
     },
     fallbacks: candidates
       .filter(
-        (candidate) => JSON.stringify(candidate) !== JSON.stringify(inside),
+        (candidate) =>
+          primary.type === "repeated_component" ||
+          JSON.stringify(candidate) !== JSON.stringify(inside),
       )
       .slice(0, 3)
       .map(fallbackFrom),
@@ -264,17 +288,29 @@ export const buildRecorderStep = (
     };
   }
   if (event.type === "scroll") {
+    const scrollTarget =
+      event.target === undefined
+        ? undefined
+        : targetDefinition(event.target, undefined, [], event.frameContext);
     return {
       step: {
         ...baseStep(
           event,
           options,
-          "Derulează pagina",
-          "Derulează pagina până la zona relevantă următoare.",
+          scrollTarget === undefined
+            ? "Derulează pagina"
+            : "Derulează containerul",
+          scrollTarget === undefined
+            ? "Derulează pagina până la zona relevantă următoare."
+            : "Derulează zona internă până la conținutul relevant următor.",
         ),
         actionType: "scroll",
         scrollX: Math.round(event.scrollX ?? 0),
         scrollY: Math.round(event.scrollY ?? 0),
+        ...(event.scrollMode === undefined
+          ? {}
+          : { scrollMode: event.scrollMode }),
+        ...(scrollTarget ?? {}),
       },
     };
   }
@@ -284,7 +320,13 @@ export const buildRecorderStep = (
     throw new Error(`Evenimentul ${event.type} nu are element țintă.`);
   }
   const name = elementName(target);
-  const isInput = ["fill", "select", "checkbox", "radio"].includes(event.type);
+  const isInput = [
+    "fill",
+    "upload_file",
+    "select",
+    "checkbox",
+    "radio",
+  ].includes(event.type);
   const fieldId = isInput
     ? toSemanticFieldId(
         target.name ?? target.label ?? target.ariaLabel ?? target.id ?? name,
@@ -304,7 +346,12 @@ export const buildRecorderStep = (
           },
         ]
       : [];
-  const locator = targetDefinition(target, fieldId, preferredLocators);
+  const locator = targetDefinition(
+    target,
+    fieldId,
+    preferredLocators,
+    event.frameContext,
+  );
   const requiredFieldId = (): string => {
     if (fieldId === undefined) {
       throw new Error(`Evenimentul ${event.type} nu are un câmp semantic.`);
@@ -313,7 +360,35 @@ export const buildRecorderStep = (
   };
 
   switch (event.type) {
-    case "click":
+    case "hover":
+      return {
+        step: {
+          ...baseStep(
+            event,
+            options,
+            `Treci mouse-ul peste ${name}`,
+            `Poziționează mouse-ul peste elementul „${name}”.`,
+          ),
+          actionType: "hover",
+          ...locator,
+        },
+      };
+    case "click": {
+      const revealBefore = (event.hoverCandidates ?? [])
+        .slice(0, 3)
+        .map((candidate) => {
+          const definition = targetDefinition(
+            candidate,
+            undefined,
+            [],
+            event.frameContext,
+          );
+          return {
+            action: "hover" as const,
+            target: definition.target,
+            fallbacks: definition.fallbacks,
+          };
+        });
       return {
         step: {
           ...baseStep(
@@ -324,8 +399,10 @@ export const buildRecorderStep = (
           ),
           actionType: "click",
           ...locator,
+          ...(revealBefore.length === 0 ? {} : { revealBefore }),
         },
       };
+    }
     case "fill":
       return {
         step: {
@@ -344,6 +421,22 @@ export const buildRecorderStep = (
         capturedValue: event.value ?? "",
         capturedInputKind:
           target.inputType === "password" ? "password" : "text",
+      };
+    case "upload_file":
+      return {
+        step: {
+          ...baseStep(
+            event,
+            options,
+            `Încarcă fișier în ${name}`,
+            `Încarcă în câmpul „${name}” fișierul asociat în dataset.`,
+          ),
+          actionType: "upload_file",
+          ...locator,
+          inputFieldId: requiredFieldId(),
+          valueKey: requiredFieldId(),
+          valueStrategy: "dataset",
+        },
       };
     case "select":
       return {

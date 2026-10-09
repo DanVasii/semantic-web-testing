@@ -127,6 +127,7 @@ describe("AiStepEditorModal", () => {
       getAiSettings: vi.fn().mockResolvedValue({
         provider: "gemini",
         ollama: { baseUrl: "http://127.0.0.1:11434", model: "" },
+        lmStudio: { baseUrl: "http://127.0.0.1:1234", model: "" },
         gemini: { model: "gemini-flash", apiKeyConfigured: true },
       }),
       testAiConnection: vi.fn(),

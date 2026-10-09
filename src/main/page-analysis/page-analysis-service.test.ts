@@ -281,6 +281,128 @@ describe("PageAnalysisService", () => {
     expect(JSON.stringify(aiContext)).not.toContain(capture.css);
   });
 
+  it("maps captured forms to semantic fields without using AI", async () => {
+    const formPath = "/html[1]/body[1]/form[1]";
+    const label = {
+      ...element,
+      path: `${formPath}/label[1]`,
+      cssSelector: "#contact > label",
+      tag: "label",
+      text: "Adresă e-mail",
+      attributes: { for: "contact-email" },
+      ariaAttributes: {},
+      dataAttributes: {},
+      parentPath: formPath,
+      formPath,
+    };
+    const email = {
+      ...element,
+      path: `${formPath}/input[1]`,
+      cssSelector: "#contact-email",
+      tag: "input",
+      text: "",
+      attributes: {
+        id: "contact-email",
+        name: "customer_email",
+        type: "email",
+        required: "",
+        autocomplete: "email",
+      },
+      ariaAttributes: {},
+      dataAttributes: {},
+      parentPath: formPath,
+      formPath,
+    };
+    const consentLabel = {
+      ...element,
+      path: `${formPath}/label[2]`,
+      cssSelector: "#contact > label:nth-of-type(2)",
+      tag: "label",
+      text: "Sunt de acord să primesc noutăți și oferte prin e-mail.",
+      attributes: { for: "marketing-consent" },
+      ariaAttributes: {},
+      dataAttributes: {},
+      parentPath: formPath,
+      formPath,
+    };
+    const consent = {
+      ...element,
+      path: `${formPath}/input[2]`,
+      cssSelector: "#marketing-consent",
+      tag: "input",
+      text: "",
+      attributes: {
+        id: "marketing-consent",
+        name: "marketing_consent",
+        type: "checkbox",
+      },
+      ariaAttributes: {},
+      dataAttributes: {},
+      parentPath: formPath,
+      formPath,
+    };
+    const submit = {
+      ...element,
+      path: `${formPath}/button[1]`,
+      cssSelector: "#contact-submit",
+      tag: "button",
+      text: "Trimite",
+      attributes: { id: "contact-submit", type: "submit" },
+      ariaAttributes: {},
+      dataAttributes: {},
+      parentPath: formPath,
+      formPath,
+    };
+    capture = createCapture({
+      allElements: [label, email, consentLabel, consent, submit],
+      interactiveElements: [email, consent, submit],
+      forms: [
+        {
+          path: formPath,
+          cssSelector: "#contact",
+          name: "contact",
+          method: "post",
+          action: "https://example.test/contact",
+          fieldPaths: [email.path, consent.path, submit.path],
+        },
+      ],
+      inputs: [email, consent],
+      buttons: [submit],
+      counts: {
+        ...createCapture().counts,
+        forms: 1,
+        inputs: 2,
+        buttons: 1,
+      },
+    });
+
+    const analyzed = await service.analyzeCurrentPage(project.id);
+    const forms = await service.listForms(project.id, analyzed.page.id);
+
+    expect(forms).toHaveLength(1);
+    expect(forms[0]).toMatchObject({
+      title: "contact",
+      method: "post",
+      fields: [
+        {
+          name: "customer_email",
+          label: "Adresă e-mail",
+          semanticType: "email",
+          required: true,
+          locator: { value: "#contact-email" },
+        },
+        {
+          name: "marketing_consent",
+          label: "Sunt de acord să primesc noutăți și oferte prin e-mail.",
+          inputType: "checkbox",
+          semanticType: "unknown",
+          locator: { value: "#marketing-consent" },
+        },
+      ],
+      submit: { label: "Trimite", locator: { value: "#contact-submit" } },
+    });
+  });
+
   it("adds compact runtime hints for custom calendar controls and date cells", async () => {
     const marker = {
       ...element,

@@ -13,6 +13,7 @@ describe("dataset materializer", () => {
         updatedAt: "2026-07-24T10:00:00.000Z",
         values: {
           name: { type: "fixed", value: "Ana" },
+          cv: { type: "file", path: "C:\\managed\\cv.pdf", name: "cv.pdf" },
           uuid: { type: "generated", strategy: "uuid" },
           number: {
             type: "generated",
@@ -36,6 +37,7 @@ describe("dataset materializer", () => {
 
     expect(values).toEqual({
       name: "Ana",
+      cv: "C:\\managed\\cv.pdf",
       uuid: "generated-id",
       number: "15",
       date: "2026-07-26",

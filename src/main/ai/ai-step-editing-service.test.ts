@@ -271,6 +271,63 @@ describe("AiStepEditingService", () => {
     expect(savedFlow?.[2]?.title).toBe("Alege ora 10:30");
   });
 
+  it("applies an AI-generated compliance rule and timeout to a check", async () => {
+    const checkTest: TestDefinition = {
+      ...test,
+      flowItems: [
+        {
+          id: "check-message",
+          type: "check",
+          checkType: "element",
+          title: "Mesaj vizibil",
+          humanDescription: "Verifică mesajul.",
+          config: {
+            target: { type: "css", operator: "equals", value: "#message" },
+            state: "visible",
+          },
+          timeoutMs: 5_000,
+          enabled: true,
+        },
+      ],
+    };
+    tests.get.mockReturnValue(checkTest);
+    const checkProposal: AiStepEditProposal = {
+      summary: "Verifică textul mesajului.",
+      currentStepChange: {
+        stepId: "check-message",
+        patch: {
+          checkType: "text",
+          checkConfig: {
+            target: { type: "css", operator: "equals", value: "#message" },
+            operator: "contains",
+            value: "Salvat",
+            caseSensitive: false,
+          },
+          timeoutMs: 10_000,
+        },
+        rationale: "Așteaptă confirmarea exactă.",
+      },
+      downstreamChanges: [],
+    };
+
+    await service.apply({
+      projectId: "project-1",
+      testId: "test-1",
+      baseVersion: 4,
+      selectedStepId: "check-message",
+      proposal: checkProposal,
+      approvedDownstreamStepIds: [],
+    });
+
+    const savedFlow = tests.saveAiFlow.mock.calls.at(-1)?.[2] as
+      TestDefinition["flowItems"] | undefined;
+    expect(savedFlow?.[0]).toMatchObject({
+      checkType: "text",
+      timeoutMs: 10_000,
+      config: { operator: "contains", value: "Salvat" },
+    });
+  });
+
   it("rejects upstream or stale proposals before creating a version", async () => {
     await expect(
       service.apply({

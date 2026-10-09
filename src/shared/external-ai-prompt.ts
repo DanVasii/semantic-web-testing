@@ -30,7 +30,7 @@ Reguli:
 - ID-urile pașilor trebuie să fie unice, stabile și lizibile, de exemplu "step-open-login".
 - Nu include cod JavaScript, Playwright, shell, secrete, setări de browser, conexiuni AI, MySQL sau IMAP.
 - Tipuri de acțiuni permise: ${ACTION_TYPES.join(", ")}.
-- Tipuri de verificări permise: element, text, url, mysql, imap.
+- Tipuri de verificări permise: element, text, url, mysql, imap, js_eval, visual, adaptive.
 - Păstrează wipeBeforeRun pe false. Curățarea sesiunii se face numai manual, după run.
 - Locatori simpli permiși: ${SIMPLE_LOCATOR_TYPES.join(", ")}.
 - Operatori permiși: ${MATCH_OPERATORS.join(", ")}.
@@ -39,8 +39,18 @@ Reguli:
 - O țintă are forma {"primary":{"type":"data_attribute","attribute":"data-testid","operator":"equals","value":"login-button"}}.
 - Un fallback are locator, humanDescription și whyExplanation.
 - Pentru fill/select_option/check/uncheck folosește inputFieldId, valueKey și valueStrategy="dataset"; valoarea efectivă se pune în datasets, nu în pas.
-- Pentru navigate folosește url. Pentru press_key folosește key. Pentru scroll folosește scrollX și scrollY.
+- Pentru navigate folosește url. Pentru hover și click folosește target. Pentru press_key folosește key. Pentru scroll folosește scrollX și scrollY; scrollMode poate fi "dom" sau "wheel".
 - Pentru o verificare sunt obligatorii: id, type="check", checkType, title, humanDescription, config și enabled.
+- Pentru verificările element/text/url poți adăuga timeoutMs între 0 și 120000; runnerul repetă verificarea până când condiția este îndeplinită sau expiră timeout-ul.
+- Config element: {"target": locator, "state": "visible|hidden|enabled|disabled|checked|unchecked"}.
+- Config text: {"target": locator, "operator": operator permis, "value": "text așteptat", "caseSensitive": false}.
+- Config URL: {"operator": operator permis, "value": "valoare URL", "caseSensitive": false}.
+- Config js_eval: {"jsSnippet": "cod js", "expectedResult": valoare}. Scriptul rulează în contextul paginii (page.evaluate) și trebuie să returneze un obiect de forma { passed: boolean, message: string } sau o altă valoare pe care o compari folosind "expectedResult". Pentru verificări UI cu js_eval, verifică mereu vizibilitatea efectivă (ex: getComputedStyle(el).display !== 'none' și offsetParent !== null).
+- Config visual: {"prompt": "ce trebuie confirmat exclusiv din captura completă a paginii", "minimumConfidence": 0.6}. Folosește acest tip când cerința este vagă sau predominant vizuală și nu există selector ori mesaj explicit verificabil determinist.
+- Config adaptive: {"strategy":"auto|dom|visual","expectedTexts":["mesaje concrete"],"matchMode":"any|all|exact","visualPrompt":"cerința vizuală","visualFallback":true,"minimumConfidence":0.6}. În auto, expectedTexts nevid verifică DOM, iar lista goală folosește imaginea. Nu inventa mesaje.
+- Dacă folosești js_eval pentru a căuta text, ia în calcul ignorarea diacriticelor (ex. normalize("NFD").replace(/[\\u0300-\\u036f]/g, "")) sau folosirea regex insensitiv la majuscule.
+- INTERZIS ABSOLUT SĂ INVENTEZI SELECTORI CSS sau cuvinte-cheie. Pentru rezultate fără selector sigur folosește adaptive, nu js_eval bazat pe document.body.innerText.
+- IMPORTANT: Dacă primești "targetSelector" în context, îl poți folosi pentru element/text sau ca target în adaptive. Fără target cert folosește adaptive.
 - Un breakpoint are id, type="breakpoint", title, instructions și enabled.
 - O intervenție manuală are id, type="manual_intervention", title, instructions, humanDescription, whyExplanation și enabled.
 - Nu inventa pageId. Nu adăuga proprietăți care nu sunt definite aici.

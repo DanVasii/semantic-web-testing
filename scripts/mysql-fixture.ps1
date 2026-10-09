@@ -18,12 +18,7 @@ function Resolve-NodeExecutable {
     return $NodeCommand.Source
   }
 
-  $BundledNode = "C:\Users\Dan\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"
-  if (Test-Path -LiteralPath $BundledNode) {
-    return $BundledNode
-  }
-
-  throw "Node.js nu a fost găsit în PATH și nici în runtime-ul Codex."
+  throw "Node.js nu a fost găsit în PATH. Instalează Node.js și redeschide terminalul."
 }
 
 function Get-OwnedProcess {

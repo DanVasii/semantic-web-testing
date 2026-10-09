@@ -13,7 +13,10 @@ export interface TestPostRunChecks {
   };
   imap: {
     enabled: boolean;
+    inboxes: ImapInboxCheck[];
+    /** @deprecated Derivat din inboxes pentru compatibilitate. */
     accountIds: string[];
+    /** @deprecated Filtrele globale sunt migrate în inboxes. */
     mailbox: string;
     sender: string;
     recipient: string;
@@ -23,6 +26,17 @@ export interface TestPostRunChecks {
     /** @deprecated Prompturile separate sunt reunite de normalizare. */
     aiPrompt?: string;
   };
+}
+
+export interface ImapInboxCheck {
+  id: string;
+  accountId: string;
+  mailbox: string;
+  sender: string;
+  recipient: string;
+  subjectEquals: string;
+  subjectContains: string;
+  bodyContains: string;
 }
 
 export interface RunPostRunSelection {
@@ -78,6 +92,7 @@ export const defaultTestPostRunChecks = (): TestPostRunChecks => ({
   },
   imap: {
     enabled: false,
+    inboxes: [],
     accountIds: [],
     mailbox: "INBOX",
     sender: "",
@@ -105,6 +120,32 @@ export const normalizeTestPostRunChecks = (
   const legacyAccountId = (
     value.imap as TestPostRunChecks["imap"] & { accountId?: string }
   ).accountId;
+  const legacyAccountIds =
+    value.imap.accountIds?.length > 0
+      ? [...value.imap.accountIds]
+      : legacyAccountId === undefined || legacyAccountId.length === 0
+        ? []
+        : [legacyAccountId];
+  const rawInboxes = (
+    value.imap as TestPostRunChecks["imap"] & {
+      inboxes?: ImapInboxCheck[];
+    }
+  ).inboxes;
+  const inboxes =
+    Array.isArray(rawInboxes) && rawInboxes.length > 0
+      ? structuredClone(rawInboxes)
+      : legacyAccountIds.map((accountId, index) => ({
+          id: `legacy-${index + 1}`,
+          accountId,
+          mailbox: value.imap.mailbox ?? defaults.imap.mailbox,
+          sender: value.imap.sender ?? defaults.imap.sender,
+          recipient: value.imap.recipient ?? defaults.imap.recipient,
+          subjectEquals:
+            value.imap.subjectEquals ?? defaults.imap.subjectEquals,
+          subjectContains:
+            value.imap.subjectContains ?? defaults.imap.subjectContains,
+          bodyContains: value.imap.bodyContains ?? defaults.imap.bodyContains,
+        }));
   return {
     aiPrompt:
       currentPrompt.trim().length > 0 || legacyPrompt.length === 0
@@ -117,12 +158,8 @@ export const normalizeTestPostRunChecks = (
     },
     imap: {
       enabled: value.imap.enabled ?? defaults.imap.enabled,
-      accountIds:
-        value.imap.accountIds?.length > 0
-          ? [...value.imap.accountIds]
-          : legacyAccountId === undefined || legacyAccountId.length === 0
-            ? []
-            : [legacyAccountId],
+      inboxes,
+      accountIds: inboxes.map(({ accountId }) => accountId),
       mailbox: value.imap.mailbox ?? defaults.imap.mailbox,
       sender: value.imap.sender ?? defaults.imap.sender,
       recipient: value.imap.recipient ?? defaults.imap.recipient,
@@ -158,6 +195,8 @@ export const validateTestPostRunChecks = (
     !Array.isArray(normalized.mysql.tableNames) ||
     !Array.isArray(normalized.mysql.identities) ||
     typeof normalized.imap?.enabled !== "boolean" ||
+    !Array.isArray(normalized.imap.inboxes) ||
+    normalized.imap.inboxes.length > 50 ||
     !Array.isArray(normalized.imap.accountIds) ||
     normalized.imap.accountIds.length > 50 ||
     normalized.imap.accountIds.some(
@@ -181,6 +220,45 @@ export const validateTestPostRunChecks = (
     normalized.imap.bodyContains.length > 4_000
   ) {
     throw new Error("Configurația verificărilor post-run nu este validă.");
+  }
+  const inboxes = normalized.imap.inboxes.map((inbox) => {
+    if (
+      typeof inbox !== "object" ||
+      inbox === null ||
+      typeof inbox.id !== "string" ||
+      inbox.id.trim().length === 0 ||
+      inbox.id.length > 200 ||
+      typeof inbox.accountId !== "string" ||
+      inbox.accountId.trim().length === 0 ||
+      inbox.accountId.length > 200 ||
+      typeof inbox.mailbox !== "string" ||
+      inbox.mailbox.trim().length === 0 ||
+      inbox.mailbox.length > 200 ||
+      typeof inbox.sender !== "string" ||
+      inbox.sender.length > 320 ||
+      typeof inbox.recipient !== "string" ||
+      inbox.recipient.length > 320 ||
+      typeof inbox.subjectEquals !== "string" ||
+      inbox.subjectEquals.length > 998 ||
+      typeof inbox.subjectContains !== "string" ||
+      inbox.subjectContains.length > 998 ||
+      typeof inbox.bodyContains !== "string" ||
+      inbox.bodyContains.length > 4_000
+    )
+      throw new Error("Configurația unui inbox IMAP nu este validă.");
+    return {
+      id: inbox.id.trim(),
+      accountId: inbox.accountId.trim(),
+      mailbox: inbox.mailbox.trim(),
+      sender: inbox.sender.trim(),
+      recipient: inbox.recipient.trim(),
+      subjectEquals: inbox.subjectEquals.trim(),
+      subjectContains: inbox.subjectContains.trim(),
+      bodyContains: inbox.bodyContains.trim(),
+    };
+  });
+  if (new Set(inboxes.map(({ id }) => id)).size !== inboxes.length) {
+    throw new Error("ID-urile check-urilor IMAP trebuie să fie unice.");
   }
   const tableNames = [...new Set(normalized.mysql.tableNames)];
   if (
@@ -224,11 +302,8 @@ export const validateTestPostRunChecks = (
     },
     imap: {
       enabled: normalized.imap.enabled,
-      accountIds: [
-        ...new Set(
-          normalized.imap.accountIds.map((accountId) => accountId.trim()),
-        ),
-      ],
+      inboxes,
+      accountIds: [...new Set(inboxes.map(({ accountId }) => accountId))],
       mailbox: normalized.imap.mailbox.trim(),
       sender: normalized.imap.sender.trim(),
       recipient: normalized.imap.recipient.trim(),

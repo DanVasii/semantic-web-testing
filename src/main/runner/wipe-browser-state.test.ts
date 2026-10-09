@@ -148,6 +148,48 @@ describe("wipeBrowserStateForOrigin", () => {
     expect(harness.spies.goto).toHaveBeenCalledOnce();
   });
 
+  it("clears every context cookie including Secure and reports cookies recreated after reload", async () => {
+    const harness = createHarness();
+    harness.spies.cookies
+      .mockReset()
+      .mockResolvedValueOnce([
+        {
+          name: "wordpress_session",
+          domain: ".example.test",
+          secure: true,
+        },
+        { name: "stripe_session", domain: "js.stripe.com", secure: true },
+      ])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          name: "new_session",
+          domain: "shop.example.test",
+          secure: true,
+        },
+      ]);
+
+    const result = await wipeBrowserStateForOrigin(
+      harness.context,
+      harness.page,
+      "https://shop.example.test:8443/products",
+      { clearAllContextCookies: true },
+    );
+
+    expect(harness.spies.clearCookies).toHaveBeenCalledWith();
+    expect(harness.spies.cookies).toHaveBeenCalledTimes(3);
+    const cookieEntry = result.entries.find(
+      ({ resource }) => resource === "cookies",
+    );
+    expect(cookieEntry).toMatchObject({
+      status: "cleared",
+      count: 2,
+    });
+    expect(cookieEntry?.message).toContain(
+      "serverele paginii au recreat 1 cookie-uri",
+    );
+  });
+
   it("reports a critical storage failure and does not reload the test", async () => {
     const harness = createHarness([
       {

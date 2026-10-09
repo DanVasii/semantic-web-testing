@@ -5,6 +5,7 @@ import { userEvent } from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SemanticAppApi } from "../shared/ipc.js";
+import type { AnalyzedForm } from "../shared/form-analysis.js";
 import type {
   PageAnalysisProgress,
   PageAnalysisResult,
@@ -79,17 +80,31 @@ const createApi = (): {
   let progressListener: ((progress: PageAnalysisProgress) => void) | undefined;
   const api: SemanticAppApi = {
     getAppInfo: vi.fn(),
-    getAiSettings: vi.fn(),
+    getAiSettings: vi.fn().mockResolvedValue({
+      provider: "ollama",
+      ollama: { baseUrl: "http://127.0.0.1:11434", model: "default-model" },
+      lmStudio: { baseUrl: "http://127.0.0.1:1234", model: "" },
+      gemini: { model: "", apiKeyConfigured: false },
+    }),
     saveAiSettings: vi.fn(),
+    getAiModelPricing: vi.fn(),
+    saveAiModelPricing: vi.fn(),
     testAiConnection: vi.fn(),
-    listAiModels: vi.fn(),
+    listAiModels: vi.fn().mockResolvedValue([
+      { id: "default-model", displayName: "Default model" },
+      { id: "form-model", displayName: "Form model" },
+    ]),
     previewAiRequest: vi.fn(),
+    generateAiRequest: vi.fn(),
     previewAiRunPlan: vi.fn(),
     generateAiRunPlan: vi.fn(),
     previewAiStepEdit: vi.fn(),
     generateAiStepEdit: vi.fn(),
     applyAiStepChanges: vi.fn(),
     undoAiStepChange: vi.fn(),
+    previewAiSimilarTest: vi.fn(),
+    generateAiSimilarTest: vi.fn(),
+    createAiSimilarTest: vi.fn(),
     listProjects: vi.fn(),
     createProject: vi.fn(),
     updateProject: vi.fn(),
@@ -186,6 +201,7 @@ const createApi = (): {
     purgeRunHistoryData: vi.fn(),
     onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
     startRecorder: vi.fn(),
+    continueRecorder: vi.fn(),
     stopRecorder: vi.fn(),
     addRecorderStep: vi.fn(),
     discardRecorderStep: vi.fn(),
@@ -208,6 +224,143 @@ afterEach(() => {
 });
 
 describe("PageAnalysisPanel", () => {
+  it("opens detected forms and calls AI only after Generate tests", async () => {
+    const user = userEvent.setup();
+    const { api } = createApi();
+    const analyzedForm: AnalyzedForm = {
+      id: "form-contact",
+      pageId: result.page.id,
+      pageVersionId: result.version.id,
+      pageTitle: result.title,
+      pageUrl: result.url,
+      title: "Contact",
+      method: "post",
+      action: "https://example.test/contact",
+      locator: { type: "css", operator: "equals", value: "#contact" },
+      fields: [
+        {
+          id: "field-email",
+          name: "email",
+          label: "Adresă e-mail",
+          tag: "input",
+          inputType: "email",
+          semanticType: "email",
+          required: true,
+          disabled: false,
+          locator: { type: "css", operator: "equals", value: "#email" },
+          options: [],
+        },
+      ],
+      submit: {
+        label: "Trimite",
+        locator: { type: "css", operator: "equals", value: "#submit" },
+      },
+    };
+    vi.mocked(api.listAnalyzedPages).mockResolvedValue([
+      {
+        page: result.page,
+        latestVersion: result.version,
+        title: result.title,
+        counts: result.counts,
+        inaccessibleStylesheets: [],
+      },
+    ]);
+    api.listAnalyzedPageForms = vi.fn().mockResolvedValue([analyzedForm]);
+    api.getProjectFormSettings = vi.fn().mockResolvedValue({
+      projectId: project.id,
+      defaults: {},
+      defaultImapAccountId: "imap-1",
+    });
+    vi.mocked(api.listImapAccounts).mockResolvedValue([
+      {
+        id: "imap-1",
+        name: "QA",
+        host: "imap.example.test",
+        port: 993,
+        secure: true,
+        username: "qa@example.test",
+        mailbox: "INBOX",
+        passwordConfigured: true,
+      },
+    ]);
+    api.generateFormTests = vi.fn().mockResolvedValue({
+      provider: "ollama",
+      model: "test-model",
+      pageId: result.page.id,
+      formId: analyzedForm.id,
+      summary: "Scenarii pentru contact",
+      scenarios: [
+        {
+          id: "valid",
+          name: "Contact valid",
+          description: "Trimite formularul valid.",
+          kind: "valid",
+          values: [],
+          omittedFieldIds: [],
+          invalidFieldIds: [],
+          expectedMessages: ["Mulțumim"],
+          expectEmail: true,
+        },
+      ],
+      usage: { inputTokens: 100, outputTokens: 40, totalTokens: 140 },
+    });
+    api.createGeneratedFormTests = vi.fn().mockResolvedValue({ tests: [] });
+    vi.mocked(api.getAiSettings).mockResolvedValue({
+      provider: "ollama",
+      ollama: { baseUrl: "http://127.0.0.1:11434", model: "default-model" },
+      lmStudio: { baseUrl: "http://127.0.0.1:1234", model: "" },
+      gemini: { model: "gemini-default", apiKeyConfigured: true },
+      openai: { model: "", apiKeyConfigured: false },
+    });
+    vi.mocked(api.listAiModels).mockImplementation((provider) =>
+      Promise.resolve(
+        provider === "gemini"
+          ? [
+              { id: "gemini-default", displayName: "Gemini default" },
+              { id: "gemini-form", displayName: "Gemini form" },
+            ]
+          : [
+              { id: "default-model", displayName: "Default model" },
+              { id: "form-model", displayName: "Form model" },
+            ],
+      ),
+    );
+
+    render(
+      <PageAnalysisPanel
+        api={api}
+        browserStatus={{ state: "running", projectId: project.id }}
+        project={project}
+        onAnalysisCompleted={vi.fn()}
+      />,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "View forms (1)" }),
+    );
+    expect(await screen.findByText("Adresă e-mail")).not.toBeNull();
+    expect(api.generateFormTests).not.toHaveBeenCalled();
+    await user.selectOptions(screen.getByLabelText("Provider AI"), "gemini");
+    await waitFor(() =>
+      expect(api.listAiModels).toHaveBeenCalledWith("gemini"),
+    );
+    await user.selectOptions(
+      screen.getByLabelText(/Model AI pentru formulare/u),
+      "gemini-form",
+    );
+    await user.click(screen.getByRole("button", { name: "Generează teste" }));
+    expect(await screen.findByText("Preview teste propuse")).not.toBeNull();
+    expect(api.generateFormTests).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: project.id,
+        formId: analyzedForm.id,
+        imapAccountId: "imap-1",
+        provider: "gemini",
+        model: "gemini-form",
+      }),
+    );
+  });
+
   it("analyzes the detected page and displays progress and result counts", async () => {
     const user = userEvent.setup();
     const { api, emitProgress } = createApi();

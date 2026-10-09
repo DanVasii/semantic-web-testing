@@ -27,6 +27,7 @@ export interface RecorderStepDraft {
 export interface RecorderSnapshot {
   projectId: string;
   testId: string;
+  stageId?: string;
   state: RecorderState;
   signal: RecorderSignal;
   message: string;
@@ -39,11 +40,14 @@ export interface RecorderSnapshot {
   canStop: boolean;
   canRetry: boolean;
   canIgnore: boolean;
+  continuationReady?: boolean;
 }
 
 export type RecorderEventType =
+  | "hover"
   | "click"
   | "fill"
+  | "upload_file"
   | "select"
   | "checkbox"
   | "radio"
@@ -56,10 +60,15 @@ export interface RecorderRepeatedContext {
   distinguishingText?: string;
 }
 
+export interface RecorderFrameContext {
+  origin: string;
+}
+
 export interface RecorderElementSnapshot {
   tagName: string;
   inputType?: string;
   id?: string;
+  href?: string;
   name?: string;
   text?: string;
   label?: string;
@@ -78,11 +87,14 @@ export interface RecorderRawEvent {
   url: string;
   timestamp: string;
   target?: RecorderElementSnapshot;
+  hoverCandidates?: RecorderElementSnapshot[];
   value?: string;
   checked?: boolean;
   key?: string;
   scrollX?: number;
   scrollY?: number;
+  scrollMode?: "dom" | "wheel";
+  frameContext?: RecorderFrameContext;
 }
 
 export const isRecorderSnapshot = (

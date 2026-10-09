@@ -83,7 +83,18 @@ export interface TestDefinition {
   createdAt: string;
   updatedAt: string;
   flowItems: TestFlowItem[];
+  /** Canonical multi-flow structure. Missing means a legacy single-flow test. */
+  stages?: import("./test-stages.js").TestStage[];
   postRunChecks?: import("./post-run-checks.js").TestPostRunChecks;
+  aiGeneration?: {
+    sourceType?: "test" | "form";
+    sourceTestId?: string;
+    sourceFormId?: string;
+    instruction: string;
+    provider: string;
+    model: string;
+    generatedAt: string;
+  };
   invalidation?: TestInvalidation;
 }
 
@@ -127,6 +138,7 @@ export interface StepRunResult {
   id: string;
   runId: string;
   stepId: string;
+  stageId?: string;
   status:
     | "pending"
     | "running"

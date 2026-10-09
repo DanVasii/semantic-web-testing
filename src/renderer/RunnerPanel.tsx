@@ -16,13 +16,27 @@ import type {
   TestDefinition,
   TestRun,
 } from "../shared/persistence.js";
-import type { RunnerSnapshot, RunMode } from "../shared/runner.js";
+import type {
+  RunnerSnapshot,
+  RunMode,
+  VisualCheckDebug,
+} from "../shared/runner.js";
+import type { BrowserManagerStatus } from "../shared/browser-manager.js";
 import { normalizeTestPostRunChecks } from "../shared/post-run-checks.js";
 import type { DatasetValue, TestFlowItem } from "../shared/test-model.js";
+import { testFlowRequiresAi } from "../shared/test-ai-requirements.js";
 import { getContinueShortcut, matchesShortcut } from "../shared/shortcuts.js";
+import { AiModelPricingPanel } from "./components/AiModelPricingPanel.js";
+import { AiRunCostDetails } from "./components/AiRunCostDetails.js";
 import { Button } from "./components/Button.js";
+import { BrowserSelector } from "./BrowserSelector.js";
 import { Modal } from "./components/Modal.js";
 import { PostRunModal } from "./PostRunModal.js";
+import {
+  VisualCheckEvidence,
+  visualCheckDebugFrom,
+  withoutVisualCheckDebug,
+} from "./VisualCheckEvidence.js";
 
 const idleSnapshot: RunnerSnapshot = {
   state: "idle",
@@ -36,6 +50,8 @@ const stateLabels: Record<RunnerSnapshot["state"], string> = {
   idle: "Pregătit",
   preparing: "Se încarcă testul",
   browser_starting: "Se pregătește browserul",
+  resolving_stage_entry: "Pregătește etapa",
+  capturing_stage_baseline: "Capturează baseline-ul etapei",
   waiting_for_basic_auth: "Așteaptă autentificarea HTTP",
   waiting_for_start: "Așteaptă pornirea",
   running: "Rulează",
@@ -47,6 +63,8 @@ const stateLabels: Record<RunnerSnapshot["state"], string> = {
   waiting_for_mysql_check: "Verifică MySQL",
   waiting_for_imap_check: "Verifică e-mailul",
   waiting_for_ai_analysis: "AI verifică rezultatele",
+  waiting_for_variable: "Lipsește o variabilă obligatorie",
+  transitioning_stage: "Trece la etapa următoare",
   paused_on_error: "Pauză la eroare",
   completed: "Trecut",
   failed: "Eșuat",
@@ -104,8 +122,10 @@ const actionTypeLabels: Record<
   string
 > = {
   navigate: "Navigare",
+  hover: "Hover",
   click: "Click",
   fill: "Completare câmp",
+  upload_file: "Încărcare fișier",
   select_option: "Selectare opțiune",
   check: "Bifare",
   uncheck: "Debifare",
@@ -115,6 +135,7 @@ const actionTypeLabels: Record<
   wait_for_url: "Așteptare URL",
   choose_repeated_item: "Selectare element repetat",
   calendar_select: "Selectare în calendar",
+  visual_ai: "Acțiune vizuală AI",
   manual_intervention: "Intervenție manuală",
 };
 
@@ -127,6 +148,9 @@ const checkTypeLabels: Record<
   url: "URL",
   mysql: "MySQL",
   imap: "E-mail",
+  js_eval: "JS Eval",
+  visual: "Vizual AI",
+  adaptive: "Adaptiv",
 };
 
 const getStepKind = (item: TestFlowItem): string => {
@@ -162,6 +186,7 @@ const waitingStepStates = new Set<RunnerSnapshot["state"]>([
   "waiting_for_mysql_check",
   "waiting_for_imap_check",
   "waiting_for_ai_analysis",
+  "waiting_for_variable",
 ]);
 
 const describeAiPatch = (patch: object): string => {
@@ -213,31 +238,68 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
   const [datasets, setDatasets] = useState<TestDataset[]>([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState("");
   const [runDialogOpen, setRunDialogOpen] = useState(false);
+  const [browserDialogOpen, setBrowserDialogOpen] = useState(false);
+  const [browserStatus, setBrowserStatus] = useState<BrowserManagerStatus>({
+    state: "idle",
+  });
+  const [isCheckingBrowser, setIsCheckingBrowser] = useState(false);
+  const [clearSessionBeforeRun, setClearSessionBeforeRun] = useState(false);
   const [postRunOpen, setPostRunOpen] = useState(false);
   const configuredChecks = useMemo(
     () => normalizeTestPostRunChecks(test.postRunChecks),
     [test.postRunChecks],
   );
-  const needsAiSettings =
-    test.testMode === "dynamic_ai" ||
-    configuredChecks.aiPrompt.trim().length > 0;
+  const usesStagedChecks = test.stages !== undefined;
+  const stagedChecks = useMemo(
+    () =>
+      (test.stages ?? [])
+        .filter((stage) => stage.enabled)
+        .flatMap((stage) => stage.postChecks)
+        .filter((check) => check.enabled),
+    [test.stages],
+  );
+  const mysqlCheckAvailable = usesStagedChecks
+    ? stagedChecks.some((check) => check.checkType === "mysql")
+    : configuredChecks.mysql.tableNames.length > 0;
+  const configuredImapAccountIds = useMemo(
+    () =>
+      usesStagedChecks
+        ? [
+            ...new Set(
+              stagedChecks.flatMap((check) =>
+                check.checkType === "imap" && "accountId" in check.config
+                  ? [check.config.accountId]
+                  : [],
+              ),
+            ),
+          ]
+        : configuredChecks.imap.accountIds,
+    [configuredChecks.imap.accountIds, stagedChecks, usesStagedChecks],
+  );
+  const mysqlCheckEnabledByDefault = usesStagedChecks
+    ? mysqlCheckAvailable
+    : configuredChecks.mysql.enabled && mysqlCheckAvailable;
+  const imapCheckEnabledByDefault = usesStagedChecks
+    ? configuredImapAccountIds.length > 0
+    : configuredChecks.imap.enabled;
+  const flowNeedsAi = useMemo(() => testFlowRequiresAi(test), [test]);
+  const hasConfiguredPostRunAi = configuredChecks.aiPrompt.trim().length > 0;
+  const needsAiSettings = flowNeedsAi || hasConfiguredPostRunAi;
   const [runMySqlCheck, setRunMySqlCheck] = useState(
-    configuredChecks.mysql.enabled &&
-      configuredChecks.mysql.tableNames.length > 0,
+    mysqlCheckEnabledByDefault,
   );
-  const [runImapCheck, setRunImapCheck] = useState(
-    configuredChecks.imap.enabled &&
-      configuredChecks.imap.accountIds.length > 0,
-  );
+  const [runImapCheck, setRunImapCheck] = useState(imapCheckEnabledByDefault);
   const [imapAccounts, setImapAccounts] = useState<ImapAccountSummary[]>([]);
   const [runImapAccountIds, setRunImapAccountIds] = useState<string[]>(
-    configuredChecks.imap.accountIds,
+    configuredImapAccountIds,
   );
   const [runPostAi, setRunPostAi] = useState(
     configuredChecks.aiPrompt.length > 0,
   );
   const [isStarting, setIsStarting] = useState(false);
   const [isFallbackBusy, setIsFallbackBusy] = useState(false);
+  const [isVariableBusy, setIsVariableBusy] = useState(false);
+  const [manualVariableValue, setManualVariableValue] = useState("");
   const [runMode, setRunMode] = useState<RunMode>("automatic");
   const [waitBeforeStart, setWaitBeforeStart] = useState(false);
   const [shortcut, setShortcut] = useState(() =>
@@ -254,6 +316,16 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
   const [aiBusy, setAiBusy] = useState<"models" | "preview" | "generate">();
   const [aiError, setAiError] = useState<string>();
   const [error, setError] = useState<string>();
+  const runRequiresAi = flowNeedsAi || runPostAi;
+  const displayedImapAccounts = useMemo(
+    () =>
+      usesStagedChecks
+        ? imapAccounts.filter((account) =>
+            configuredImapAccountIds.includes(account.id),
+          )
+        : imapAccounts,
+    [configuredImapAccountIds, imapAccounts, usesStagedChecks],
+  );
 
   const loadHistory = useCallback(async () => {
     const loadedRuns = await api.listTestRuns(projectId, test.id);
@@ -350,6 +422,32 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
   }, [api, loadDatasets, loadHistory, projectId, test.id]);
 
   useEffect(() => {
+    if (
+      typeof api.getBrowserStatus !== "function" ||
+      typeof api.onBrowserStatusChange !== "function"
+    ) {
+      return;
+    }
+
+    let active = true;
+    void api
+      .getBrowserStatus()
+      .then((status) => {
+        if (active) setBrowserStatus(status);
+      })
+      .catch(() => {
+        // Starea este verificată din nou când utilizatorul pornește testul.
+      });
+    const unsubscribe = api.onBrowserStatusChange((status) => {
+      if (active) setBrowserStatus(status);
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [api, projectId]);
+
+  useEffect(() => {
     if (typeof api.listImapAccounts !== "function") return;
     let active = true;
     void api
@@ -375,23 +473,26 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
         .filter((value): value is string => value !== undefined)
         .map((value) => value.trim().toLocaleLowerCase()),
     );
-    const automaticIds = imapAccounts
-      .filter((account) =>
-        datasetEmails.has(account.username.trim().toLocaleLowerCase()),
-      )
-      .map((account) => account.id);
+    const automaticIds = usesStagedChecks
+      ? []
+      : imapAccounts
+          .filter((account) =>
+            datasetEmails.has(account.username.trim().toLocaleLowerCase()),
+          )
+          .map((account) => account.id);
     const selected = [
-      ...new Set([...configuredChecks.imap.accountIds, ...automaticIds]),
+      ...new Set([...configuredImapAccountIds, ...automaticIds]),
     ];
     setRunImapAccountIds(selected);
-    setRunImapCheck(configuredChecks.imap.enabled && selected.length > 0);
+    setRunImapCheck(imapCheckEnabledByDefault && selected.length > 0);
   }, [
-    configuredChecks.imap.accountIds,
-    configuredChecks.imap.enabled,
+    configuredImapAccountIds,
     datasets,
+    imapCheckEnabledByDefault,
     imapAccounts,
     selectedDatasetId,
     test.id,
+    usesStagedChecks,
   ]);
 
   useEffect(() => {
@@ -405,9 +506,13 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
         setAiModel(
           settings.provider === "gemini"
             ? settings.gemini.model
-            : settings.provider === "ollama"
-              ? settings.ollama.model
-              : "",
+            : settings.provider === "openai"
+              ? settings.openai.model
+              : settings.provider === "lm_studio"
+                ? settings.lmStudio.model
+                : settings.provider === "ollama"
+                  ? settings.ollama.model
+                  : "",
         );
       })
       .catch(() => {
@@ -430,7 +535,9 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
         if (!active) return;
         setAiModels(loadedModels);
         setAiModel((current) =>
-          current.length > 0 ? current : (loadedModels[0]?.id ?? ""),
+          loadedModels.some(({ id }) => id === current)
+            ? current
+            : (loadedModels[0]?.id ?? current),
         );
       })
       .catch((caughtError: unknown) => {
@@ -451,14 +558,19 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
   }, [aiProvider, api, needsAiSettings, test.id]);
 
   useEffect(() => {
-    const checks = normalizeTestPostRunChecks(test.postRunChecks);
-    setRunMySqlCheck(
-      checks.mysql.enabled && checks.mysql.tableNames.length > 0,
+    setRunMySqlCheck(mysqlCheckEnabledByDefault);
+    setRunImapAccountIds(configuredImapAccountIds);
+    setRunImapCheck(
+      imapCheckEnabledByDefault && configuredImapAccountIds.length > 0,
     );
-    setRunImapAccountIds(checks.imap.accountIds);
-    setRunImapCheck(checks.imap.enabled && checks.imap.accountIds.length > 0);
-    setRunPostAi(checks.aiPrompt.length > 0);
-  }, [test.id, test.postRunChecks]);
+    setRunPostAi(configuredChecks.aiPrompt.length > 0);
+  }, [
+    configuredChecks.aiPrompt,
+    configuredImapAccountIds,
+    imapCheckEnabledByDefault,
+    mysqlCheckEnabledByDefault,
+    test.id,
+  ]);
 
   const invalidateAiPlan = (): void => {
     setAiPreview(undefined);
@@ -473,7 +585,7 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
     try {
       const models = await api.listAiModels(aiProvider, true);
       setAiModels(models);
-      if (aiModel.length === 0 && models[0] !== undefined) {
+      if (!models.some(({ id }) => id === aiModel) && models[0] !== undefined) {
         setAiModel(models[0].id);
       }
     } catch (caughtError) {
@@ -559,7 +671,8 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
             : { datasetId: selectedDatasetId }),
           mode: runMode,
           waitBeforeStart,
-          ...(test.postRunChecks === undefined
+          ...(clearSessionBeforeRun ? { clearSessionBeforeRun: true } : {}),
+          ...(test.postRunChecks === undefined && !usesStagedChecks
             ? {}
             : {
                 postRun: {
@@ -571,6 +684,12 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
                   model: aiModel,
                 },
               }),
+          ...(aiProvider !== "none"
+            ? {
+                aiProvider,
+                aiModel,
+              }
+            : {}),
           ...(aiPlan === undefined
             ? {}
             : {
@@ -612,6 +731,51 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
       setSnapshot(await api.retryRunStep(snapshot.run.id));
     } catch {
       setError("Pasul curent nu a putut fi reîncercat.");
+    }
+  };
+
+  const retryVariableProducer = async (): Promise<void> => {
+    if (snapshot.run === undefined || api.retryVariableProducer === undefined) {
+      return;
+    }
+    setIsVariableBusy(true);
+    setError(undefined);
+    try {
+      setSnapshot(await api.retryVariableProducer(snapshot.run.id));
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Extragerea variabilei nu a putut fi reluată.",
+      );
+    } finally {
+      setIsVariableBusy(false);
+    }
+  };
+
+  const provideManualVariable = async (): Promise<void> => {
+    if (
+      snapshot.run === undefined ||
+      api.provideManualVariable === undefined ||
+      manualVariableValue.length === 0
+    ) {
+      return;
+    }
+    setIsVariableBusy(true);
+    setError(undefined);
+    try {
+      setSnapshot(
+        await api.provideManualVariable(snapshot.run.id, manualVariableValue),
+      );
+      setManualVariableValue("");
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Valoarea manuală nu a putut fi aplicată.",
+      );
+    } finally {
+      setIsVariableBusy(false);
     }
   };
 
@@ -716,10 +880,35 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
     test.workflowState === "ready" &&
     !snapshot.canStop &&
     !snapshot.canRetry &&
-    !isStarting;
+    !isStarting &&
+    !isCheckingBrowser;
+
+  const configureRun = async (): Promise<void> => {
+    if (typeof api.getBrowserStatus !== "function") {
+      setRunDialogOpen(true);
+      return;
+    }
+
+    setIsCheckingBrowser(true);
+    setError(undefined);
+    try {
+      const status = await api.getBrowserStatus();
+      setBrowserStatus(status);
+      if (status.state === "running" && status.projectId === projectId) {
+        setRunDialogOpen(true);
+      } else {
+        setBrowserDialogOpen(true);
+      }
+    } catch {
+      setError("Starea browserului nu a putut fi verificată.");
+    } finally {
+      setIsCheckingBrowser(false);
+    }
+  };
   const isWaitingForContinue = [
     "waiting_for_start",
     "waiting_at_breakpoint",
+    "waiting_for_manual_intervention",
     "waiting_after_step",
     "waiting_for_missing_data",
   ].includes(snapshot.state);
@@ -740,9 +929,43 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
     [stepResults],
   );
   const displayedFlowItems = snapshot.flowItems ?? test.flowItems;
+  const currentDisplayIndex = useMemo(() => {
+    const indexById = displayedFlowItems.findIndex(
+      ({ id }) => id === snapshot.currentStepId,
+    );
+    if (indexById >= 0) return indexById;
+    if (
+      snapshot.currentStepIndex >= 0 &&
+      snapshot.currentStepIndex < displayedFlowItems.length
+    ) {
+      return snapshot.currentStepIndex;
+    }
+    if (
+      displayedFlowItems.length > 0 &&
+      ["completed", "failed", "stopped"].includes(snapshot.state)
+    ) {
+      return displayedFlowItems.length - 1;
+    }
+    return displayedFlowItems.findIndex(({ enabled }) => enabled);
+  }, [
+    displayedFlowItems,
+    snapshot.currentStepId,
+    snapshot.currentStepIndex,
+    snapshot.state,
+  ]);
+  const currentDisplayItem = displayedFlowItems[currentDisplayIndex];
+  const nextDisplayIndex =
+    currentDisplayIndex < 0
+      ? -1
+      : displayedFlowItems.findIndex(
+          (item, index) => index > currentDisplayIndex && item.enabled,
+        );
+  const nextDisplayItem = displayedFlowItems[nextDisplayIndex];
   const isErrorReview =
     snapshot.error !== undefined &&
     ["paused_on_error", "failed"].includes(snapshot.state);
+  const isWarningReview =
+    isErrorReview && snapshot.error?.severity === "warning";
   const getDisplayStatus = (
     item: TestFlowItem,
     index: number,
@@ -783,10 +1006,12 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
             <Button
               disabled={!canStart}
               onClick={() => {
-                setRunDialogOpen(true);
+                void configureRun();
               }}
             >
-              {isStarting ? "Se pornește..." : "Rulează testul"}
+              {isStarting || isCheckingBrowser
+                ? "Se verifică..."
+                : "Rulează testul"}
             </Button>
           ) : null}
           {snapshot.canStop && !isErrorReview ? (
@@ -806,7 +1031,7 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
                 void skipStep();
               }}
             >
-              Sari peste pas
+              {isWarningReview ? "Continuă peste warning" : "Sari peste pas"}
             </Button>
           ) : null}
           {snapshot.canRetry && !isErrorReview ? (
@@ -848,6 +1073,22 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
           ) : null}
         </div>
       </div>
+
+      {snapshot.aiCost !== undefined ? (
+        <AiRunCostDetails cost={snapshot.aiCost} className="mt-3" />
+      ) : null}
+
+      {snapshot.stage !== undefined ? (
+        <div className="mt-3 rounded-lg border border-app-border bg-app-surface px-3 py-2 text-sm">
+          <span className="font-semibold">
+            Etapa {snapshot.stage.stageIndex + 1}/{snapshot.stage.totalStages}
+          </span>
+          {snapshot.stages?.[snapshot.stage.stageIndex]?.name
+            ? ` · ${snapshot.stages[snapshot.stage.stageIndex]?.name}`
+            : ""}
+          <span className="text-app-muted"> · {snapshot.stage.phase}</span>
+        </div>
+      ) : null}
 
       <fieldset
         className="mt-4 grid gap-3 rounded-xl border border-app-border bg-app-surface p-4 md:grid-cols-3"
@@ -914,8 +1155,8 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
         />
       </div>
       <p className="mt-2 text-xs text-app-muted">
-        Pas {Math.max(0, snapshot.currentStepIndex + 1)} din{" "}
-        {snapshot.totalSteps}
+        Pas {currentDisplayIndex < 0 ? 0 : currentDisplayIndex + 1} din{" "}
+        {displayedFlowItems.length || snapshot.totalSteps}
       </p>
 
       <section
@@ -925,11 +1166,11 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
             <h4 id="live-execution-heading" className="font-semibold">
-              Execuție pas cu pas
+              Execuție curentă
             </h4>
             <p className="mt-1 text-xs text-app-muted">
-              Vezi în timp real pasul curent, ce urmează și rezultatul fiecărei
-              acțiuni.
+              Pasul activ ocupă tot spațiul, iar dedesubt vezi pe scurt ce
+              urmează.
             </p>
           </div>
           <span className="rounded-full bg-app-canvas px-2.5 py-1 text-xs font-semibold text-app-muted">
@@ -942,89 +1183,146 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
             Testul nu conține încă pași.
           </p>
         ) : (
-          <ol className="mt-4 grid gap-3">
-            {displayedFlowItems.map((item, index) => {
-              const result = stepResultsById.get(item.id);
-              const displayStatus = getDisplayStatus(item, index);
-              const isCurrent = snapshot.currentStepId === item.id;
-              const description = getStepDescription(item);
-              return (
-                <li
-                  key={item.id}
-                  aria-current={isCurrent ? "step" : undefined}
-                  className={`rounded-lg border p-3 transition-colors ${
-                    isCurrent
-                      ? "border-brand-400 bg-brand-50 ring-1 ring-brand-200"
-                      : "border-app-border bg-app-canvas"
-                  }`}
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="flex min-w-0 gap-3">
-                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-app-surface text-xs font-bold text-app-ink">
-                        {index + 1}
-                      </span>
-                      <div className="min-w-0">
-                        <p className="font-semibold text-app-ink">
-                          {getStepTitle(item, index)}
-                        </p>
-                        <p className="mt-0.5 text-xs font-medium text-app-muted">
-                          {getStepKind(item)}
-                        </p>
-                        {description ? (
-                          <p className="mt-1 text-sm text-app-muted">
-                            {description}
+          <div className="mt-4 grid gap-2">
+            {currentDisplayItem === undefined ? (
+              <p className="rounded-lg border border-dashed border-app-border p-4 text-sm text-app-muted">
+                Nu există un pas activ.
+              </p>
+            ) : (
+              (() => {
+                const result = stepResultsById.get(currentDisplayItem.id);
+                const displayStatus = getDisplayStatus(
+                  currentDisplayItem,
+                  currentDisplayIndex,
+                );
+                const description = getStepDescription(currentDisplayItem);
+                const currentVisualDebug = result?.logs
+                  .map(visualCheckDebugFrom)
+                  .find((debug) => debug !== undefined);
+                return (
+                  <article
+                    aria-label="Pasul curent"
+                    aria-current="step"
+                    className="rounded-xl border border-brand-400 bg-brand-50 p-4 shadow-sm ring-1 ring-brand-200"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="flex min-w-0 gap-3">
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white text-sm font-bold text-brand-800 shadow-sm">
+                          {currentDisplayIndex + 1}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-semibold tracking-wide text-brand-700 uppercase">
+                            {snapshot.run === undefined
+                              ? "Primul pas"
+                              : "Pasul curent"}
                           </p>
-                        ) : null}
+                          <h5 className="mt-0.5 text-base font-semibold text-app-ink">
+                            {getStepTitle(
+                              currentDisplayItem,
+                              currentDisplayIndex,
+                            )}
+                          </h5>
+                          <p className="mt-1 text-xs font-medium text-app-muted">
+                            {getStepKind(currentDisplayItem)}
+                          </p>
+                          {description ? (
+                            <p className="mt-2 text-sm leading-5 text-app-muted">
+                              {description}
+                            </p>
+                          ) : null}
+                        </div>
                       </div>
+                      <span
+                        className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${stepStatusClasses[displayStatus]}`}
+                      >
+                        {stepStatusLabels[displayStatus]}
+                      </span>
                     </div>
-                    <span
-                      className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${stepStatusClasses[displayStatus]}`}
-                    >
-                      {stepStatusLabels[displayStatus]}
-                    </span>
+
+                    {snapshot.message ? (
+                      <p
+                        role="status"
+                        className="mt-3 rounded-md bg-white/80 px-3 py-2 text-sm font-medium text-brand-900"
+                      >
+                        Acum: {snapshot.message}
+                      </p>
+                    ) : null}
+
+                    {result !== undefined && result.logs.length > 0 ? (
+                      <ul className="mt-3 grid gap-1 border-t border-brand-200 pt-3 text-xs text-app-muted">
+                        {result.logs.map((log, logIndex) => (
+                          <li key={logIndex}>• {getLogMessage(log)}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {result?.error !== undefined ? (
+                      <p className="mt-2 text-xs text-red-700">
+                        {getLogMessage(result.error)}
+                      </p>
+                    ) : null}
+                    {currentVisualDebug !== undefined ? (
+                      <VisualCheckEvidence debug={currentVisualDebug} />
+                    ) : null}
+                  </article>
+                );
+              })()
+            )}
+
+            {nextDisplayItem !== undefined ? (
+              <article
+                aria-label="Pasul următor"
+                className="flex items-center justify-between gap-3 rounded-lg border border-app-border bg-app-canvas px-3 py-2.5"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-app-surface text-xs font-bold text-app-muted">
+                    {nextDisplayIndex + 1}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-semibold tracking-wide text-app-muted uppercase">
+                      Urmează
+                    </p>
+                    <p className="truncate text-sm font-semibold text-app-ink">
+                      {getStepTitle(nextDisplayItem, nextDisplayIndex)}
+                    </p>
                   </div>
-
-                  {isCurrent && snapshot.message ? (
-                    <p
-                      role="status"
-                      className="mt-3 rounded-md bg-white/70 px-3 py-2 text-sm font-medium text-brand-900"
-                    >
-                      Acum: {snapshot.message}
-                    </p>
-                  ) : null}
-
-                  {result !== undefined && result.logs.length > 0 ? (
-                    <ul className="mt-3 grid gap-1 text-xs text-app-muted">
-                      {result.logs.map((log, logIndex) => (
-                        <li key={logIndex}>• {getLogMessage(log)}</li>
-                      ))}
-                    </ul>
-                  ) : null}
-                  {result?.error !== undefined ? (
-                    <p className="mt-2 text-xs text-red-700">
-                      {getLogMessage(result.error)}
-                    </p>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ol>
+                </div>
+                <span className="shrink-0 text-xs text-app-muted">
+                  {getStepKind(nextDisplayItem)}
+                </span>
+              </article>
+            ) : currentDisplayItem !== undefined ? (
+              <p className="px-1 py-1 text-xs text-app-muted">
+                Nu mai există un pas activ după acesta.
+              </p>
+            ) : null}
+          </div>
         )}
       </section>
 
       {isErrorReview && snapshot.error ? (
         <section
-          className="mt-4 rounded-xl border border-red-300 bg-red-50 p-4 text-red-950"
+          className={`mt-4 rounded-xl border p-4 ${
+            isWarningReview
+              ? "border-amber-300 bg-amber-50 text-amber-950"
+              : "border-red-300 bg-red-50 text-red-950"
+          }`}
           role="alert"
           aria-labelledby="runner-error-heading"
         >
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <p className="text-xs font-semibold tracking-wide text-red-700 uppercase">
-                Eroare de execuție · {snapshot.error.code}
+              <p
+                className={`text-xs font-semibold tracking-wide uppercase ${
+                  isWarningReview ? "text-amber-700" : "text-red-700"
+                }`}
+              >
+                {isWarningReview ? "Warning vizual" : "Eroare de execuție"} ·{" "}
+                {snapshot.error.code}
               </p>
               <h4 id="runner-error-heading" className="mt-1 font-semibold">
-                Rularea este oprită la eroare
+                {isWarningReview
+                  ? "Rularea așteaptă decizia ta"
+                  : "Rularea este oprită la eroare"}
               </h4>
               <p className="mt-2 text-sm">
                 {snapshot.error.message}
@@ -1074,11 +1372,20 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
             </details>
           ) : null}
 
+          {snapshot.error.visualCheckDebug ? (
+            <VisualCheckEvidence debug={snapshot.error.visualCheckDebug} />
+          ) : null}
+
           <p className="mt-3 text-xs text-red-800">
-            Browserul rămâne deschis pentru verificare înainte de Retry sau
-            Stop.
+            Browserul rămâne deschis pentru verificare înainte de următoarea
+            decizie.
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
+            {isWarningReview ? (
+              <Button variant="secondary" onClick={() => void skipStep()}>
+                Continuă cu următorul pas
+              </Button>
+            ) : null}
             {snapshot.canRetry ? (
               <Button
                 onClick={() => {
@@ -1149,7 +1456,9 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
             Date lipsă
           </p>
           <h4 className="mt-1 font-semibold text-amber-950">
-            Completează câmpul în browser
+            {snapshot.missingData.inputKind === "file"
+              ? "Selectează fișierul în browser"
+              : "Completează câmpul în browser"}
           </h4>
           <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
             <div>
@@ -1166,9 +1475,9 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
             </div>
           </dl>
           <p className="mt-3 text-sm text-amber-900">
-            Introdu valoarea direct în browser. Pentru checkbox și radio,
-            setează starea dorită; pentru select, alege opțiunea. Apoi folosește
-            Continue ({shortcut}).
+            {snapshot.missingData.inputKind === "file"
+              ? `Alege fișierul direct în pagina testată, apoi folosește Continue (${shortcut}). Fișierul nu este memorat automat; pentru rulări autonome configurează cheia ca „Fișier administrat” în dataset.`
+              : `Introdu valoarea direct în browser. Pentru checkbox și radio, setează starea dorită; pentru select, alege opțiunea. Apoi folosește Continue (${shortcut}).`}
           </p>
           {snapshot.missingData.inputKind === "password" ? (
             <p className="mt-2 text-sm font-semibold text-red-800">
@@ -1183,6 +1492,68 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
               {JSON.stringify(snapshot.missingData.locator, null, 2)}
             </pre>
           </details>
+        </section>
+      ) : null}
+
+      {snapshot.state === "waiting_for_variable" &&
+      snapshot.missingVariable !== undefined ? (
+        <section className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4">
+          <p className="text-xs font-semibold tracking-wide text-amber-800 uppercase">
+            Variabilă obligatorie lipsă
+          </p>
+          <h4 className="mt-1 font-semibold text-amber-950">
+            {snapshot.missingVariable.variableName}
+          </h4>
+          <p className="mt-1 text-sm text-amber-900">
+            {snapshot.missingVariable.message}
+          </p>
+          <p className="mt-2 text-xs text-amber-800">
+            Tip așteptat: {snapshot.missingVariable.expectedType} · motiv:{" "}
+            {snapshot.missingVariable.reason}
+          </p>
+          {snapshot.missingVariable.canProvideManualValue ? (
+            <label className="mt-3 block text-xs font-semibold text-amber-950">
+              Valoare manuală
+              <input
+                className="mt-1 min-h-10 w-full rounded-lg border border-amber-300 bg-white px-3 text-sm"
+                value={manualVariableValue}
+                onChange={(event) => setManualVariableValue(event.target.value)}
+                placeholder={`Valoare pentru ${snapshot.missingVariable.variableName}`}
+              />
+            </label>
+          ) : null}
+          <div className="mt-3 flex flex-wrap gap-2">
+            {snapshot.missingVariable.canRetryProducer ? (
+              <Button
+                variant="secondary"
+                disabled={
+                  isVariableBusy || api.retryVariableProducer === undefined
+                }
+                onClick={() => void retryVariableProducer()}
+              >
+                Reîncearcă check-ul producător
+              </Button>
+            ) : null}
+            {snapshot.missingVariable.canProvideManualValue ? (
+              <Button
+                disabled={
+                  isVariableBusy ||
+                  manualVariableValue.length === 0 ||
+                  api.provideManualVariable === undefined
+                }
+                onClick={() => void provideManualVariable()}
+              >
+                Setează variabila și continuă
+              </Button>
+            ) : null}
+            <Button
+              variant="danger"
+              disabled={isVariableBusy}
+              onClick={() => void stop()}
+            >
+              Oprește testul
+            </Button>
+          </div>
         </section>
       ) : null}
 
@@ -1259,19 +1630,37 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
             Rezultate și logs ({stepResults.length})
           </summary>
           <ol className="mt-2 grid gap-2 text-xs">
-            {stepResults.map((result) => (
-              <li
-                key={result.id}
-                className="rounded-lg border border-app-border bg-app-surface p-3"
-              >
-                <span className="font-semibold">
-                  {result.stepId} · {result.status}
-                </span>
-                <pre className="mt-2 overflow-auto whitespace-pre-wrap text-app-muted">
-                  {JSON.stringify(result.logs, null, 2)}
-                </pre>
-              </li>
-            ))}
+            {stepResults.map((result) => {
+              const debugImages = [
+                ...result.logs.map(visualCheckDebugFrom),
+                visualCheckDebugFrom(result.error),
+              ].filter(
+                (debug): debug is VisualCheckDebug => debug !== undefined,
+              );
+              return (
+                <li
+                  key={result.id}
+                  className="min-w-0 rounded-lg border border-app-border bg-app-surface p-3"
+                >
+                  <span className="font-semibold">
+                    {result.stepId} · {result.status}
+                  </span>
+                  <pre className="mt-2 max-w-full overflow-auto whitespace-pre-wrap break-words text-app-muted">
+                    {JSON.stringify(
+                      result.logs.map(withoutVisualCheckDebug),
+                      null,
+                      2,
+                    )}
+                  </pre>
+                  {debugImages.map((debug, index) => (
+                    <VisualCheckEvidence
+                      key={`${result.id}-visual-debug-${index}`}
+                      debug={debug}
+                    />
+                  ))}
+                </li>
+              );
+            })}
           </ol>
         </details>
       ) : null}
@@ -1280,11 +1669,37 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
         api={api}
         open={postRunOpen}
         snapshot={snapshot}
+        stepResults={stepResults}
         onSnapshot={setSnapshot}
         onClose={() => {
           setPostRunOpen(false);
         }}
       />
+
+      <Modal
+        open={browserDialogOpen}
+        title="Pornește browserul pentru test"
+        size="wide"
+        onClose={() => {
+          setBrowserDialogOpen(false);
+        }}
+      >
+        <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          Testul are nevoie de un browser activ pentru proiectul acesta. Alege
+          aceeași configurație disponibilă și în pagina proiectului.
+        </p>
+        <BrowserSelector
+          api={api}
+          browserStatus={browserStatus}
+          embedded
+          project={project}
+          showBasicAuthSettings={false}
+          onBrowserReady={() => {
+            setBrowserDialogOpen(false);
+            setRunDialogOpen(true);
+          }}
+        />
+      </Modal>
 
       <Modal
         open={runDialogOpen}
@@ -1301,7 +1716,8 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
           <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
             <strong className="text-base text-app-ink">{test.name}</strong>
             <span className="rounded-full border border-app-border bg-white px-2.5 py-1 text-xs">
-              Curățare automată: dezactivată
+              Curățare sesiune:{" "}
+              {clearSessionBeforeRun ? "activată" : "dezactivată"}
             </span>
           </div>
         </div>
@@ -1355,6 +1771,27 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
             />
             Așteaptă confirmarea mea înainte de primul pas
           </label>
+          <label className="mt-3 flex items-start gap-2 rounded-lg border border-app-border bg-slate-50 p-3 text-sm">
+            <input
+              className="mt-0.5"
+              type="checkbox"
+              checked={clearSessionBeforeRun}
+              onChange={(event) => {
+                setClearSessionBeforeRun(event.target.checked);
+              }}
+            />
+            <span>
+              <span className="block font-semibold text-app-ink">
+                Curăță sesiunea înainte de rulare
+              </span>
+              <span className="mt-1 block text-xs leading-5 text-app-muted">
+                Șterge toate cookie-urile contextului browserului (inclusiv
+                Secure și third-party), plus localStorage, sessionStorage,
+                IndexedDB, Cache Storage și service workers pentru originea
+                testului, apoi reîncarcă pagina de start.
+              </span>
+            </span>
+          </label>
         </section>
         <section className="mt-4 rounded-xl border border-orange-200 bg-orange-50 p-4">
           <h3 className="font-semibold text-orange-950">Checks după rulare</h3>
@@ -1368,7 +1805,7 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
               <input
                 type="checkbox"
                 checked={runMySqlCheck}
-                disabled={configuredChecks.mysql.tableNames.length === 0}
+                disabled={!mysqlCheckAvailable}
                 onChange={(event) => {
                   setRunMySqlCheck(event.target.checked);
                 }}
@@ -1390,10 +1827,7 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
               <input
                 type="checkbox"
                 checked={runPostAi}
-                disabled={
-                  aiProvider === "none" ||
-                  configuredChecks.aiPrompt.length === 0
-                }
+                disabled={configuredChecks.aiPrompt.length === 0}
                 onChange={(event) => {
                   setRunPostAi(event.target.checked);
                 }}
@@ -1401,10 +1835,10 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
               Evaluează rezultatele cu AI
             </label>
           </div>
-          {configuredChecks.mysql.tableNames.length === 0 ? (
+          {!mysqlCheckAvailable ? (
             <p className="mt-2 text-xs text-orange-900">
-              Pentru MySQL selectează întâi tabelele în secțiunea Checks a
-              testului.
+              Pentru MySQL adaugă și activează întâi un check de bază de date în
+              secțiunea Checks a testului.
             </p>
           ) : null}
           {runImapAccountIds.length === 0 ? (
@@ -1413,13 +1847,13 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
               configurată în Setările aplicației.
             </p>
           ) : null}
-          {imapAccounts.length > 0 ? (
+          {displayedImapAccounts.length > 0 ? (
             <fieldset className="mt-3 rounded-lg border border-orange-200 bg-white p-3">
               <legend className="px-1 text-sm font-semibold">
-                Conturile verificate la această rulare
+                Conturi e-mail verificate la această rulare
               </legend>
               <div className="grid gap-2 sm:grid-cols-2">
-                {imapAccounts.map((account) => (
+                {displayedImapAccounts.map((account) => (
                   <label
                     key={account.id}
                     className="flex items-center gap-2 text-sm"
@@ -1453,31 +1887,52 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
               </p>
             </fieldset>
           ) : null}
-          {runPostAi ? (
+        </section>
+        <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          Fără dataset, valorile lipsă vor fi colectate manual și salvate local
+          în clar într-un dataset creat automat.
+        </p>
+
+        {runRequiresAi ? (
+          <section className="mt-4 rounded-xl border border-violet-200 bg-violet-50 p-4">
+            <h3 className="font-semibold text-violet-950">
+              Model AI pentru această rulare
+            </h3>
+            <p className="mt-1 text-xs leading-5 text-violet-900">
+              {flowNeedsAi
+                ? "Testul conține pași care pot apela AI."
+                : "Ai ales evaluarea AI a rezultatelor după rulare."}{" "}
+              Selectarea de aici este valabilă numai pentru rularea curentă.
+            </p>
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              <label className="grid gap-1.5 text-sm font-semibold">
-                Provider pentru evaluarea post-run
+              <label className="grid gap-1.5 text-sm font-semibold text-violet-950">
+                Provider AI pentru această rulare
                 <select
-                  className="min-h-10 rounded-lg border border-orange-200 bg-white px-3 text-sm"
+                  className="min-h-10 rounded-lg border border-violet-200 bg-white px-3 text-sm"
                   value={aiProvider}
                   onChange={(event) => {
                     setAiProvider(event.target.value as AiProviderId);
+                    setAiModel("");
                     setAiModels([]);
+                    invalidateAiPlan();
                   }}
                 >
-                  <option value="none">Dezactivat</option>
+                  <option value="none">Selectează providerul</option>
                   <option value="gemini">Gemini</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="lm_studio">LM Studio</option>
                   <option value="ollama">Ollama</option>
                 </select>
               </label>
-              <label className="grid gap-1.5 text-sm font-semibold">
-                Model
+              <label className="grid gap-1.5 text-sm font-semibold text-violet-950">
+                Model AI pentru această rulare
                 {aiModels.length > 0 ? (
                   <select
-                    className="min-h-10 rounded-lg border border-orange-200 bg-white px-3 text-sm"
+                    className="min-h-10 rounded-lg border border-violet-200 bg-white px-3 text-sm"
                     value={aiModel}
                     onChange={(event) => {
                       setAiModel(event.target.value);
+                      invalidateAiPlan();
                     }}
                   >
                     {aiModel.length > 0 &&
@@ -1492,21 +1947,50 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
                   </select>
                 ) : (
                   <input
-                    className="min-h-10 rounded-lg border border-orange-200 bg-white px-3 text-sm"
+                    className="min-h-10 rounded-lg border border-violet-200 bg-white px-3 text-sm"
                     value={aiModel}
+                    placeholder="Selectează sau introdu modelul"
+                    disabled={aiProvider === "none"}
                     onChange={(event) => {
                       setAiModel(event.target.value);
+                      invalidateAiPlan();
                     }}
                   />
                 )}
               </label>
             </div>
-          ) : null}
-        </section>
-        <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-          Fără dataset, valorile lipsă vor fi colectate manual și salvate local
-          în clar într-un dataset creat automat.
-        </p>
+            <AiModelPricingPanel
+              api={api}
+              provider={aiProvider}
+              model={aiModel}
+              className="mt-3"
+            />
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <Button
+                variant="secondary"
+                disabled={aiProvider === "none" || aiBusy !== undefined}
+                onClick={() => void loadAiModels()}
+              >
+                {aiBusy === "models"
+                  ? "Se încarcă..."
+                  : "Actualizează modelele"}
+              </Button>
+              {aiProvider === "none" || aiModel.trim().length === 0 ? (
+                <span className="text-xs font-semibold text-red-700">
+                  Selectează providerul și modelul pentru a putea porni testul.
+                </span>
+              ) : null}
+            </div>
+            {aiError ? (
+              <p
+                className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800"
+                role="alert"
+              >
+                {aiError}
+              </p>
+            ) : null}
+          </section>
+        ) : null}
 
         {test.testMode === "dynamic_ai" ? (
           <section className="mt-4 rounded-xl border border-brand-200 bg-brand-50 p-4">
@@ -1529,66 +2013,7 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
                 }}
               />
             </label>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              <label className="grid gap-1.5 text-sm font-semibold">
-                Provider
-                <select
-                  className="min-h-10 rounded-lg border border-app-border bg-app-surface px-3 text-sm"
-                  value={aiProvider}
-                  onChange={(event) => {
-                    setAiProvider(event.target.value as AiProviderId);
-                    setAiModels([]);
-                    invalidateAiPlan();
-                  }}
-                >
-                  <option value="none">Dezactivat</option>
-                  <option value="gemini">Gemini</option>
-                  <option value="ollama">Ollama</option>
-                </select>
-              </label>
-              <label className="grid gap-1.5 text-sm font-semibold">
-                Model
-                {aiModels.length > 0 ? (
-                  <select
-                    className="min-h-10 rounded-lg border border-app-border bg-app-surface px-3 text-sm"
-                    value={aiModel}
-                    onChange={(event) => {
-                      setAiModel(event.target.value);
-                      invalidateAiPlan();
-                    }}
-                  >
-                    {aiModel.length > 0 &&
-                    !aiModels.some(({ id }) => id === aiModel) ? (
-                      <option value={aiModel}>
-                        {aiModel} · salvat implicit
-                      </option>
-                    ) : null}
-                    {aiModels.map((candidate) => (
-                      <option key={candidate.id} value={candidate.id}>
-                        {candidate.displayName}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    className="min-h-10 rounded-lg border border-app-border bg-app-surface px-3 text-sm"
-                    value={aiModel}
-                    onChange={(event) => {
-                      setAiModel(event.target.value);
-                      invalidateAiPlan();
-                    }}
-                  />
-                )}
-              </label>
-            </div>
             <div className="mt-3 flex flex-wrap gap-2">
-              <Button
-                variant="secondary"
-                disabled={aiProvider === "none" || aiBusy !== undefined}
-                onClick={() => void loadAiModels()}
-              >
-                {aiBusy === "models" ? "Se încarcă..." : "Reîncarcă modelele"}
-              </Button>
               <Button
                 variant="secondary"
                 disabled={
@@ -1611,14 +2036,6 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
                 {aiBusy === "generate" ? "Se generează..." : "2. Trimite la AI"}
               </Button>
             </div>
-            {aiError ? (
-              <p
-                className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800"
-                role="alert"
-              >
-                {aiError}
-              </p>
-            ) : null}
             {aiPreview ? (
               <div className="mt-3 rounded-lg bg-app-surface p-3 text-xs">
                 <p>
@@ -1718,6 +2135,8 @@ export const RunnerPanel = ({ api, project, test }: RunnerPanelProps) => {
           <Button
             disabled={
               isStarting ||
+              (runRequiresAi &&
+                (aiProvider === "none" || aiModel.trim().length === 0)) ||
               (test.testMode === "dynamic_ai" &&
                 aiInstruction.trim().length > 0 &&
                 aiPlan === undefined)

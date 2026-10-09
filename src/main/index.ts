@@ -1,13 +1,16 @@
 import { app, BrowserWindow, dialog, ipcMain, safeStorage } from "electron";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { copyFile, mkdir } from "node:fs/promises";
+import { basename, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
   APP_INFO_CHANNEL,
   AI_CHANNELS,
+  BATCH_RUN_CHANNELS,
   BROWSER_CHANNELS,
   DATASET_CHANNELS,
+  FORM_CHANNELS,
   MYSQL_CHANNELS,
   IMAP_CHANNELS,
   PAGE_ANALYSIS_CHANNELS,
@@ -16,15 +19,19 @@ import {
   RUN_HISTORY_CHANNELS,
   RUNNER_CHANNELS,
   TEST_CHANNELS,
+  TEST_SUITE_CHANNELS,
   TRANSFER_CHANNELS,
 } from "../shared/ipc.js";
 import type {
   AiStepEditInput,
+  AiSimilarTestInput,
   AiRunPlanInput,
   ApplyAiStepChangesInput,
   AiProviderId,
   CreateAiRequestPreviewInput,
+  CreateAiSimilarTestInput,
   SaveAiSettingsInput,
+  SaveAiModelPricingInput,
   UndoAiStepChangeInput,
 } from "../shared/ai.js";
 import type {
@@ -44,6 +51,7 @@ import type {
   SaveDatasetInput,
 } from "../shared/datasets.js";
 import type { TestFlowItem } from "../shared/test-model.js";
+import type { TestStage } from "../shared/test-stages.js";
 import type { ManualWipeResource, StartRunInput } from "../shared/runner.js";
 import type { RecorderStepDraft } from "../shared/recorder.js";
 import type { ProjectInput } from "../shared/projects.js";
@@ -54,6 +62,18 @@ import type {
   RunHistoryFilters,
   RunHistoryPurgeTarget,
 } from "../shared/run-history.js";
+import type {
+  BatchRun,
+  BatchRunStatus,
+  CreateBatchRunInput,
+  SaveTestSuiteInput,
+  UpdateBatchRunItemInput,
+} from "../shared/test-suites.js";
+import type {
+  CreateGeneratedFormTestsInput,
+  GenerateFormTestsInput,
+  SaveProjectFormSettingsInput,
+} from "../shared/form-analysis.js";
 import { createAppInfo } from "./app-info.js";
 import { PlaywrightBrowserManager } from "./browser/playwright-browser-manager.js";
 import {
@@ -72,6 +92,12 @@ import {
   RunRepository,
   TestRepository,
 } from "./persistence/repositories.js";
+import {
+  BatchRunRepository,
+  RunArtifactRepository,
+  TestSuiteRepository,
+} from "./persistence/suite-repositories.js";
+import { ProjectFormSettingsRepository } from "./persistence/form-settings-repository.js";
 import { PageAnalysisService } from "./page-analysis/page-analysis-service.js";
 import { ProjectsService } from "./projects-service.js";
 import { DatasetsService } from "./datasets-service.js";
@@ -83,6 +109,7 @@ import { ProjectBasicAuthService } from "./project-basic-auth-service.js";
 import { AiSettingsService } from "./ai/ai-settings-service.js";
 import { AiStepEditingService } from "./ai/ai-step-editing-service.js";
 import { AiRunPlanningService } from "./ai/ai-run-planning-service.js";
+import { AiSimilarTestService } from "./ai/ai-similar-test-service.js";
 import { PostRunAiEvaluationService } from "./ai/post-run-ai-evaluation-service.js";
 import { resolveRendererTarget } from "./renderer-target.js";
 import { createMainWindowOptions } from "./window-options.js";
@@ -91,6 +118,14 @@ import { createMySqlGateway } from "./mysql/mysql-gateway.js";
 import { MySqlService } from "./mysql/mysql-service.js";
 import { MySqlSnapshotService } from "./mysql/mysql-snapshot-service.js";
 import { ImapService } from "./imap-service.js";
+import { TestSuitesService } from "./test-suites-service.js";
+import { BatchRunsService } from "./batch-runs-service.js";
+import { FormSettingsService } from "./form-settings-service.js";
+import { FormTestGenerationService } from "./ai/form-test-generation-service.js";
+import {
+  DefaultTestFilesService,
+  ExistingFileInputsMigrationService,
+} from "./default-test-files-service.js";
 
 let mainWindow: BrowserWindow | null = null;
 let applicationDatabase: ApplicationDatabase | null = null;
@@ -115,6 +150,7 @@ const rendererTarget = resolveRendererTarget(
 
 const createMainWindow = (): void => {
   mainWindow = new BrowserWindow(createMainWindowOptions(preloadPath));
+  mainWindow.maximize();
 
   const rendererLoad =
     rendererTarget.kind === "development-url"
@@ -168,6 +204,18 @@ void app
     );
     const runRepository = new RunRepository(applicationDatabase.connection);
     const mySqlRunDataRepository = new MySqlRunDataRepository(
+      applicationDatabase.connection,
+    );
+    const testSuiteRepository = new TestSuiteRepository(
+      applicationDatabase.connection,
+    );
+    const batchRunRepository = new BatchRunRepository(
+      applicationDatabase.connection,
+    );
+    const runArtifactRepository = new RunArtifactRepository(
+      applicationDatabase.connection,
+    );
+    const projectFormSettingsRepository = new ProjectFormSettingsRepository(
       applicationDatabase.connection,
     );
     const projectsService = new ProjectsService(projectRepository, {
@@ -239,6 +287,30 @@ void app
         now: () => new Date(),
       },
     );
+    const defaultTestFilesService = new DefaultTestFilesService({
+      sourceRoot: join(app.getAppPath(), "fixtures", "default-files"),
+      managedRoot: join(app.getPath("userData"), "data", "default-test-files"),
+    });
+    await defaultTestFilesService.initialize();
+    const fileInputMigration = await new ExistingFileInputsMigrationService(
+      projectRepository,
+      pageRepository,
+      testRepository,
+      datasetRepository,
+      pageAnalysisService,
+      defaultTestFilesService,
+      { createId: randomUUID, now: () => new Date() },
+    ).migrate();
+    if (
+      fileInputMigration.updatedTests > 0 ||
+      fileInputMigration.updatedDatasets > 0 ||
+      fileInputMigration.createdDatasets > 0
+    ) {
+      console.info(
+        "Default file fixtures assigned to existing tests.",
+        fileInputMigration,
+      );
+    }
     const testsService = new TestsService(
       projectRepository,
       testRepository,
@@ -259,6 +331,27 @@ void app
       testsService,
       pageAnalysisService,
     );
+    const aiSimilarTestService = new AiSimilarTestService(
+      aiSettingsService,
+      testsService,
+      datasetRepository,
+      pageAnalysisService,
+    );
+    const formSettingsService = new FormSettingsService(
+      projectRepository,
+      imapAccountRepository,
+      projectFormSettingsRepository,
+      () => new Date(),
+    );
+    const formTestGenerationService = new FormTestGenerationService(
+      projectRepository,
+      pageAnalysisService,
+      aiSettingsService,
+      testsService,
+      imapAccountRepository,
+      projectFormSettingsRepository,
+      defaultTestFilesService,
+    );
     const postRunAiEvaluationService = new PostRunAiEvaluationService(
       aiSettingsService,
       () => new Date(),
@@ -272,6 +365,19 @@ void app
         now: () => new Date(),
         random: Math.random,
       },
+    );
+    const testSuitesService = new TestSuitesService(
+      projectRepository,
+      testRepository,
+      datasetRepository,
+      testSuiteRepository,
+      { createId: randomUUID, now: () => new Date() },
+    );
+    const batchRunsService = new BatchRunsService(
+      projectRepository,
+      testRepository,
+      batchRunRepository,
+      { createId: randomUUID, now: () => new Date() },
     );
     const importExportService = new ImportExportService(
       projectRepository,
@@ -298,6 +404,40 @@ void app
         mysql: mySqlSnapshotService,
         imap: imapService,
         postRunAi: postRunAiEvaluationService,
+        visualCheck: {
+          evaluate: (input) => aiSettingsService.evaluateVisualCheck(input),
+          decide: (input) => aiSettingsService.decideVisualAction(input),
+          selectGooglePayCard: async (input) => {
+            const generation = await aiSettingsService.generate({
+              task: "select_google_pay_card",
+              context: {
+                userDescription: input.description,
+                scenarioCodes: input.scenarioCodes,
+              },
+              ...(input.aiProvider === undefined
+                ? {}
+                : { provider: input.aiProvider }),
+              ...(input.aiModel === undefined ? {} : { model: input.aiModel }),
+            });
+            const output = generation.output as {
+              scenarioCode: string | null;
+              reason: string;
+            };
+            return {
+              provider: generation.provider,
+              model: generation.model,
+              scenarioCode: output.scenarioCode,
+              reason: output.reason,
+              usage: generation.usage,
+            };
+          },
+        },
+        aiPricing: {
+          estimateCachedCost: (provider, model, usage) =>
+            aiSettingsService.estimateCachedUsageCost(provider, model, usage),
+        },
+        artifactRoot: join(artifactRoot, "run-failures"),
+        artifacts: runArtifactRepository,
       },
     );
     const runHistoryService = new RunHistoryService(
@@ -306,6 +446,7 @@ void app
       datasetRepository,
       runRepository,
       mySqlRunDataRepository,
+      runArtifactRepository,
     );
     const recorderService = new RecorderService(
       projectRepository,
@@ -319,10 +460,36 @@ void app
         now: () => new Date(),
       },
     );
+    const recordingContinuations = new Map<
+      string,
+      { projectId: string; testId: string; stageId?: string }
+    >();
     testRunnerService.onStatusChange((snapshot) => {
       for (const window of BrowserWindow.getAllWindows()) {
         window.webContents.send(RUNNER_CHANNELS.statusChanged, snapshot);
       }
+      const runId = snapshot.run?.id;
+      if (runId === undefined) return;
+      const continuation = recordingContinuations.get(runId);
+      if (continuation === undefined) return;
+      if (snapshot.state === "stopped") {
+        recordingContinuations.delete(runId);
+        return;
+      }
+      if (snapshot.state !== "completed") return;
+      recordingContinuations.delete(runId);
+      void recorderService
+        .continueRecording(
+          continuation.projectId,
+          continuation.testId,
+          continuation.stageId,
+        )
+        .catch((error: unknown) => {
+          console.error(
+            "Recorderul nu a putut porni după replay-ul flow-ului.",
+            error,
+          );
+        });
     });
     recorderService.onStatusChange((snapshot) => {
       for (const window of BrowserWindow.getAllWindows()) {
@@ -344,6 +511,16 @@ void app
         aiSettingsService.listModels(provider, refresh === true),
     );
     ipcMain.handle(
+      AI_CHANNELS.getModelPricing,
+      (_event, provider: "gemini" | "openai", model: string) =>
+        aiSettingsService.getModelPricing(provider, model),
+    );
+    ipcMain.handle(
+      AI_CHANNELS.saveModelPricing,
+      (_event, input: SaveAiModelPricingInput) =>
+        aiSettingsService.saveModelPricing(input),
+    );
+    ipcMain.handle(
       AI_CHANNELS.testConnection,
       (_event, provider: Exclude<AiProviderId, "none">) =>
         aiSettingsService.testConnection(provider),
@@ -352,6 +529,11 @@ void app
       AI_CHANNELS.previewRequest,
       (_event, input: CreateAiRequestPreviewInput) =>
         aiSettingsService.preview(input),
+    );
+    ipcMain.handle(
+      AI_CHANNELS.generateRequest,
+      (_event, input: CreateAiRequestPreviewInput) =>
+        aiSettingsService.generate(input),
     );
     ipcMain.handle(
       AI_CHANNELS.previewStepEdit,
@@ -378,6 +560,21 @@ void app
       AI_CHANNELS.undoStepChange,
       (_event, input: UndoAiStepChangeInput) =>
         aiStepEditingService.undo(input),
+    );
+    ipcMain.handle(
+      AI_CHANNELS.previewSimilarTest,
+      (_event, input: AiSimilarTestInput) =>
+        aiSimilarTestService.preview(input),
+    );
+    ipcMain.handle(
+      AI_CHANNELS.generateSimilarTest,
+      (_event, input: AiSimilarTestInput) =>
+        aiSimilarTestService.generate(input),
+    );
+    ipcMain.handle(
+      AI_CHANNELS.createSimilarTest,
+      (_event, input: CreateAiSimilarTestInput) =>
+        aiSimilarTestService.create(input),
     );
     ipcMain.handle(PROJECT_CHANNELS.list, () => projectsService.list());
     ipcMain.handle(PROJECT_CHANNELS.create, (_event, input: ProjectInput) =>
@@ -487,6 +684,29 @@ void app
     ipcMain.handle(PAGE_ANALYSIS_CHANNELS.list, (_event, projectId: string) =>
       pageAnalysisService.listAnalyzedPages(projectId),
     );
+    ipcMain.handle(
+      PAGE_ANALYSIS_CHANNELS.listForms,
+      (_event, projectId: string, pageId: string) =>
+        pageAnalysisService.listForms(projectId, pageId),
+    );
+    ipcMain.handle(FORM_CHANNELS.getSettings, (_event, projectId: string) =>
+      formSettingsService.get(projectId),
+    );
+    ipcMain.handle(
+      FORM_CHANNELS.saveSettings,
+      (_event, projectId: string, input: SaveProjectFormSettingsInput) =>
+        formSettingsService.save(projectId, input),
+    );
+    ipcMain.handle(
+      FORM_CHANNELS.generateTests,
+      (_event, input: GenerateFormTestsInput) =>
+        formTestGenerationService.generate(input),
+    );
+    ipcMain.handle(
+      FORM_CHANNELS.createTests,
+      (_event, input: CreateGeneratedFormTestsInput) =>
+        formTestGenerationService.create(input),
+    );
     ipcMain.handle(TEST_CHANNELS.list, (_event, projectId: string) =>
       testsService.list(projectId),
     );
@@ -509,6 +729,11 @@ void app
       TEST_CHANNELS.saveFlow,
       (_event, projectId: string, testId: string, flowItems: TestFlowItem[]) =>
         testsService.saveFlow(projectId, testId, flowItems),
+    );
+    ipcMain.handle(
+      TEST_CHANNELS.saveStages,
+      (_event, projectId: string, testId: string, stages: TestStage[]) =>
+        testsService.saveStages(projectId, testId, stages),
     );
     ipcMain.handle(
       TEST_CHANNELS.savePostRunChecks,
@@ -690,6 +915,27 @@ void app
         datasetsService.list(projectId, testId),
     );
     ipcMain.handle(
+      DATASET_CHANNELS.selectFile,
+      async (_event, projectId: string, testId: string) => {
+        datasetsService.list(projectId, testId);
+        const selection = await dialog.showOpenDialog({
+          title: "Alege fișierul pentru dataset",
+          properties: ["openFile"],
+        });
+        const sourcePath = selection.filePaths[0];
+        if (selection.canceled || sourcePath === undefined) return undefined;
+        const root = join(app.getPath("userData"), "data", "dataset-files");
+        await mkdir(root, { recursive: true });
+        const destination = join(root, `${randomUUID()}${extname(sourcePath)}`);
+        await copyFile(sourcePath, destination);
+        return {
+          type: "file" as const,
+          path: destination,
+          name: basename(sourcePath),
+        };
+      },
+    );
+    ipcMain.handle(
       DATASET_CHANNELS.create,
       (_event, projectId: string, testId: string, input: CreateDatasetInput) =>
         datasetsService.create(projectId, testId, input),
@@ -726,11 +972,36 @@ void app
     ipcMain.handle(RUNNER_CHANNELS.start, (_event, input: StartRunInput) =>
       testRunnerService.start(input),
     );
+    ipcMain.handle(
+      RUNNER_CHANNELS.captureVisualContext,
+      (
+        _event,
+        projectId: string,
+        testId: string,
+        stepId: string,
+        flowItems: TestFlowItem[],
+      ) =>
+        testRunnerService.captureVisualStepContext(
+          projectId,
+          testId,
+          stepId,
+          flowItems,
+        ),
+    );
     ipcMain.handle(RUNNER_CHANNELS.stop, (_event, runId: string) =>
       testRunnerService.stop(runId),
     );
     ipcMain.handle(RUNNER_CHANNELS.retry, (_event, runId: string) =>
       testRunnerService.retry(runId),
+    );
+    ipcMain.handle(
+      RUNNER_CHANNELS.retryVariableProducer,
+      (_event, runId: string) => testRunnerService.retryVariableProducer(runId),
+    );
+    ipcMain.handle(
+      RUNNER_CHANNELS.provideManualVariable,
+      (_event, runId: string, value: unknown) =>
+        testRunnerService.provideManualVariable(runId, value),
     );
     ipcMain.handle(RUNNER_CHANNELS.skipStep, (_event, runId: string) =>
       testRunnerService.skipCurrentStep(runId),
@@ -816,10 +1087,81 @@ void app
       (_event, projectId: string, target: RunHistoryPurgeTarget) =>
         runHistoryService.purge(projectId, target),
     );
+    ipcMain.handle(TEST_SUITE_CHANNELS.list, (_event, projectId: string) =>
+      testSuitesService.list(projectId),
+    );
+    ipcMain.handle(
+      TEST_SUITE_CHANNELS.save,
+      (
+        _event,
+        projectId: string,
+        suiteId: string | undefined,
+        input: SaveTestSuiteInput,
+      ) => testSuitesService.save(projectId, suiteId, input),
+    );
+    ipcMain.handle(
+      TEST_SUITE_CHANNELS.delete,
+      (_event, projectId: string, suiteId: string) =>
+        testSuitesService.delete(projectId, suiteId),
+    );
+    ipcMain.handle(
+      BATCH_RUN_CHANNELS.create,
+      (_event, input: CreateBatchRunInput) => batchRunsService.create(input),
+    );
+    ipcMain.handle(
+      BATCH_RUN_CHANNELS.updateItem,
+      (_event, batchId: string, input: UpdateBatchRunItemInput) =>
+        batchRunsService.updateItem(batchId, input),
+    );
+    ipcMain.handle(
+      BATCH_RUN_CHANNELS.complete,
+      (
+        _event,
+        batchId: string,
+        status: BatchRunStatus,
+        cleanupStatus: BatchRun["cleanupStatus"] | undefined,
+      ) => batchRunsService.complete(batchId, status, cleanupStatus),
+    );
+    ipcMain.handle(BATCH_RUN_CHANNELS.list, (_event, projectId: string) =>
+      batchRunsService.list(projectId),
+    );
+    ipcMain.handle(
+      BATCH_RUN_CHANNELS.get,
+      (_event, projectId: string, batchId: string) =>
+        batchRunsService.get(projectId, batchId),
+    );
+    ipcMain.handle(
+      BATCH_RUN_CHANNELS.flakyStatistics,
+      (_event, projectId: string) =>
+        batchRunsService.flakyStatistics(projectId),
+    );
     ipcMain.handle(
       RECORDER_CHANNELS.start,
-      (_event, projectId: string, testId: string) =>
-        recorderService.start(projectId, testId),
+      (_event, projectId: string, testId: string, stageId?: string) =>
+        recorderService.start(projectId, testId, stageId),
+    );
+    ipcMain.handle(
+      RECORDER_CHANNELS.continueRecording,
+      async (_event, projectId: string, testId: string, stageId?: string) => {
+        const prepared = await testRunnerService.start({
+          projectId,
+          testId,
+          mode: "automatic",
+          waitBeforeStart: true,
+          flowOnly: true,
+          ...(stageId === undefined ? {} : { stageId }),
+          missingVariablePolicy: "pause",
+        });
+        if (prepared.run === undefined) {
+          throw new Error("Replay-ul flow-ului nu a creat o rulare.");
+        }
+        recordingContinuations.set(prepared.run.id, {
+          projectId,
+          testId,
+          ...(stageId === undefined ? {} : { stageId }),
+        });
+        return testRunnerService.continueExecution(prepared.run.id);
+      },
     );
     ipcMain.handle(
       RECORDER_CHANNELS.stop,

@@ -1,7 +1,9 @@
 export const ACTION_TYPES = [
   "navigate",
+  "hover",
   "click",
   "fill",
+  "upload_file",
   "select_option",
   "check",
   "uncheck",
@@ -11,6 +13,7 @@ export const ACTION_TYPES = [
   "wait_for_url",
   "choose_repeated_item",
   "calendar_select",
+  "visual_ai",
   "manual_intervention",
 ] as const;
 
@@ -93,10 +96,21 @@ export interface LocatorFallback {
   whyExplanation: string;
 }
 
+export interface TargetFrameContext {
+  origin: string;
+}
+
 export interface TargetDefinition {
   fieldId?: string;
   primary: LocatorDefinition;
   stability?: number;
+  frame?: TargetFrameContext;
+}
+
+export interface RevealPreparation {
+  action: "hover";
+  target: TargetDefinition;
+  fallbacks: LocatorFallback[];
 }
 
 export const WAIT_TYPES = [
@@ -115,6 +129,7 @@ export interface WaitDefinition {
   timeoutMs?: number;
   target?: LocatorDefinition;
   value?: string;
+  warningOnly?: boolean;
 }
 
 export interface RepeatUntilDefinition {
@@ -125,6 +140,18 @@ export interface RepeatUntilDefinition {
 }
 
 export type DatasetValueStrategy = "dataset" | "manual";
+
+export interface VisualInteractionRegion {
+  /** Coordonate normalizate (0..1) în viewport. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  /** JPEG-ul decupat folosit în editor pentru a arăta exact contextul AI. */
+  referenceImageBase64?: string;
+}
 
 export interface ActionStep {
   id: string;
@@ -142,14 +169,28 @@ export interface ActionStep {
   key?: string;
   scrollX?: number;
   scrollY?: number;
+  scrollMode?: "dom" | "wheel";
   repeat?: number;
   repeatUntil?: RepeatUntilDefinition;
+  visualInstruction?: string;
+  visualRegion?: VisualInteractionRegion;
+  /** Scenariul cardului de test ales de AI în payment sheet-ul Google Pay. */
+  googlePayCardDescription?: string;
+  revealBefore?: RevealPreparation[];
   waitAfter?: WaitDefinition;
   fallbacks: LocatorFallback[];
   enabled: boolean;
 }
 
-export type CheckType = "element" | "text" | "url" | "mysql" | "imap";
+export type CheckType =
+  | "element"
+  | "text"
+  | "url"
+  | "mysql"
+  | "imap"
+  | "js_eval"
+  | "visual"
+  | "adaptive";
 
 export interface ElementCheckConfig {
   target: LocatorDefinition;
@@ -191,12 +232,45 @@ export interface ImapCheckConfig {
   mailbox?: string;
 }
 
+export interface JsEvalCheckConfig {
+  jsSnippet: string;
+  expectedResult?: JsonCheckValue;
+}
+
+export interface VisualCheckConfig {
+  prompt: string;
+  minimumConfidence?: number;
+}
+
+export interface AdaptiveCheckConfig {
+  strategy: "auto" | "dom" | "visual";
+  expectedTexts: string[];
+  matchMode: "any" | "all" | "exact";
+  target?: LocatorDefinition;
+  caseSensitive?: boolean;
+  ignoreDiacritics?: boolean;
+  visualPrompt?: string;
+  visualFallback: boolean;
+  minimumConfidence?: number;
+}
+
+export type JsonCheckValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonCheckValue[]
+  | { [key: string]: JsonCheckValue };
+
 export type CheckConfig =
   | ElementCheckConfig
   | TextCheckConfig
   | UrlCheckConfig
   | MysqlCheckConfig
-  | ImapCheckConfig;
+  | ImapCheckConfig
+  | JsEvalCheckConfig
+  | VisualCheckConfig
+  | AdaptiveCheckConfig;
 
 export interface CheckStep {
   id: string;
@@ -205,6 +279,7 @@ export interface CheckStep {
   title: string;
   humanDescription: string;
   config: CheckConfig;
+  timeoutMs?: number;
   enabled: boolean;
 }
 
@@ -235,6 +310,12 @@ export type DatasetPrimitive = string | number | boolean | null;
 export interface FixedDatasetValue {
   type: "fixed";
   value: DatasetPrimitive;
+}
+
+export interface FileDatasetValue {
+  type: "file";
+  path: string;
+  name: string;
 }
 
 export interface TimestampDatasetValue {
@@ -296,7 +377,10 @@ export type GeneratedDatasetValue =
   | TemplateDatasetValue;
 
 export type DatasetValue =
-  DatasetPrimitive | FixedDatasetValue | GeneratedDatasetValue;
+  | DatasetPrimitive
+  | FixedDatasetValue
+  | FileDatasetValue
+  | GeneratedDatasetValue;
 
 export interface TestDataset {
   id: string;
@@ -308,7 +392,7 @@ export interface TestDataset {
 }
 
 export interface DeclarativeTestDefinition {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   id: string;
   projectId: string;
   name: string;
@@ -321,5 +405,6 @@ export interface DeclarativeTestDefinition {
   createdAt: string;
   updatedAt: string;
   flowItems: TestFlowItem[];
+  stages?: import("./test-stages.js").TestStage[];
   datasets: TestDataset[];
 }

@@ -14,6 +14,7 @@ import {
   RunRepository,
   TestRepository,
 } from "./persistence/repositories.js";
+import { RunArtifactRepository } from "./persistence/suite-repositories.js";
 
 const asRecord = (
   value: JsonValue | undefined,
@@ -29,6 +30,7 @@ export class RunHistoryService {
     private readonly datasets: DatasetRepository,
     private readonly runs: RunRepository,
     private readonly mysql: MySqlRunDataRepository,
+    private readonly artifacts?: RunArtifactRepository,
   ) {}
 
   public list(
@@ -82,6 +84,7 @@ export class RunHistoryService {
         ? {}
         : { postRunResult: structuredClone(run.postRunResult) }),
       ...(run.error === undefined ? {} : { error: structuredClone(run.error) }),
+      artifacts: this.artifacts?.listByRun(run.id) ?? [],
     };
   }
 

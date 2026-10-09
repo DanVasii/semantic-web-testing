@@ -45,6 +45,7 @@ export const wipeBrowserStateForOrigin = async (
   page: Page,
   startUrl: string,
   options: {
+    clearAllContextCookies?: boolean;
     reloadStartPage?: boolean;
     resources?: ManualWipeResource[];
   } = {},
@@ -62,6 +63,7 @@ export const wipeBrowserStateForOrigin = async (
       "serviceWorkers",
     ],
   );
+  let contextCookieEntry: WipeLogEntry | undefined;
 
   try {
     const currentOrigin = (() => {
@@ -119,18 +121,37 @@ export const wipeBrowserStateForOrigin = async (
 
   if (resources.has("cookies")) {
     try {
-      const cookies = (await context.cookies([origin])).filter(
-        (cookie) => cookie.domain.replace(/^\./, "") === hostname,
-      );
-      await context.clearCookies({
-        domain: new RegExp(`^\\.?${escapeRegularExpression(hostname)}$`, "i"),
-      });
-      entries.push({
-        resource: "cookies",
-        status: "cleared",
-        message: "Cookie-urile origin-ului au fost șterse.",
-        count: cookies.length,
-      });
+      if (options.clearAllContextCookies === true) {
+        const cookies = await context.cookies();
+        const secureCount = cookies.filter((cookie) => cookie.secure).length;
+        await context.clearCookies();
+        const remaining = await context.cookies();
+        if (remaining.length > 0) {
+          throw new Error(
+            `Au rămas ${remaining.length} cookie-uri imediat după clearCookies().`,
+          );
+        }
+        contextCookieEntry = {
+          resource: "cookies",
+          status: "cleared",
+          message: `Toate cookie-urile contextului au fost șterse și verificate înainte de reload (${secureCount} Secure).`,
+          count: cookies.length,
+        };
+        entries.push(contextCookieEntry);
+      } else {
+        const cookies = (await context.cookies([origin])).filter(
+          (cookie) => cookie.domain.replace(/^\./, "") === hostname,
+        );
+        await context.clearCookies({
+          domain: new RegExp(`^\\.?${escapeRegularExpression(hostname)}$`, "i"),
+        });
+        entries.push({
+          resource: "cookies",
+          status: "cleared",
+          message: "Cookie-urile origin-ului au fost șterse.",
+          count: cookies.length,
+        });
+      }
     } catch (error) {
       entries.push(
         failedEntry(
@@ -321,6 +342,13 @@ export const wipeBrowserStateForOrigin = async (
   if (options.reloadStartPage !== false) {
     try {
       await page.goto(startUrl, { waitUntil: "domcontentloaded" });
+      if (contextCookieEntry !== undefined) {
+        const recreated = await context.cookies();
+        contextCookieEntry.message +=
+          recreated.length === 0
+            ? " După reload nu a fost recreat niciun cookie."
+            : ` După reload, serverele paginii au recreat ${recreated.length} cookie-uri; acestea sunt cookie-uri noi.`;
+      }
     } catch (error) {
       entries.push(
         failedEntry(

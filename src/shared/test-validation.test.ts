@@ -227,6 +227,58 @@ describe("test JSON schemas", () => {
 });
 
 describe("valid runtime test schema", () => {
+  it("accepts a visual check with prompt and confidence threshold", () => {
+    const result = validateDeclarativeTest({
+      ...validTest,
+      flowItems: [
+        {
+          id: "check-visual",
+          type: "check",
+          checkType: "visual",
+          title: "Confirmă vizual",
+          humanDescription: "Pagina afișează rezultatul așteptat.",
+          config: {
+            prompt: "Confirmă că pagina afișează o comandă finalizată.",
+            minimumConfidence: 0.65,
+          },
+          timeoutMs: 5_000,
+          enabled: true,
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({ valid: true, issues: [] });
+  });
+
+  it("accepts an adaptive DOM check with visual fallback", () => {
+    const result = validateDeclarativeTest({
+      ...validTest,
+      flowItems: [
+        {
+          id: "check-adaptive",
+          type: "check",
+          checkType: "adaptive",
+          title: "Confirmă telefonul invalid",
+          humanDescription: "Trebuie să apară Telefon invalid.",
+          config: {
+            strategy: "auto",
+            expectedTexts: ["Telefon invalid"],
+            matchMode: "any",
+            caseSensitive: false,
+            ignoreDiacritics: true,
+            visualPrompt: "Confirmă vizual avertizarea.",
+            visualFallback: true,
+            minimumConfidence: 0.6,
+          },
+          timeoutMs: 5_000,
+          enabled: true,
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({ valid: true, issues: [] });
+  });
+
   it("accepts all MVP flow item and locator variants", () => {
     expect(validateDeclarativeTest(validTest)).toEqual({
       valid: true,
@@ -234,6 +286,17 @@ describe("valid runtime test schema", () => {
       issues: [],
     });
     expect(assertValidDeclarativeTest(validTest)).toBe(validTest);
+  });
+
+  it("accepts an HTTP origin as recorded frame context", () => {
+    const framed: DeclarativeTestDefinition = structuredClone(validTest);
+    const fill = framed.flowItems.find((item) => item.id === "step-3");
+    if (fill?.type !== "action" || fill.target === undefined) {
+      throw new Error("Pasul fill fixture lipsește.");
+    }
+    fill.target.frame = { origin: "https://js.stripe.com" };
+
+    expect(validateDeclarativeTest(framed).valid).toBe(true);
   });
 
   it("accepts fixed, generated and primitive dataset values", () => {
@@ -355,6 +418,83 @@ describe("invalid runtime test schema", () => {
           "$.flowItems[0].target.primary.attribute",
           "$.flowItems[0].fallbacks",
           "$.flowItems[0].valueKey",
+        ]),
+      );
+    }
+  });
+
+  it("accepts complete URL variables and URL templates on actions", () => {
+    const templated = {
+      ...validTest,
+      flowItems: [
+        {
+          ...structuredClone(validTest.flowItems[0]),
+          url: "{{payment_url}}",
+        },
+        {
+          ...structuredClone(validTest.flowItems[0]),
+          id: "step-template-url",
+          url: "{{baseUrl}}/orders/{{order_id}}",
+        },
+      ],
+    };
+
+    const result = validateDeclarativeTest(templated);
+    expect(result.valid, JSON.stringify(result)).toBe(true);
+  });
+
+  it("requires a bounded region and instruction for visual AI actions", () => {
+    const visualAction = {
+      id: "visual-calendar",
+      type: "action" as const,
+      actionType: "visual_ai" as const,
+      title: "Alege data",
+      humanDescription: "Alege vizual o dată disponibilă.",
+      whyExplanation: "Calendarul se schimbă în funcție de luna curentă.",
+      visualInstruction:
+        "Navighează în calendar și selectează prima dată disponibilă.",
+      visualRegion: {
+        x: 0.1,
+        y: 0.2,
+        width: 0.7,
+        height: 0.6,
+        viewportWidth: 1280,
+        viewportHeight: 720,
+        referenceImageBase64: "aW1hZ2U=",
+      },
+      fallbacks: [],
+      enabled: true,
+    };
+
+    expect(
+      validateDeclarativeTest({ ...validTest, flowItems: [visualAction] })
+        .valid,
+    ).toBe(true);
+    const { visualRegion: _visualRegion, ...visualActionWithoutRegion } =
+      visualAction;
+    expect(_visualRegion).toBeDefined();
+    expect(
+      validateDeclarativeTest({
+        ...validTest,
+        flowItems: [visualActionWithoutRegion],
+      }).valid,
+    ).toBe(true);
+    const invalid = validateDeclarativeTest({
+      ...validTest,
+      flowItems: [
+        {
+          ...visualAction,
+          visualInstruction: "",
+          visualRegion: { ...visualAction.visualRegion, width: 1.2 },
+        },
+      ],
+    });
+    expect(invalid.valid).toBe(false);
+    if (!invalid.valid) {
+      expect(invalid.issues.map(({ path }) => path)).toEqual(
+        expect.arrayContaining([
+          "$.flowItems[0].visualInstruction",
+          "$.flowItems[0].visualRegion.width",
         ]),
       );
     }

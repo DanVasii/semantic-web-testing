@@ -23,8 +23,8 @@ describe("ImapSettingsPanel", () => {
     } as unknown as SemanticAppApi;
 
     render(<ImapSettingsPanel api={api} />);
-    await user.type(screen.getByLabelText("Host"), "imap.mail.yahoo.com");
-    await user.type(screen.getByLabelText("Utilizator"), "user@yahoo.com");
+    await user.type(screen.getByLabelText("Host"), "imap.example.test");
+    await user.type(screen.getByLabelText("Utilizator"), "user@example.test");
     await user.type(screen.getByLabelText(/^Parolă/), "app-password");
     await user.click(
       screen.getByRole("button", { name: "Testează conexiunea" }),
@@ -33,10 +33,10 @@ describe("ImapSettingsPanel", () => {
     await waitFor(() => {
       expect(testImapConnection).toHaveBeenCalledWith({
         name: "Cont principal",
-        host: "imap.mail.yahoo.com",
+        host: "imap.example.test",
         port: 993,
         secure: true,
-        username: "user@yahoo.com",
+        username: "user@example.test",
         password: "app-password",
         mailbox: "INBOX",
       });
@@ -119,7 +119,7 @@ describe("ImapSettingsPanel", () => {
           receivedAt: "2026-07-27T10:00:03.000Z",
           subject: "Am primit rezervarea ta",
           from: ["fixture@example.test"],
-          to: ["client@yahoo.com"],
+          to: ["client@example.test"],
           textPreview: "Bună, Ana! Am primit rezervarea ta.",
         },
       ],
@@ -130,8 +130,8 @@ describe("ImapSettingsPanel", () => {
     } as unknown as SemanticAppApi;
 
     render(<ImapSettingsPanel api={api} />);
-    await user.type(screen.getByLabelText("Host"), "imap.mail.yahoo.com");
-    await user.type(screen.getByLabelText("Utilizator"), "client@yahoo.com");
+    await user.type(screen.getByLabelText("Host"), "imap.example.test");
+    await user.type(screen.getByLabelText("Utilizator"), "client@example.test");
     await user.type(screen.getByLabelText(/^Parolă/), "app-password");
     await user.click(
       screen.getByRole("button", { name: "Pornește ascultarea" }),
@@ -141,8 +141,8 @@ describe("ImapSettingsPanel", () => {
     expect(screen.getByText(/fixture@example.test/)).not.toBeNull();
     expect(pollImapDiagnostic).toHaveBeenCalledWith(
       expect.objectContaining({
-        host: "imap.mail.yahoo.com",
-        username: "client@yahoo.com",
+        host: "imap.example.test",
+        username: "client@example.test",
         password: "app-password",
         mailbox: "INBOX",
       }),

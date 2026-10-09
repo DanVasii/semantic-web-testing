@@ -559,7 +559,9 @@ describe("AiRunPlanningService", () => {
         {
           provider: "gemini",
           ollama: { baseUrl: "", model: "" },
+          lmStudio: { baseUrl: "", model: "" },
           gemini: { model: "gemini-flash", apiKeyConfigured: true },
+          openai: { model: "", apiKeyConfigured: false },
         },
         input as CreateAiRequestPreviewInput,
       ),

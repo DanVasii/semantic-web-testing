@@ -16,7 +16,7 @@ const target: RecorderElementSnapshot = {
   name: "email",
   label: "Adresă de e-mail",
   role: "textbox",
-  placeholder: "nume@exemplu.ro",
+  placeholder: "nume@example.test",
   dataAttributes: {
     "data-testid": "checkout-email",
   },
@@ -41,7 +41,35 @@ const build = (rawEvent: RecorderRawEvent) =>
   });
 
 describe("buildRecorderStep", () => {
-  it("prioritizes stable semantic locators and keeps fallbacks", () => {
+  it("prefers a stable button name selector before its implicit role", () => {
+    const draft = build(
+      event("click", {
+        target: {
+          tagName: "button",
+          inputType: "submit",
+          name: "add-to-cart",
+          text: "Adaugă în coș →",
+          role: "button",
+          dataAttributes: {},
+          cssPath: 'button[name="add-to-cart"]',
+        },
+      }),
+    );
+
+    expect(draft.step.target?.primary).toEqual({
+      type: "css",
+      operator: "equals",
+      value: 'button[type="submit"][name="add-to-cart"]',
+    });
+    expect(draft.step.fallbacks.map(({ locator }) => locator)).toContainEqual({
+      type: "role",
+      role: "button",
+      operator: "equals",
+      value: "Adaugă în coș →",
+    });
+  });
+
+  it("prioritizes stable attributes and keeps semantic fallbacks", () => {
     const draft = build(event("click"));
 
     expect(draft.step).toMatchObject({
@@ -57,12 +85,59 @@ describe("buildRecorderStep", () => {
       },
     });
     expect(draft.step.fallbacks.map(({ locator }) => locator.type)).toEqual([
+      "css",
+      "css",
       "label",
-      "role",
-      "placeholder",
     ]);
     expect(draft.step.humanDescription).toContain("Adresă de e-mail");
     expect(draft.step.whyExplanation.length).toBeGreaterThan(20);
+  });
+
+  it("builds an explicit hover step with the captured semantic target", () => {
+    const draft = build(event("hover"));
+
+    expect(draft.step).toMatchObject({
+      id: "step-hover",
+      actionType: "hover",
+      title: "Treci mouse-ul peste Adresă de e-mail",
+      target: {
+        primary: {
+          type: "data_attribute",
+          attribute: "data-testid",
+          value: "checkout-email",
+        },
+      },
+    });
+  });
+
+  it("attaches hover reveal candidates to the click instead of adding steps", () => {
+    const draft = build(
+      event("click", {
+        hoverCandidates: [
+          {
+            tagName: "button",
+            id: "cart",
+            role: "button",
+            ariaLabel: "Coș",
+            dataAttributes: { "data-testid": "cart-trigger" },
+          },
+        ],
+      }),
+    );
+
+    expect(draft.step.revealBefore).toEqual([
+      expect.objectContaining({
+        action: "hover",
+        target: {
+          primary: {
+            type: "data_attribute",
+            attribute: "data-testid",
+            operator: "equals",
+            value: "cart-trigger",
+          },
+        },
+      }),
+    ]);
   });
 
   it("uses the card heading instead of all descendant text for a custom clickable card", () => {
@@ -107,6 +182,23 @@ describe("buildRecorderStep", () => {
     });
     expect(draft.capturedValue).toBe("dan@example.test");
     expect(draft.capturedInputKind).toBe("text");
+  });
+
+  it("maps a file input change to a dataset-backed upload step", () => {
+    const draft = build(
+      event("upload_file", {
+        value: "cv.pdf",
+        target: { ...target, inputType: "file", name: "cv", label: "CV" },
+      }),
+    );
+
+    expect(draft.step).toMatchObject({
+      actionType: "upload_file",
+      inputFieldId: "cv",
+      valueKey: "cv",
+      valueStrategy: "dataset",
+    });
+    expect(draft.capturedValue).toBeUndefined();
   });
 
   it("marks password values as confidential input", () => {
@@ -211,6 +303,37 @@ describe("buildRecorderStep", () => {
     });
   });
 
+  it("keeps the semantic target for a nested container scroll", () => {
+    const scroll = build({
+      type: "scroll",
+      url: "https://example.test/products",
+      timestamp: "2026-07-25T10:00:00.000Z",
+      scrollX: 0,
+      scrollY: 360,
+      scrollMode: "wheel",
+      target: {
+        tagName: "div",
+        id: "results",
+        dataAttributes: { "data-testid": "search-results" },
+        cssPath: "#results",
+      },
+    });
+
+    expect(scroll.step).toMatchObject({
+      actionType: "scroll",
+      title: "Derulează containerul",
+      scrollY: 360,
+      scrollMode: "wheel",
+      target: {
+        primary: {
+          type: "data_attribute",
+          attribute: "data-testid",
+          value: "search-results",
+        },
+      },
+    });
+  });
+
   it("uses a repeated-component locator instead of positional nth-child", () => {
     const draft = build(
       event("click", {
@@ -243,6 +366,39 @@ describe("buildRecorderStep", () => {
     expect(JSON.stringify(draft.step.target?.primary)).not.toContain(
       "nth-child",
     );
+  });
+
+  it("prefers the captured href and keeps it as a direct fallback for repeated product cards", () => {
+    const draft = build(
+      event("click", {
+        target: {
+          tagName: "a",
+          href: "/produs/heavyweight-tee-black-edition/",
+          role: "link",
+          text: "Tricou gros — Ediție neagră",
+          dataAttributes: {},
+          repeated: {
+            containerLocator: {
+              type: "css",
+              operator: "equals",
+              value: "article",
+            },
+            distinguishingText: "Tricou gros — Ediție neagră",
+          },
+        },
+      }),
+    );
+
+    const hrefLocator = {
+      type: "css",
+      operator: "equals",
+      value: 'a[href="/produs/heavyweight-tee-black-edition/"]',
+    };
+    expect(draft.step.target?.primary).toMatchObject({
+      type: "repeated_component",
+      targetInsideContainer: hrefLocator,
+    });
+    expect(draft.step.fallbacks[0]?.locator).toEqual(hrefLocator);
   });
 
   it("does not create an invalid repeated-component locator without a distinguishing filter", () => {

@@ -94,6 +94,30 @@ try {
   await page.mouse.wheel(0, 600);
   await page.waitForTimeout(650);
 
+  await page.evaluate(() => {
+    const container = document.createElement("div");
+    container.id = "recorder-nested-scroll";
+    container.dataset.testid = "recorder-nested-scroll";
+    Object.assign(container.style, {
+      position: "fixed",
+      right: "20px",
+      bottom: "20px",
+      width: "240px",
+      height: "120px",
+      overflowY: "auto",
+      background: "white",
+      zIndex: "10",
+    });
+    const content = document.createElement("div");
+    content.style.height = "800px";
+    content.textContent = "Conținut scrollabil pentru smoke test";
+    container.append(content);
+    document.body.append(container);
+  });
+  await page.locator("#recorder-nested-scroll").hover();
+  await page.mouse.wheel(0, 240);
+  await page.waitForTimeout(650);
+
   const beforeInternalClick = events.length;
   await setRecorderPageBlocked(page, bindingName, true);
   await page
@@ -120,6 +144,7 @@ try {
     "click",
     "click",
     "click",
+    "scroll",
     "scroll",
   ]);
   assert.equal(events[0]?.value, "final@example.test");
@@ -161,6 +186,9 @@ try {
   );
   assert.equal(events[10]?.target?.text, "10:30");
   assert.ok(Math.abs(events[11]?.scrollY ?? 0) >= 120);
+  assert.equal(events[12]?.target?.id, "recorder-nested-scroll");
+  assert.ok(Math.abs(events[12]?.scrollY ?? 0) >= 120);
+  assert.equal(events[12]?.scrollMode, "wheel");
   assert.equal(
     await page.locator("#appointment-date").inputValue(),
     "2027-08-15",
@@ -176,6 +204,18 @@ try {
   });
 
   await stopRecorderCapture(page, bindingName);
+  const nestedScrollDraft = buildRecorderStep(events[12], {
+    createId: () => "nested-scroll-smoke",
+  });
+  await page.locator("#recorder-nested-scroll").evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await executeFlowItem(page, nestedScrollDraft.step, {});
+  assert.ok(
+    (await page
+      .locator("#recorder-nested-scroll")
+      .evaluate((element) => element.scrollTop)) >= 120,
+  );
   await page.locator('[data-testid="calendar-previous-month"]').click();
   await executeFlowItem(
     page,

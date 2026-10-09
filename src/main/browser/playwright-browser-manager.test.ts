@@ -204,6 +204,25 @@ describe("PlaywrightBrowserManager contexts and CDP", () => {
     });
   });
 
+  it("starts a visible Chromium window maximized with a native viewport", async () => {
+    const { engines, manager } = createManager({ headless: false });
+
+    await manager.launch(
+      launchOptions("chrome", "system", "C:\\Chrome\\chrome.exe", {
+        viewport: { width: 1440, height: 900 },
+      }),
+    );
+
+    expect(engines.chromium.adapter.launch).toHaveBeenCalledWith({
+      headless: false,
+      executablePath: "C:\\Chrome\\chrome.exe",
+      args: ["--start-maximized"],
+    });
+    expect(engines.chromium.launchedBrowser.newContext).toHaveBeenCalledWith({
+      viewport: null,
+    });
+  });
+
   it("launches a persistent profile context", async () => {
     const { engines, manager } = createManager();
 

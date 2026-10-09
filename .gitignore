@@ -4,6 +4,7 @@ node_modules/
 # TypeScript and build outputs
 dist/
 out/
+/output/
 build/
 release/
 *.tsbuildinfo
@@ -29,11 +30,46 @@ runtime/
 *.db-wal
 *.sqlite
 *.sqlite3
+*.sqlite-journal
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3-journal
+*.sqlite3-shm
+*.sqlite3-wal
 
 # Environment files and local secrets
 .env
 .env.*
 !.env.example
+!.env.fixture.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.keystore
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+.npmrc.local
+.netrc
+.ssh/
+.aws/
+.azure/
+.gcloud/
+credentials.json
+credentials.*.json
+service-account*.json
+
+# Local browser sessions and authentication state
+browser-profile/
+browser-profiles/
+chrome-profile/
+chrome-profiles/
+.auth/
+playwright/.auth/
+storage-state*.json
+storageState*.json
 
 # Logs
 logs/
@@ -48,6 +84,12 @@ tmp/
 temp/
 *.tmp
 
+# Local source snapshots and exploratory scripts (keep fixture archives)
+/src.zip
+/test-pw.cjs
+/test-pw.js
+/tmp-old-test-runner.ts
+
 # Editors
 .idea/
 .vscode/*
@@ -60,4 +102,3 @@ temp/
 .DS_Store
 Thumbs.db
 Desktop.ini
-

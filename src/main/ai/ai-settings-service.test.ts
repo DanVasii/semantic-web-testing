@@ -41,6 +41,83 @@ afterEach(() => {
 });
 
 describe("AiSettingsService", () => {
+  it("loads LiteLLM pricing, converts it per million tokens and caches it for seven days", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: "gemini/gemini-flash",
+              input_cost_per_token: 0.0000003,
+              output_cost_per_token: 0.0000025,
+              cache_read_input_token_cost: 0.00000003,
+            },
+          ],
+          has_more: false,
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const first = await service.getModelPricing("gemini", "gemini-flash");
+    const second = await service.getModelPricing("gemini", "gemini-flash");
+
+    expect(first).toMatchObject({
+      status: "available",
+      source: "litellm",
+      inputPerMillionUsd: 0.3,
+      outputPerMillionUsd: 2.5,
+      cachedInputPerMillionUsd: 0.03,
+      matchedModelId: "gemini/gemini-flash",
+      fetchedAt: "2026-07-25T12:00:00.000Z",
+      expiresAt: "2026-08-01T12:00:00.000Z",
+    });
+    expect(second).toEqual(first);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const catalogUrl = fetchMock.mock.calls[0]?.[0];
+    expect(catalogUrl).toBeInstanceOf(URL);
+    expect((catalogUrl as URL).searchParams.get("provider")).toBe("gemini");
+    expect(
+      service.estimateCachedUsageCost("gemini", "gemini-flash", {
+        inputTokens: 1_000,
+        outputTokens: 200,
+      }),
+    ).toBeCloseTo(0.0008);
+  });
+
+  it("offers the manual fallback when LiteLLM has no exact model match", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [{ id: "openai/gpt-other" }],
+          has_more: false,
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const missing = await service.getModelPricing("openai", "gpt-test");
+    expect(missing).toMatchObject({
+      provider: "openai",
+      model: "gpt-test",
+      status: "unavailable",
+    });
+
+    const manual = service.saveModelPricing({
+      provider: "openai",
+      model: "gpt-test",
+      inputPerMillionUsd: 1.25,
+      outputPerMillionUsd: 5,
+    });
+    expect(manual).toMatchObject({
+      status: "available",
+      source: "manual",
+      inputPerMillionUsd: 1.25,
+      outputPerMillionUsd: 5,
+      expiresAt: "2026-08-01T12:00:00.000Z",
+    });
+  });
+
   it("starts with AI disabled and a local Ollama default", () => {
     expect(service.get()).toEqual({
       provider: "none",
@@ -48,7 +125,15 @@ describe("AiSettingsService", () => {
         baseUrl: "http://127.0.0.1:11434",
         model: "",
       },
+      lmStudio: {
+        baseUrl: "http://127.0.0.1:1234",
+        model: "",
+      },
       gemini: {
+        model: "",
+        apiKeyConfigured: false,
+      },
+      openai: {
         model: "",
         apiKeyConfigured: false,
       },
@@ -60,6 +145,8 @@ describe("AiSettingsService", () => {
       provider: "gemini",
       ollamaBaseUrl: "http://127.0.0.1:11434/",
       ollamaModel: "",
+      lmStudioBaseUrl: "http://127.0.0.1:1234",
+      lmStudioModel: "",
       geminiModel: "",
       geminiApiKey: "gemini-secret-key",
     });
@@ -78,6 +165,8 @@ describe("AiSettingsService", () => {
       provider: "gemini",
       ollamaBaseUrl: "http://127.0.0.1:11434",
       ollamaModel: "",
+      lmStudioBaseUrl: "http://127.0.0.1:1234",
+      lmStudioModel: "",
       geminiModel: "gemini-model",
     });
     expect(repository.get()?.encryptedGeminiApiKey).toBe(
@@ -90,6 +179,8 @@ describe("AiSettingsService", () => {
       provider: "gemini",
       ollamaBaseUrl: "http://127.0.0.1:11434",
       ollamaModel: "",
+      lmStudioBaseUrl: "http://127.0.0.1:1234",
+      lmStudioModel: "",
       geminiModel: "",
       geminiApiKey: "gemini-secret-key",
     });
@@ -136,11 +227,51 @@ describe("AiSettingsService", () => {
     });
   });
 
+  it("encrypts an OpenAI key and loads the authorized model catalog", async () => {
+    service.save({
+      provider: "openai",
+      ollamaBaseUrl: "http://127.0.0.1:11434",
+      ollamaModel: "",
+      lmStudioBaseUrl: "http://127.0.0.1:1234",
+      lmStudioModel: "",
+      geminiModel: "",
+      openaiModel: "gpt-test",
+      openaiApiKey: "openai-secret-key",
+    });
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          object: "list",
+          data: [{ id: "gpt-test" }, { id: "text-embedding-test" }],
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = await service.testConnection("openai");
+
+    expect(result).toMatchObject({
+      provider: "openai",
+      success: true,
+      models: [{ id: "gpt-test", displayName: "gpt-test" }],
+    });
+    expect(repository.get()?.encryptedOpenaiApiKey).toBe(
+      "encrypted:b3BlbmFpLXNlY3JldC1rZXk=",
+    );
+    const [url, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.openai.com/v1/models");
+    expect(request.headers).toMatchObject({
+      Authorization: "Bearer openai-secret-key",
+    });
+  });
+
   it("preloads the configured model catalog once and serves it from memory", async () => {
     service.save({
       provider: "gemini",
       ollamaBaseUrl: "http://127.0.0.1:11434",
       ollamaModel: "",
+      lmStudioBaseUrl: "http://127.0.0.1:1234",
+      lmStudioModel: "",
       geminiModel: "gemini-flash",
       geminiApiKey: "gemini-secret-key",
     });
@@ -173,6 +304,8 @@ describe("AiSettingsService", () => {
       provider: "ollama",
       ollamaBaseUrl: "http://localhost:11434/api/",
       ollamaModel: "",
+      lmStudioBaseUrl: "http://127.0.0.1:1234",
+      lmStudioModel: "",
       geminiModel: "",
     });
     fetchMock.mockResolvedValue(
@@ -197,11 +330,51 @@ describe("AiSettingsService", () => {
     );
   });
 
+  it("normalizes and tests an LM Studio OpenAI-compatible connection", async () => {
+    service.save({
+      provider: "lm_studio",
+      ollamaBaseUrl: "http://127.0.0.1:11434",
+      ollamaModel: "",
+      lmStudioBaseUrl: "http://localhost:1234/v1/",
+      lmStudioModel: "local/model-a",
+      geminiModel: "",
+    });
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          object: "list",
+          data: [{ id: "local/model-b" }, { id: "local/model-a" }],
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = await service.testConnection("lm_studio");
+
+    expect(service.get().lmStudio).toEqual({
+      baseUrl: "http://localhost:1234",
+      model: "local/model-a",
+    });
+    expect(result).toMatchObject({
+      provider: "lm_studio",
+      success: true,
+      models: [
+        { id: "local/model-a", displayName: "local/model-a" },
+        { id: "local/model-b", displayName: "local/model-b" },
+      ],
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "http://localhost:1234/v1/models",
+    );
+  });
+
   it("builds a local preview that removes secrets and limits oversized context", () => {
     service.save({
       provider: "gemini",
       ollamaBaseUrl: "http://127.0.0.1:11434",
       ollamaModel: "",
+      lmStudioBaseUrl: "http://127.0.0.1:1234",
+      lmStudioModel: "",
       geminiModel: "gemini-flash",
       geminiApiKey: "gemini-secret-key",
     });
@@ -234,6 +407,8 @@ describe("AiSettingsService", () => {
       provider: "gemini",
       ollamaBaseUrl: "http://127.0.0.1:11434",
       ollamaModel: "",
+      lmStudioBaseUrl: "http://127.0.0.1:1234",
+      lmStudioModel: "",
       geminiModel: "gemini-flash",
       geminiApiKey: "gemini-secret-key",
     });
@@ -275,6 +450,8 @@ describe("AiSettingsService", () => {
       provider: "gemini",
       ollamaBaseUrl: "http://127.0.0.1:11434",
       ollamaModel: "",
+      lmStudioBaseUrl: "http://127.0.0.1:1234",
+      lmStudioModel: "",
       geminiModel: "",
       geminiApiKey: "gemini-secret-key",
     });
@@ -283,6 +460,8 @@ describe("AiSettingsService", () => {
       provider: "none",
       ollamaBaseUrl: "http://127.0.0.1:11434",
       ollamaModel: "",
+      lmStudioBaseUrl: "http://127.0.0.1:1234",
+      lmStudioModel: "",
       geminiModel: "",
       clearGeminiApiKey: true,
     });

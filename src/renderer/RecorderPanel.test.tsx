@@ -10,6 +10,7 @@ import type {
   RecorderSnapshot,
   RecorderStepDraft,
 } from "../shared/recorder.js";
+import type { RunnerSnapshot } from "../shared/runner.js";
 import { RecorderPanel } from "./RecorderPanel.js";
 
 const project: Project = {
@@ -128,7 +129,7 @@ describe("RecorderPanel", () => {
     );
 
     await user.click(
-      await screen.findByRole("button", { name: "Înregistrează testul" }),
+      await screen.findByRole("button", { name: "Înregistrează flow-ul" }),
     );
     expect(startRecorder).toHaveBeenCalledWith(project.id, test.id);
 
@@ -344,7 +345,7 @@ describe("RecorderPanel", () => {
     );
 
     await user.click(
-      await screen.findByRole("button", { name: "Reînregistrează testul" }),
+      await screen.findByRole("button", { name: "Reînregistrează flow-ul" }),
     );
     expect(startRecorder).not.toHaveBeenCalled();
     expect(
@@ -353,5 +354,128 @@ describe("RecorderPanel", () => {
 
     await user.click(screen.getByRole("button", { name: "Reînregistrează" }));
     expect(startRecorder).toHaveBeenCalledWith(project.id, test.id);
+  });
+
+  it("replays the existing flow and announces when continuation recording is ready", async () => {
+    const user = userEvent.setup();
+    const recordedTest: TestDefinition = {
+      ...test,
+      status: "valid",
+      workflowState: "ready",
+      flowItems: [
+        {
+          id: "step-1",
+          type: "action",
+          actionType: "click",
+          title: "Continuă",
+          humanDescription: "Apasă butonul Continuă.",
+          whyExplanation: "Continuă scenariul.",
+          target: {
+            primary: { type: "css", operator: "equals", value: "#continue" },
+          },
+          fallbacks: [],
+          enabled: true,
+        },
+      ],
+    };
+    let recorderListener: ((value: RecorderSnapshot) => void) | undefined;
+    let runnerListener: ((value: RunnerSnapshot) => void) | undefined;
+    const running: RunnerSnapshot = {
+      state: "running",
+      run: {
+        id: "run-continue",
+        projectId: project.id,
+        testId: test.id,
+        testVersion: 1,
+        startedAt: "2026-07-25T12:00:00.000Z",
+        status: "running",
+        browserType: "chromium",
+        pageVersionIds: [],
+      },
+      currentStepIndex: 0,
+      totalSteps: 1,
+      canStop: true,
+      canRetry: false,
+    };
+    const continueRecorder = vi.fn().mockResolvedValue(running);
+    const continueRun = vi.fn().mockResolvedValue({
+      ...running,
+      state: "running",
+    });
+    const api = {
+      getRecorderStatus: vi
+        .fn()
+        .mockResolvedValue(
+          snapshot({ test: recordedTest, capturedSteps: 1, canStart: true }),
+        ),
+      onRecorderStatusChange: vi
+        .fn()
+        .mockImplementation((listener: (value: RecorderSnapshot) => void) => {
+          recorderListener = listener;
+          return vi.fn();
+        }),
+      onRunnerStatusChange: vi
+        .fn()
+        .mockImplementation((listener: (value: RunnerSnapshot) => void) => {
+          runnerListener = listener;
+          return vi.fn();
+        }),
+      continueRecorder,
+      continueRun,
+      stopRun: vi.fn(),
+      retryRunStep: vi.fn(),
+      skipRunStep: vi.fn(),
+    } as unknown as SemanticAppApi;
+
+    render(
+      <RecorderPanel
+        api={api}
+        project={project}
+        test={recordedTest}
+        onTestUpdated={vi.fn()}
+      />,
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Continuă înregistrarea" }),
+    );
+    expect(continueRecorder).toHaveBeenCalledWith(
+      project.id,
+      test.id,
+      undefined,
+    );
+
+    act(() => {
+      runnerListener?.({
+        ...running,
+        state: "waiting_at_breakpoint",
+        message: "Confirmă următorul pas.",
+      });
+    });
+    await user.click(
+      screen.getByRole("button", { name: "Continuă replay-ul" }),
+    );
+    expect(continueRun).toHaveBeenCalledWith("run-continue");
+
+    act(() => {
+      recorderListener?.(
+        snapshot({
+          state: "recording",
+          signal: "green",
+          test: { ...recordedTest, workflowState: "recording" },
+          capturedSteps: 1,
+          canStart: false,
+          canStop: true,
+          continuationReady: true,
+        }),
+      );
+    });
+    expect(screen.getByText("Recorder pregătit")).not.toBeNull();
+    expect(
+      screen.getByText("Poți începe să înregistrezi restul pașilor."),
+    ).not.toBeNull();
+    await user.click(
+      screen.getByRole("button", { name: "Închide notificarea" }),
+    );
+    expect(screen.queryByText("Recorder pregătit")).toBeNull();
   });
 });

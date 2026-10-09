@@ -10,6 +10,7 @@ import type { SemanticAppApi } from "../shared/ipc.js";
 import type { TestDefinition } from "../shared/persistence.js";
 import type { TestFlowItem } from "../shared/test-model.js";
 import { Button } from "./components/Button.js";
+import { AiModelPricingPanel } from "./components/AiModelPricingPanel.js";
 import { Modal } from "./components/Modal.js";
 
 interface AiStepEditorModalProps {
@@ -29,6 +30,9 @@ const aiFieldLabels: Record<string, string> = {
   whyExplanation: "explicația",
   target: "locatorul principal",
   primaryLocator: "locatorul principal",
+  checkType: "tipul verificării",
+  checkConfig: "regula verificării",
+  timeoutMs: "timeout-ul verificării",
   fallbacks: "fallback-urile",
   repeat: "numărul de repetări",
   repeatUntil: "condiția de repetare",
@@ -59,9 +63,13 @@ const configuredModel = (
 ): string =>
   provider === "gemini"
     ? settings.gemini.model
-    : provider === "ollama"
-      ? settings.ollama.model
-      : "";
+    : provider === "openai"
+      ? settings.openai.model
+      : provider === "lm_studio"
+        ? settings.lmStudio.model
+        : provider === "ollama"
+          ? settings.ollama.model
+          : "";
 
 export const AiStepEditorModal = ({
   api,
@@ -242,6 +250,8 @@ export const AiStepEditorModal = ({
             >
               <option value="none">None</option>
               <option value="gemini">Gemini</option>
+              <option value="openai">OpenAI</option>
+              <option value="lm_studio">LM Studio</option>
               <option value="ollama">Ollama</option>
             </select>
           </label>
@@ -278,6 +288,8 @@ export const AiStepEditorModal = ({
             )}
           </label>
         </div>
+
+        <AiModelPricingPanel api={api} provider={provider} model={model} />
 
         <div className="flex flex-wrap items-center gap-2">
           <Button

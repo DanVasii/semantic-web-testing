@@ -12,7 +12,9 @@ afterEach(cleanup);
 const settings = {
   provider: "none" as const,
   ollama: { baseUrl: "http://127.0.0.1:11434", model: "" },
+  lmStudio: { baseUrl: "http://127.0.0.1:1234", model: "" },
   gemini: { model: "", apiKeyConfigured: false },
+  openai: { model: "", apiKeyConfigured: false },
 };
 
 describe("AiSettingsModal", () => {
@@ -87,7 +89,10 @@ describe("AiSettingsModal", () => {
         provider: "gemini",
         ollamaBaseUrl: "http://127.0.0.1:11434",
         ollamaModel: "",
+        lmStudioBaseUrl: "http://127.0.0.1:1234",
+        lmStudioModel: "",
         geminiModel: "",
+        openaiModel: "",
         geminiApiKey: "secret-key-123",
       });
       expect(api.testAiConnection).toHaveBeenCalledWith("gemini");
@@ -98,6 +103,92 @@ describe("AiSettingsModal", () => {
         name: /Gemini Flash · 1.000 tokenuri input/,
       }),
     ).not.toBeNull();
+  });
+
+  it("configures and tests LM Studio as a local provider", async () => {
+    const user = userEvent.setup();
+    const lmStudioSettings = {
+      ...settings,
+      provider: "lm_studio" as const,
+      lmStudio: {
+        baseUrl: "http://127.0.0.1:1234",
+        model: "local/qwen-test",
+      },
+    };
+    const api = {
+      getAiSettings: vi.fn().mockResolvedValue(settings),
+      saveAiSettings: vi.fn().mockResolvedValue(lmStudioSettings),
+      testAiConnection: vi.fn().mockResolvedValue({
+        provider: "lm_studio",
+        success: true,
+        message: "Conexiune reușită. 1 model compatibil disponibil.",
+        latencyMs: 15,
+        models: [{ id: "local/qwen-test", displayName: "local/qwen-test" }],
+      }),
+      listAiModels: vi.fn().mockResolvedValue([]),
+    } as unknown as SemanticAppApi;
+
+    render(<AiSettingsModal api={api} open onClose={vi.fn()} />);
+    await user.selectOptions(
+      await screen.findByLabelText("Provider activ"),
+      "lm_studio",
+    );
+    expect(screen.getByLabelText("URL LM Studio")).not.toBeNull();
+    await user.click(
+      screen.getByRole("button", {
+        name: "Testează conexiunea și reîncarcă modelele",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(api.saveAiSettings).toHaveBeenCalledWith({
+        provider: "lm_studio",
+        ollamaBaseUrl: "http://127.0.0.1:11434",
+        ollamaModel: "",
+        lmStudioBaseUrl: "http://127.0.0.1:1234",
+        lmStudioModel: "",
+        geminiModel: "",
+        openaiModel: "",
+      });
+      expect(api.testAiConnection).toHaveBeenCalledWith("lm_studio");
+    });
+    expect(await screen.findByText(/Conexiune reușită/)).not.toBeNull();
+  });
+
+  it("configures OpenAI with an encrypted API key", async () => {
+    const user = userEvent.setup();
+    const api = {
+      getAiSettings: vi.fn().mockResolvedValue(settings),
+      saveAiSettings: vi.fn().mockResolvedValue({
+        ...settings,
+        provider: "openai",
+        openai: { model: "", apiKeyConfigured: true },
+      }),
+      listAiModels: vi.fn().mockResolvedValue([]),
+    } as unknown as SemanticAppApi;
+
+    render(<AiSettingsModal api={api} open onClose={vi.fn()} />);
+    await user.selectOptions(
+      await screen.findByLabelText("Provider activ"),
+      "openai",
+    );
+    await user.type(
+      screen.getByLabelText("Cheie OpenAI API"),
+      "openai-secret-key",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Salvează setările AI" }),
+    );
+
+    await waitFor(() => {
+      expect(api.saveAiSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "openai",
+          openaiModel: "",
+          openaiApiKey: "openai-secret-key",
+        }),
+      );
+    });
   });
 
   it("shows a local request preview and token estimate without sending data", async () => {
@@ -152,5 +243,87 @@ describe("AiSettingsModal", () => {
     expect(
       screen.getByLabelText<HTMLSelectElement>("Model implicit Gemini").value,
     ).toBe("gemini-flash");
+  });
+
+  it("shows LiteLLM prices for the selected model", async () => {
+    const api = {
+      getAiSettings: vi.fn().mockResolvedValue({
+        ...settings,
+        provider: "gemini",
+        gemini: { model: "gemini-flash", apiKeyConfigured: true },
+      }),
+      listAiModels: vi
+        .fn()
+        .mockResolvedValue([
+          { id: "gemini-flash", displayName: "Gemini Flash" },
+        ]),
+      getAiModelPricing: vi.fn().mockResolvedValue({
+        provider: "gemini",
+        model: "gemini-flash",
+        status: "available",
+        source: "litellm",
+        inputPerMillionUsd: 0.3,
+        outputPerMillionUsd: 2.5,
+        cachedInputPerMillionUsd: 0.03,
+        expiresAt: "2026-08-01T12:00:00.000Z",
+      }),
+    } as unknown as SemanticAppApi;
+
+    render(<AiSettingsModal api={api} open onClose={vi.fn()} />);
+
+    expect(await screen.findByText(/0,30/)).not.toBeNull();
+    expect(screen.getByText(/2,50/)).not.toBeNull();
+    expect(api.getAiModelPricing).toHaveBeenCalledWith(
+      "gemini",
+      "gemini-flash",
+    );
+  });
+
+  it("shows and saves optional manual prices when LiteLLM cannot resolve the model", async () => {
+    const user = userEvent.setup();
+    const api = {
+      getAiSettings: vi.fn().mockResolvedValue({
+        ...settings,
+        provider: "openai",
+        openai: { model: "gpt-private", apiKeyConfigured: true },
+      }),
+      listAiModels: vi
+        .fn()
+        .mockResolvedValue([{ id: "gpt-private", displayName: "gpt-private" }]),
+      getAiModelPricing: vi.fn().mockResolvedValue({
+        provider: "openai",
+        model: "gpt-private",
+        status: "unavailable",
+        message: "Modelul nu a fost găsit în catalogul LiteLLM.",
+      }),
+      saveAiModelPricing: vi.fn().mockResolvedValue({
+        provider: "openai",
+        model: "gpt-private",
+        status: "available",
+        source: "manual",
+        inputPerMillionUsd: 1,
+        outputPerMillionUsd: 4,
+      }),
+    } as unknown as SemanticAppApi;
+
+    render(<AiSettingsModal api={api} open onClose={vi.fn()} />);
+    await user.type(
+      await screen.findByLabelText("Preț input / 1M USD (opțional)"),
+      "1",
+    );
+    await user.type(
+      screen.getByLabelText("Preț output / 1M USD (opțional)"),
+      "4",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Salvează prețurile manuale" }),
+    );
+
+    expect(api.saveAiModelPricing).toHaveBeenCalledWith({
+      provider: "openai",
+      model: "gpt-private",
+      inputPerMillionUsd: 1,
+      outputPerMillionUsd: 4,
+    });
   });
 });

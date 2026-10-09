@@ -24,7 +24,7 @@ export const Tabs = ({ initialTabId, label, onChange, tabs }: TabsProps) => {
       <div
         role="tablist"
         aria-label={label}
-        className="flex gap-1 rounded-xl bg-slate-100 p-1"
+        className="flex gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1"
       >
         {tabs.map((tab) => {
           const isActive = tab.id === activeTabId;
@@ -39,7 +39,7 @@ export const Tabs = ({ initialTabId, label, onChange, tabs }: TabsProps) => {
               role="tab"
               aria-controls={panelElementId}
               aria-selected={isActive}
-              className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:outline-none ${
+              className={`shrink-0 rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:outline-none ${
                 isActive
                   ? "bg-app-surface text-app-ink shadow-sm"
                   : "text-app-muted hover:text-app-ink"
@@ -60,7 +60,7 @@ export const Tabs = ({ initialTabId, label, onChange, tabs }: TabsProps) => {
           id={`${componentId}-${activeTab.id}-panel`}
           role="tabpanel"
           aria-labelledby={`${componentId}-${activeTab.id}-tab`}
-          className="mt-3 rounded-xl border border-app-border bg-app-surface p-4 text-sm text-app-muted"
+          className="mt-3 rounded-xl border border-app-border bg-app-surface p-3 text-sm text-app-muted"
         >
           {activeTab.content}
         </div>

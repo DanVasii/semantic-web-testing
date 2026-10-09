@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1040" viewBox="0 0 1500 1040" role="img" aria-labelledby="title desc">
+  <title id="title">Semantic Web Testing — arhitectură de componente</title>
+  <desc id="desc">În aplicația desktop, interfața React comunică prin preload și IPC cu procesul Electron main. Main grupează recorderul, runnerul, analiza și serviciile. Acesta folosește SQLite și fișiere locale și conectează browserul testat prin Playwright, MySQL, serverul IMAP și providerul AI ales. Săgețile descriu interfețe și date, nu ordinea execuției.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#526680"/></marker>
+    <style>
+      text { font-family: "Segoe UI", Arial, sans-serif; fill: #172b4d; }
+      .title { font-size: 30px; font-weight: 700; }
+      .subtitle { font-size: 17px; fill: #526680; }
+      .heading { font-size: 19px; font-weight: 700; }
+      .body { font-size: 17px; }
+      .small { font-size: 15px; fill: #526680; }
+      .edge { fill: none; stroke: #526680; stroke-width: 2; marker-end: url(#arrow); }
+      .both { marker-start: url(#arrow); }
+      .internal { fill: #fff; stroke: #8dabc9; stroke-width: 1.5; }
+      .external { fill: #f3f5f8; stroke: #acb6c5; stroke-width: 1.5; }
+      .label { font-size: 15px; fill: #344a65; paint-order: stroke; stroke: #fff; stroke-width: 6px; stroke-linejoin: round; }
+    </style>
+  </defs>
+  <rect width="1500" height="1040" fill="#fff"/>
+  <text x="40" y="55" class="title">Semantic Web Testing</text>
+  <text x="40" y="87" class="subtitle">Arhitectură de componente · interfețe, responsabilități și granițe</text>
+
+  <!-- Application boundary. Internal boxes are responsibility groups, not execution steps. -->
+  <rect x="40" y="130" width="880" height="810" rx="16" fill="#f5f9ff" stroke="#6b8aaa" stroke-width="2" stroke-dasharray="9 6"/>
+  <text x="65" y="166" class="heading">APLICAȚIA DESKTOP · Electron</text>
+
+  <rect x="80" y="205" width="290" height="100" rx="10" class="internal"/>
+  <text x="100" y="239" class="heading">Renderer · React / Tailwind</text>
+  <text x="100" y="270" class="body">Editor, rulare, rezultate și dovezi</text>
+  <rect x="490" y="205" width="340" height="100" rx="10" class="internal"/>
+  <text x="510" y="239" class="heading">Preload · contextBridge</text>
+  <text x="510" y="268" class="body">API tipizat expus interfeței</text>
+  <text x="510" y="290" class="small">Graniță API; nu este un proces separat</text>
+  <path d="M370 253 H490" class="edge both"/>
+  <text x="430" y="238" text-anchor="middle" class="label">API</text>
+
+  <!-- Main process boundary and internal capabilities. -->
+  <rect x="80" y="375" width="750" height="400" rx="12" fill="#e8f1fc" stroke="#4b78a6" stroke-width="2"/>
+  <text x="103" y="407" class="heading">PROCES MAIN · TypeScript / Node.js</text>
+  <path d="M660 305 V375" class="edge both"/>
+  <text x="679" y="334" class="label">IPC</text>
+  <text x="679" y="355" class="label">comenzi și evenimente</text>
+
+  <rect x="110" y="430" width="265" height="302" rx="9" class="internal"/>
+  <text x="131" y="462" class="heading">Servicii și orchestrare</text>
+  <text x="131" y="504" class="body">Recorder și coadă de captură</text>
+  <text x="131" y="539" class="body">Runner, etape și variabile</text>
+  <text x="131" y="574" class="body">Analiză semantică locală</text>
+  <text x="131" y="609" class="body">Teste, dataseturi și suite</text>
+  <text x="131" y="644" class="body">Istoric și import / export</text>
+  <text x="131" y="696" class="small">Componentele folosesc adaptoarele</text>
+  <text x="131" y="717" class="small">și serviciile de persistență.</text>
+
+  <rect x="465" y="430" width="330" height="60" rx="8" class="internal"/>
+  <text x="486" y="466" class="heading">Browser manager / Playwright</text>
+  <rect x="465" y="510" width="330" height="60" rx="8" class="internal"/>
+  <text x="486" y="547" class="heading">MySQL · snapshot și diff</text>
+  <rect x="465" y="590" width="330" height="60" rx="8" class="internal"/>
+  <text x="486" y="627" class="heading">IMAP · filtrare și extragere</text>
+  <rect x="465" y="670" width="330" height="60" rx="8" class="internal"/>
+  <text x="486" y="707" class="heading">Servicii AI / adaptor provider</text>
+  <path d="M375 460 H465" class="edge"/>
+  <path d="M375 540 H465" class="edge"/>
+  <path d="M375 620 H465" class="edge"/>
+  <path d="M375 700 H465" class="edge"/>
+
+  <!-- Local persistence belongs to the application, separate from the tested MySQL. -->
+  <rect x="110" y="833" width="290" height="79" rx="9" fill="#e1f2ec" stroke="#639983" stroke-width="1.5"/>
+  <text x="130" y="861" class="heading">SQLite · date locale</text>
+  <text x="130" y="888" class="body">Proiecte, teste, versiuni, rulări</text>
+  <rect x="505" y="833" width="290" height="79" rx="9" fill="#e1f2ec" stroke="#639983" stroke-width="1.5"/>
+  <text x="525" y="861" class="heading">Fișiere locale · artefacte</text>
+  <text x="525" y="888" class="body">Capturi, analize, trace, exporturi</text>
+  <path d="M190 732 V833" class="edge both"/>
+  <text x="206" y="807" class="label">node:sqlite</text>
+  <path d="M325 732 V793 H650 V833" class="edge both"/>
+  <text x="544" y="783" class="label">Node fs</text>
+
+  <!-- Systems outside the Electron application, aligned with their adapters. -->
+  <text x="1045" y="377" class="heading">SISTEME CONECTATE</text>
+  <text x="1045" y="403" class="small">În afara aplicației Electron</text>
+  <rect x="1045" y="430" width="405" height="60" rx="8" class="external"/>
+  <text x="1065" y="457" class="heading">Browserul aplicației testate</text>
+  <text x="1065" y="478" class="small">Interacțiuni, DOM și capturi</text>
+  <rect x="1045" y="510" width="405" height="60" rx="8" class="external"/>
+  <text x="1065" y="538" class="heading">Baza MySQL a aplicației testate</text>
+  <text x="1065" y="559" class="small">Baseline, diferențe și extragere de date</text>
+  <rect x="1045" y="590" width="405" height="60" rx="8" class="external"/>
+  <text x="1065" y="618" class="heading">Server de e-mail</text>
+  <text x="1065" y="639" class="small">Mailbox și mesaje ale scenariului</text>
+  <rect x="1045" y="670" width="405" height="147" rx="8" class="external"/>
+  <text x="1065" y="703" class="heading">Providerul AI ales</text>
+  <text x="1065" y="741" class="body">Local: Ollama / LM Studio</text>
+  <text x="1065" y="775" class="body">Cloud: Gemini / OpenAI</text>
+  <text x="1065" y="801" class="small">Alternative configurabile</text>
+  <path d="M795 460 H1045" class="edge"/>
+  <path d="M795 540 H1045" class="edge"/>
+  <path d="M795 620 H1045" class="edge"/>
+  <path d="M795 700 H1045" class="edge"/>
+  <text x="940" y="448" text-anchor="middle" class="label">control / observare</text>
+  <text x="940" y="528" text-anchor="middle" class="label">mysql2</text>
+  <text x="940" y="608" text-anchor="middle" class="label">IMAP</text>
+  <text x="940" y="688" text-anchor="middle" class="label">API provider</text>
+
+  <path d="M40 974 H1450" stroke="#d7e0eb"/>
+  <text x="40" y="1007" class="body">Blocuri = componente</text>
+  <text x="345" y="1007" class="body">Contururi = granițe</text>
+  <text x="640" y="1007" class="body">Legături = API și date, fără ordine temporală</text>
+</svg>

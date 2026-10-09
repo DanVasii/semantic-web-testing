@@ -11,7 +11,10 @@ import type {
   PortableTestDocument,
   TestImportPreview,
 } from "../shared/import-export.js";
-import { TRANSFER_SCHEMA_VERSION } from "../shared/import-export.js";
+import {
+  TEST_TRANSFER_SCHEMA_VERSION,
+  TRANSFER_SCHEMA_VERSION,
+} from "../shared/import-export.js";
 import type {
   Page,
   PageVersion,
@@ -19,6 +22,7 @@ import type {
   TestDefinition,
 } from "../shared/persistence.js";
 import type { TestDataset } from "../shared/test-model.js";
+import { stagesForTest } from "../shared/test-stages.js";
 import {
   validateDeclarativeTest,
   validateTestDataset,
@@ -156,12 +160,15 @@ const parsePortableTest = (
     "$",
     issues,
   );
-  if (value.schemaVersion !== TRANSFER_SCHEMA_VERSION) {
+  if (
+    value.schemaVersion !== TRANSFER_SCHEMA_VERSION &&
+    value.schemaVersion !== TEST_TRANSFER_SCHEMA_VERSION
+  ) {
     issues.push(
       issue(
         "$.schemaVersion",
         "invalid_value",
-        `Este suportată numai schemaVersion ${TRANSFER_SCHEMA_VERSION}.`,
+        `Sunt suportate schemaVersion ${TRANSFER_SCHEMA_VERSION} și ${TEST_TRANSFER_SCHEMA_VERSION}.`,
       ),
     );
   }
@@ -198,6 +205,7 @@ const parsePortableTest = (
       "startMode",
       "startUrl",
       "flowItems",
+      "stages",
     ],
     "$.test",
     issues,
@@ -222,7 +230,10 @@ const parsePortableTest = (
     typeof test.wipeBeforeRun !== "boolean" ||
     (test.startMode !== "base_url" && test.startMode !== "current_page") ||
     typeof test.startUrl !== "string" ||
-    !Array.isArray(test.flowItems)
+    !Array.isArray(test.flowItems) ||
+    (test.stages !== undefined && !Array.isArray(test.stages)) ||
+    (value.schemaVersion === TEST_TRANSFER_SCHEMA_VERSION &&
+      !Array.isArray(test.stages))
   ) {
     issues.push(
       issue(
@@ -236,7 +247,7 @@ const parsePortableTest = (
 
   const now = "2026-01-01T00:00:00.000Z";
   const validation = validateDeclarativeTest({
-    schemaVersion: 1,
+    schemaVersion: value.schemaVersion === TEST_TRANSFER_SCHEMA_VERSION ? 2 : 1,
     id: "import-test",
     projectId: project.id,
     name: test.name,
@@ -251,6 +262,7 @@ const parsePortableTest = (
     createdAt: now,
     updatedAt: now,
     flowItems: test.flowItems,
+    ...(Array.isArray(test.stages) ? { stages: test.stages } : {}),
     datasets: datasets.map((dataset, index) => ({
       id: `import-dataset-${index + 1}`,
       testId: "import-test",
@@ -298,7 +310,8 @@ const parsePortableTest = (
 
   return {
     document: {
-      schemaVersion: TRANSFER_SCHEMA_VERSION,
+      schemaVersion:
+        value.schemaVersion as PortableTestDocument["schemaVersion"],
       kind: "semantic-test",
       test: {
         name: test.name,
@@ -310,6 +323,9 @@ const parsePortableTest = (
         startMode: test.startMode,
         startUrl: test.startUrl,
         flowItems: test.flowItems as PortableTest["flowItems"],
+        ...(Array.isArray(test.stages)
+          ? { stages: test.stages as NonNullable<PortableTest["stages"]> }
+          : {}),
       },
       datasets,
     },
@@ -332,7 +348,7 @@ const testDocument = (
   test: TestDefinition,
   datasets: TestDataset[] = [],
 ): PortableTestDocument => ({
-  schemaVersion: TRANSFER_SCHEMA_VERSION,
+  schemaVersion: TEST_TRANSFER_SCHEMA_VERSION,
   kind: "semantic-test",
   test: {
     name: test.name,
@@ -344,6 +360,7 @@ const testDocument = (
     startMode: test.startMode,
     startUrl: test.startUrl,
     flowItems: structuredClone(test.flowItems),
+    stages: stagesForTest(test),
   },
   datasets: datasets.map(({ name, values }) => ({
     name,
@@ -367,7 +384,7 @@ const testSchema = {
   additionalProperties: false,
   required: ["schemaVersion", "kind", "test", "datasets"],
   properties: {
-    schemaVersion: { const: TRANSFER_SCHEMA_VERSION },
+    schemaVersion: { const: TEST_TRANSFER_SCHEMA_VERSION },
     kind: { const: "semantic-test" },
     test: {
       type: "object",
@@ -379,6 +396,7 @@ const testSchema = {
         "startMode",
         "startUrl",
         "flowItems",
+        "stages",
       ],
     },
     datasets: { type: "array" },
@@ -465,6 +483,9 @@ export class ImportExportService {
         testMode: result.document.test.testMode,
         startUrl: result.document.test.startUrl,
         flowItemCount: result.document.test.flowItems.length,
+        ...(result.document.test.stages === undefined
+          ? {}
+          : { stageCount: result.document.test.stages.length }),
       },
       datasets: result.document.datasets.map((dataset) => ({
         name: dataset.name,
@@ -523,11 +544,18 @@ export class ImportExportService {
         }
         return this.datasetRepository.create(dataset);
       });
-      const imported = await this.testsService.importFlow(
-        projectId,
-        test.id,
-        document.test.flowItems,
-      );
+      const imported =
+        document.test.stages === undefined
+          ? await this.testsService.importFlow(
+              projectId,
+              test.id,
+              document.test.flowItems,
+            )
+          : await this.testsService.saveStages(
+              projectId,
+              test.id,
+              document.test.stages,
+            );
       this.pendingImports.delete(previewId);
       return { test: imported, datasets };
     } catch (error) {

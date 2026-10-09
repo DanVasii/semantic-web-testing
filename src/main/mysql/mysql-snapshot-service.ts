@@ -91,9 +91,10 @@ export class MySqlSnapshotService {
     projectId: string,
     runId: string,
     steps: CheckStep[],
+    baselineKey?: string,
   ): Promise<MySqlRunSnapshot | undefined> {
     if (steps.length === 0) return undefined;
-    if (this.repository.findBaseline(runId) !== undefined) {
+    if (this.repository.findBaseline(runId, baselineKey) !== undefined) {
       throw new Error("Baseline-ul MySQL există deja pentru această rulare.");
     }
 
@@ -126,6 +127,7 @@ export class MySqlSnapshotService {
       id: this.options.createId(),
       runId,
       kind: "baseline",
+      ...(baselineKey === undefined ? {} : { checkStepId: baselineKey }),
       capturedAt: this.options.now().toISOString(),
       tables: await this.captureTables(projectId, tableIdentities),
     };
@@ -136,9 +138,10 @@ export class MySqlSnapshotService {
     projectId: string,
     runId: string,
     step: CheckStep,
+    baselineKey?: string,
   ): Promise<MySqlRunDiff> {
     const config = mysqlConfig(step);
-    const baseline = this.repository.findBaseline(runId);
+    const baseline = this.repository.findBaseline(runId, baselineKey);
     if (baseline === undefined) {
       throw new Error("Baseline-ul MySQL al rulării nu există.");
     }
@@ -182,12 +185,20 @@ export class MySqlSnapshotService {
   }
 
   public getRunDetails(runId: string): MySqlRunDetails {
-    const baseline = this.repository.findBaseline(runId);
+    const baselines = this.repository.listBaselines(runId);
+    const baseline = baselines[0];
     return {
       ...(baseline === undefined ? {} : { baselineSnapshotId: baseline.id }),
+      ...(baselines.length === 0
+        ? {}
+        : { baselineSnapshotIds: baselines.map(({ id }) => id) }),
       diffs: this.repository.listDiffs(runId),
       cleanupLogs: this.repository.listCleanupLogs(runId),
     };
+  }
+
+  public getSnapshot(snapshotId: string): MySqlRunSnapshot | undefined {
+    return this.repository.findSnapshot(snapshotId);
   }
 
   public previewCleanup(

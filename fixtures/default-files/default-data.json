@@ -1,0 +1,8 @@
+{
+  "fixture": true,
+  "name": "Semantic Web Tester default upload",
+  "items": [
+    { "id": 1, "status": "active" },
+    { "id": 2, "status": "ready" }
+  ]
+}

@@ -85,6 +85,210 @@ const snapshot = (overrides: Partial<RunnerSnapshot> = {}): RunnerSnapshot => ({
 afterEach(cleanup);
 
 describe("RunnerPanel", () => {
+  it("asks for the browser configuration before opening the run dialog", async () => {
+    const user = userEvent.setup();
+    const getBrowserStatus = vi.fn().mockResolvedValue({ state: "idle" });
+    const api = {
+      getRunnerStatus: vi.fn().mockResolvedValue({
+        state: "idle",
+        currentStepIndex: -1,
+        totalSteps: 0,
+        canStop: false,
+        canRetry: false,
+      }),
+      listTestRuns: vi.fn().mockResolvedValue([]),
+      listDatasets: vi.fn().mockResolvedValue([]),
+      listRunStepResults: vi.fn().mockResolvedValue([]),
+      onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
+      getBrowserStatus,
+      onBrowserStatusChange: vi.fn().mockReturnValue(vi.fn()),
+      detectBrowsers: vi.fn().mockResolvedValue([
+        {
+          installationId: "system:chrome",
+          id: "chrome",
+          displayName: "Google Chrome",
+          engine: "chromium",
+          source: "system",
+          installed: true,
+          supported: true,
+          executablePath: "C:\\Browsers\\chrome.exe",
+        },
+      ]),
+      launchBrowser: vi.fn().mockResolvedValue({
+        id: "session-1",
+        projectId: project.id,
+        browser: "chrome",
+        engine: "chromium",
+        sessionMode: "temporary",
+        startedAt: "2026-07-24T12:00:00.000Z",
+      }),
+      openProjectUrl: vi.fn().mockResolvedValue({
+        state: "opened",
+        tab: {
+          id: "tab-1",
+          projectId: project.id,
+          url: project.normalizedBaseUrl,
+        },
+      }),
+    } as unknown as SemanticAppApi;
+    render(<RunnerPanel api={api} project={project} test={test} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Rulează testul" }),
+    );
+
+    expect(
+      await screen.findByRole("dialog", {
+        name: "Pornește browserul pentru test",
+      }),
+    ).not.toBeNull();
+    expect(screen.queryByText("Configurează rularea")).toBeNull();
+    expect(await screen.findByLabelText("Browser disponibil")).not.toBeNull();
+
+    await user.click(
+      screen.getByRole("button", { name: "Pornește și deschide" }),
+    );
+
+    expect(api.launchBrowser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: project.id,
+        browser: "chrome",
+        sessionMode: "temporary",
+      }),
+    );
+    expect(
+      await screen.findByRole("dialog", { name: "Configurează rularea" }),
+    ).not.toBeNull();
+    expect(
+      screen.queryByRole("dialog", {
+        name: "Pornește browserul pentru test",
+      }),
+    ).toBeNull();
+  });
+
+  it("opens run configuration directly when this project's browser is running", async () => {
+    const user = userEvent.setup();
+    const api = {
+      getRunnerStatus: vi.fn().mockResolvedValue({
+        state: "idle",
+        currentStepIndex: -1,
+        totalSteps: 0,
+        canStop: false,
+        canRetry: false,
+      }),
+      listTestRuns: vi.fn().mockResolvedValue([]),
+      listDatasets: vi.fn().mockResolvedValue([]),
+      listRunStepResults: vi.fn().mockResolvedValue([]),
+      onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
+      getBrowserStatus: vi.fn().mockResolvedValue({
+        state: "running",
+        projectId: project.id,
+        browser: "chrome",
+      }),
+      onBrowserStatusChange: vi.fn().mockReturnValue(vi.fn()),
+    } as unknown as SemanticAppApi;
+    render(<RunnerPanel api={api} project={project} test={test} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Rulează testul" }),
+    );
+
+    expect(
+      await screen.findByRole("dialog", { name: "Configurează rularea" }),
+    ).not.toBeNull();
+    expect(screen.queryByText("Pornește browserul pentru test")).toBeNull();
+    expect(
+      screen.queryByRole("combobox", {
+        name: "Provider AI pentru această rulare",
+      }),
+    ).toBeNull();
+  });
+
+  it("selects the AI provider and model per run for adaptive visual checks", async () => {
+    const user = userEvent.setup();
+    const startRun = vi.fn().mockResolvedValue(snapshot());
+    const adaptiveTest: TestDefinition = {
+      ...test,
+      flowItems: [
+        ...test.flowItems,
+        {
+          id: "check-adaptive-validation",
+          type: "check",
+          checkType: "adaptive",
+          title: "Confirmă validarea formularului",
+          humanDescription: "Confirmă vizual mesajul de validare.",
+          config: {
+            strategy: "auto",
+            expectedTexts: [],
+            matchMode: "any",
+            visualPrompt: "Confirmă mesajul de validare pentru prenume.",
+            visualFallback: true,
+            minimumConfidence: 0.6,
+          },
+          enabled: true,
+        },
+      ],
+    };
+    const api = {
+      getRunnerStatus: vi.fn().mockResolvedValue({
+        state: "idle",
+        currentStepIndex: -1,
+        totalSteps: 0,
+        canStop: false,
+        canRetry: false,
+      }),
+      listTestRuns: vi.fn().mockResolvedValue([]),
+      listDatasets: vi.fn().mockResolvedValue([]),
+      listRunStepResults: vi.fn().mockResolvedValue([]),
+      onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
+      getAiSettings: vi.fn().mockResolvedValue({
+        provider: "lm_studio",
+        ollama: { baseUrl: "http://127.0.0.1:11434", model: "" },
+        lmStudio: {
+          baseUrl: "http://127.0.0.1:1234",
+          model: "local-default",
+        },
+        gemini: { model: "gemini-default", apiKeyConfigured: true },
+      }),
+      listAiModels: vi.fn((provider: string) =>
+        Promise.resolve(
+          provider === "gemini"
+            ? [{ id: "gemini-flash", displayName: "Gemini Flash" }]
+            : [{ id: "local-default", displayName: "Local Default" }],
+        ),
+      ),
+      startRun,
+    } as unknown as SemanticAppApi;
+    render(<RunnerPanel api={api} project={project} test={adaptiveTest} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Rulează testul" }),
+    );
+    const providerSelect = await screen.findByRole<HTMLSelectElement>(
+      "combobox",
+      { name: "Provider AI pentru această rulare" },
+    );
+    await waitFor(() => {
+      expect(providerSelect.value).toBe("lm_studio");
+    });
+
+    await user.selectOptions(providerSelect, "gemini");
+    const modelSelect = await screen.findByRole<HTMLSelectElement>("combobox", {
+      name: "Model AI pentru această rulare",
+    });
+    await waitFor(() => {
+      expect(modelSelect.value).toBe("gemini-flash");
+    });
+    await user.click(screen.getByRole("button", { name: "Pornește rularea" }));
+
+    expect(startRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        aiProvider: "gemini",
+        aiModel: "gemini-flash",
+      }),
+    );
+  });
+
   it("starts, stops and retries the current step from live state updates", async () => {
     const user = userEvent.setup();
     let listener: ((next: RunnerSnapshot) => void) | undefined;
@@ -135,7 +339,7 @@ describe("RunnerPanel", () => {
       mode: "automatic",
       waitBeforeStart: false,
     });
-    expect(screen.getByText("Execuție pas cu pas")).not.toBeNull();
+    expect(screen.getByText("Execuție curentă")).not.toBeNull();
     expect(screen.getByText("În curs")).not.toBeNull();
     await user.click(
       await screen.findByRole("button", { name: "Oprește testul" }),
@@ -156,6 +360,12 @@ describe("RunnerPanel", () => {
             technicalDetails: "StepExecutionError: Locator ambiguu.",
             occurredAt: "2026-07-24T12:01:00.000Z",
             retryable: true,
+            visualCheckDebug: {
+              dataUrls: ["data:image/jpeg;base64,anBlZw=="],
+              mimeType: "image/jpeg",
+              byteLength: 4,
+              prompt: "Confirmă mesajul Telefon invalid.",
+            },
           },
           canStop: true,
           canRetry: true,
@@ -167,6 +377,14 @@ describe("RunnerPanel", () => {
     expect(screen.getByText("Poate fi reîncercată")).not.toBeNull();
     expect(screen.getByText("Detalii tehnice")).not.toBeNull();
     expect(
+      screen.getAllByText("Vezi capturile trimise către AI (1)").length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen
+        .getAllByRole("img", { name: "Captura 1 trimisă către AI" })[0]
+        ?.getAttribute("src"),
+    ).toBe("data:image/jpeg;base64,anBlZw==");
+    expect(
       screen.getByText(/Browserul rămâne deschis pentru verificare/),
     ).not.toBeNull();
     await user.click(screen.getByRole("button", { name: "Sari peste pas" }));
@@ -175,6 +393,64 @@ describe("RunnerPanel", () => {
       screen.getByRole("button", { name: "Reîncearcă pasul curent" }),
     );
     expect(api.retryRunStep).toHaveBeenCalledWith(run.id);
+
+    act(() => {
+      listener?.(
+        snapshot({
+          state: "paused_on_error",
+          run: { ...run, status: "failed" },
+          error: {
+            code: "step_failed",
+            message: "AI a detectat o eroare vizibilă în pagină.",
+            severity: "warning",
+            retryable: true,
+          },
+          canStop: true,
+          canRetry: true,
+        }),
+      );
+    });
+    expect(screen.getByText(/Warning vizual/)).not.toBeNull();
+    expect(screen.getByText("Rularea așteaptă decizia ta")).not.toBeNull();
+    await user.click(
+      screen.getByRole("button", { name: "Continuă cu următorul pas" }),
+    );
+    expect(api.skipRunStep).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets the user clear the browser session for only the selected run", async () => {
+    const user = userEvent.setup();
+    const startRun = vi.fn().mockResolvedValue(snapshot());
+    const api = {
+      getRunnerStatus: vi.fn().mockResolvedValue({
+        state: "idle",
+        currentStepIndex: -1,
+        totalSteps: 0,
+        canStop: false,
+        canRetry: false,
+      }),
+      listTestRuns: vi.fn().mockResolvedValue([]),
+      listDatasets: vi.fn().mockResolvedValue([]),
+      listRunStepResults: vi.fn().mockResolvedValue([]),
+      onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
+      startRun,
+    } as unknown as SemanticAppApi;
+    render(<RunnerPanel api={api} project={project} test={test} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Rulează testul" }),
+    );
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /Curăță sesiunea înainte de rulare/,
+      }),
+    );
+    expect(screen.getByText("Curățare sesiune: activată")).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "Pornește rularea" }));
+
+    expect(startRun).toHaveBeenCalledWith(
+      expect.objectContaining({ clearSessionBeforeRun: true }),
+    );
   });
 
   it("selects the recorder dataset and its matching global IMAP account automatically", async () => {
@@ -190,6 +466,7 @@ describe("RunnerPanel", () => {
           identities: [],
         },
         imap: {
+          inboxes: [],
           enabled: true,
           accountIds: [],
           mailbox: "INBOX",
@@ -281,6 +558,93 @@ describe("RunnerPanel", () => {
         model: "",
       },
     });
+  });
+
+  it("uses staged MySQL checks in the run configuration", async () => {
+    const user = userEvent.setup();
+    const startRun = vi.fn().mockResolvedValue(snapshot());
+    const stagedMysqlTest: TestDefinition = {
+      ...test,
+      postRunChecks: {
+        aiPrompt: "",
+        mysql: { enabled: false, tableNames: [], identities: [] },
+        imap: {
+          inboxes: [],
+          enabled: false,
+          accountIds: [],
+          mailbox: "INBOX",
+          sender: "",
+          recipient: "",
+          subjectEquals: "",
+          subjectContains: "",
+          bodyContains: "",
+        },
+      },
+      stages: [
+        {
+          id: "stage-main",
+          name: "Flow principal",
+          enabled: true,
+          entry: { type: "test_start" },
+          flowItems: test.flowItems,
+          postChecks: [
+            {
+              id: "mysql-orders",
+              type: "check",
+              checkType: "mysql",
+              title: "Verifică comenzile",
+              humanDescription: "Compară comenzile cu baseline-ul.",
+              config: {
+                tableNames: ["orders"],
+                identities: [{ tableName: "orders", columns: ["id"] }],
+              },
+              enabled: true,
+              required: true,
+            },
+          ],
+        },
+      ],
+    };
+    const api = {
+      getRunnerStatus: vi.fn().mockResolvedValue({
+        state: "idle",
+        currentStepIndex: -1,
+        totalSteps: 0,
+        canStop: false,
+        canRetry: false,
+      }),
+      listTestRuns: vi.fn().mockResolvedValue([]),
+      listDatasets: vi.fn().mockResolvedValue([]),
+      listRunStepResults: vi.fn().mockResolvedValue([]),
+      onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
+      startRun,
+    } as unknown as SemanticAppApi;
+    render(<RunnerPanel api={api} project={project} test={stagedMysqlTest} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Rulează testul" }),
+    );
+    const mysql = screen.getByRole<HTMLInputElement>("checkbox", {
+      name: "MySQL snapshot",
+    });
+    expect(mysql.disabled).toBe(false);
+    expect(mysql.checked).toBe(true);
+
+    await user.click(mysql);
+    await user.click(screen.getByRole("button", { name: "Pornește rularea" }));
+
+    expect(startRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        postRun: {
+          mysql: false,
+          imap: false,
+          imapAccountIds: [],
+          ai: false,
+          provider: "none",
+          model: "",
+        },
+      }),
+    );
   });
 
   it("previews and explicitly sends a temporary AI plan before running", async () => {
@@ -411,6 +775,7 @@ describe("RunnerPanel", () => {
       getAiSettings: vi.fn().mockResolvedValue({
         provider: "gemini",
         ollama: { baseUrl: "http://127.0.0.1:11434", model: "" },
+        lmStudio: { baseUrl: "http://127.0.0.1:1234", model: "" },
         gemini: { model: "gemini-flash", apiKeyConfigured: true },
       }),
       listAiModels: vi
@@ -457,6 +822,8 @@ describe("RunnerPanel", () => {
         instruction: "Selectează 15 septembrie 2027.",
         proposal,
       },
+      aiProvider: "gemini",
+      aiModel: "gemini-flash",
     });
   });
 
@@ -488,11 +855,50 @@ describe("RunnerPanel", () => {
     await waitFor(() => {
       expect(screen.getByText(/v2 · passed/)).not.toBeNull();
     });
-    expect(screen.getByText("Execuție pas cu pas")).not.toBeNull();
+    expect(screen.getByText("Execuție curentă")).not.toBeNull();
     expect(screen.getByText("Acțiune · Click")).not.toBeNull();
     expect(screen.getByText("Finalizat")).not.toBeNull();
     expect(screen.getByText("• Click executat.")).not.toBeNull();
     expect(screen.getByText("Rezultate și logs (1)")).not.toBeNull();
+  });
+
+  it("shows only the current step and a compact preview of the next one", async () => {
+    const baseStep = test.flowItems[0]!;
+    const flowItems: TestDefinition["flowItems"] = [
+      { ...structuredClone(baseStep), id: "step-1", title: "Pas anterior" },
+      { ...structuredClone(baseStep), id: "step-2", title: "Pas activ" },
+      { ...structuredClone(baseStep), id: "step-3", title: "Pas următor" },
+      { ...structuredClone(baseStep), id: "step-4", title: "Pas ulterior" },
+    ];
+    const api = {
+      getRunnerStatus: vi.fn().mockResolvedValue(
+        snapshot({
+          currentStepIndex: 1,
+          currentStepId: "step-2",
+          totalSteps: flowItems.length,
+          flowItems,
+        }),
+      ),
+      listTestRuns: vi.fn().mockResolvedValue([]),
+      listDatasets: vi.fn().mockResolvedValue([]),
+      listRunStepResults: vi.fn().mockResolvedValue([]),
+      onRunnerStatusChange: vi.fn().mockReturnValue(vi.fn()),
+    } as unknown as SemanticAppApi;
+
+    render(
+      <RunnerPanel api={api} project={project} test={{ ...test, flowItems }} />,
+    );
+
+    expect(
+      await screen.findByRole("article", { name: "Pasul curent" }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("article", { name: "Pasul următor" }),
+    ).not.toBeNull();
+    expect(screen.getByText("Pas activ")).not.toBeNull();
+    expect(screen.getByText("Pas următor")).not.toBeNull();
+    expect(screen.queryByText("Pas anterior")).toBeNull();
+    expect(screen.queryByText("Pas ulterior")).toBeNull();
   });
 
   it("shows the current fallback and supports Run and Skip decisions", async () => {

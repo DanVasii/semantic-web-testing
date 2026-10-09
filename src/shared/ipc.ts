@@ -11,9 +11,11 @@ import type {
   ManualWipeResource,
   RunnerSnapshot,
   StartRunInput,
+  VisualStepContextCapture,
 } from "./runner.js";
 import type { RecorderSnapshot, RecorderStepDraft } from "./recorder.js";
 import type { TestFlowItem } from "./test-model.js";
+import type { TestStage } from "./test-stages.js";
 import type {
   AnalyzedPageSummary,
   PageAnalysisProgress,
@@ -30,6 +32,9 @@ import type {
 } from "./imap.js";
 import type {
   AiConnectionTestResult,
+  AiSimilarTestInput,
+  AiSimilarTestRequestPreview,
+  AiSimilarTestResult,
   AiModelInfo,
   AiRunPlanInput,
   AiRunPlanPreview,
@@ -43,6 +48,8 @@ import type {
   ApplyAiStepChangesInput,
   ApplyAiStepChangesResult,
   CreateAiRequestPreviewInput,
+  CreateAiSimilarTestInput,
+  CreateAiSimilarTestResult,
   SaveAiSettingsInput,
   UndoAiStepChangeInput,
 } from "./ai.js";
@@ -77,6 +84,24 @@ import type {
   RunHistoryPurgeTarget,
   RunStorageUsage,
 } from "./run-history.js";
+import type {
+  BatchRun,
+  BatchRunStatus,
+  CreateBatchRunInput,
+  FlakyTestStatistic,
+  SaveTestSuiteInput,
+  TestSuite,
+  UpdateBatchRunItemInput,
+} from "./test-suites.js";
+import type {
+  AnalyzedForm,
+  CreateGeneratedFormTestsInput,
+  CreateGeneratedFormTestsResult,
+  FormTestGenerationResult,
+  GenerateFormTestsInput,
+  ProjectFormSettings,
+  SaveProjectFormSettingsInput,
+} from "./form-analysis.js";
 
 export type AppInfoChannel = "app:get-info";
 
@@ -111,7 +136,15 @@ export const PAGE_ANALYSIS_CHANNELS = {
   getCurrentTarget: "pages:get-current-analysis-target",
   analyzeCurrent: "pages:analyze-current",
   list: "pages:list-analyses",
+  listForms: "pages:list-forms",
   progress: "pages:analysis-progress",
+} as const;
+
+export const FORM_CHANNELS = {
+  getSettings: "forms:get-settings",
+  saveSettings: "forms:save-settings",
+  generateTests: "forms:generate-tests",
+  createTests: "forms:create-tests",
 } as const;
 
 export const TEST_CHANNELS = {
@@ -120,6 +153,7 @@ export const TEST_CHANNELS = {
   create: "tests:create",
   update: "tests:update",
   saveFlow: "tests:save-flow",
+  saveStages: "tests:save-stages",
   savePostRunChecks: "tests:save-post-run-checks",
   listVersions: "tests:list-versions",
   revalidate: "tests:revalidate",
@@ -160,12 +194,16 @@ export const DATASET_CHANNELS = {
   save: "datasets:save",
   delete: "datasets:delete",
   previewValue: "datasets:preview-value",
+  selectFile: "datasets:select-file",
 } as const;
 
 export const RUNNER_CHANNELS = {
   start: "runner:start",
+  captureVisualContext: "runner:capture-visual-context",
   stop: "runner:stop",
   retry: "runner:retry",
+  retryVariableProducer: "runner:retry-variable-producer",
+  provideManualVariable: "runner:provide-manual-variable",
   skipStep: "runner:skip-step",
   continue: "runner:continue",
   configureShortcut: "runner:configure-shortcut",
@@ -191,8 +229,24 @@ export const RUN_HISTORY_CHANNELS = {
   purge: "run-history:purge",
 } as const;
 
+export const TEST_SUITE_CHANNELS = {
+  list: "test-suites:list",
+  save: "test-suites:save",
+  delete: "test-suites:delete",
+} as const;
+
+export const BATCH_RUN_CHANNELS = {
+  create: "batch-runs:create",
+  updateItem: "batch-runs:update-item",
+  complete: "batch-runs:complete",
+  list: "batch-runs:list",
+  get: "batch-runs:get",
+  flakyStatistics: "batch-runs:flaky-statistics",
+} as const;
+
 export const RECORDER_CHANNELS = {
   start: "recorder:start",
+  continueRecording: "recorder:continue-recording",
   stop: "recorder:stop",
   addStep: "recorder:add-step",
   discardStep: "recorder:discard-step",
@@ -206,14 +260,20 @@ export const AI_CHANNELS = {
   getSettings: "ai:get-settings",
   saveSettings: "ai:save-settings",
   listModels: "ai:list-models",
+  getModelPricing: "ai:get-model-pricing",
+  saveModelPricing: "ai:save-model-pricing",
   testConnection: "ai:test-connection",
   previewRequest: "ai:preview-request",
+  generateRequest: "ai:generate-request",
   previewStepEdit: "ai:preview-step-edit",
   generateStepEdit: "ai:generate-step-edit",
   previewRunPlan: "ai:preview-run-plan",
   generateRunPlan: "ai:generate-run-plan",
   applyStepChanges: "ai:apply-step-changes",
   undoStepChange: "ai:undo-step-change",
+  previewSimilarTest: "ai:preview-similar-test",
+  generateSimilarTest: "ai:generate-similar-test",
+  createSimilarTest: "ai:create-similar-test",
 } as const;
 
 export interface AppInfo {
@@ -245,12 +305,22 @@ export interface SemanticAppApi extends DatasetCrudApi {
     provider: Exclude<AiProviderId, "none">,
     refresh?: boolean,
   ) => Promise<AiModelInfo[]>;
+  getAiModelPricing: (
+    provider: import("./ai.js").PricedAiProviderId,
+    model: string,
+  ) => Promise<import("./ai.js").AiModelPricing>;
+  saveAiModelPricing: (
+    input: import("./ai.js").SaveAiModelPricingInput,
+  ) => Promise<import("./ai.js").AiModelPricing>;
   testAiConnection: (
     provider: Exclude<AiProviderId, "none">,
   ) => Promise<AiConnectionTestResult>;
   previewAiRequest: (
     input: CreateAiRequestPreviewInput,
   ) => Promise<AiRequestPreview>;
+  generateAiRequest: (
+    input: CreateAiRequestPreviewInput,
+  ) => Promise<import("./ai.js").AiGenerationResult>;
   previewAiStepEdit: (input: AiStepEditInput) => Promise<AiStepEditPreview>;
   generateAiStepEdit: (input: AiStepEditInput) => Promise<AiStepEditResult>;
   previewAiRunPlan: (input: AiRunPlanInput) => Promise<AiRunPlanPreview>;
@@ -259,6 +329,15 @@ export interface SemanticAppApi extends DatasetCrudApi {
     input: ApplyAiStepChangesInput,
   ) => Promise<ApplyAiStepChangesResult>;
   undoAiStepChange: (input: UndoAiStepChangeInput) => Promise<TestDefinition>;
+  previewAiSimilarTest: (
+    input: AiSimilarTestInput,
+  ) => Promise<AiSimilarTestRequestPreview>;
+  generateAiSimilarTest: (
+    input: AiSimilarTestInput,
+  ) => Promise<AiSimilarTestResult>;
+  createAiSimilarTest: (
+    input: CreateAiSimilarTestInput,
+  ) => Promise<CreateAiSimilarTestResult>;
   deleteProject: (projectId: string) => Promise<boolean>;
   detectBrowsers: () => Promise<DetectedBrowser[]>;
   launchBrowser: (options: BrowserLaunchOptions) => Promise<BrowserSession>;
@@ -283,6 +362,21 @@ export interface SemanticAppApi extends DatasetCrudApi {
   ) => Promise<PageAnalysisTarget | undefined>;
   analyzeCurrentPage: (projectId: string) => Promise<PageAnalysisResult>;
   listAnalyzedPages: (projectId: string) => Promise<AnalyzedPageSummary[]>;
+  listAnalyzedPageForms?: (
+    projectId: string,
+    pageId: string,
+  ) => Promise<AnalyzedForm[]>;
+  getProjectFormSettings?: (projectId: string) => Promise<ProjectFormSettings>;
+  saveProjectFormSettings?: (
+    projectId: string,
+    input: SaveProjectFormSettingsInput,
+  ) => Promise<ProjectFormSettings>;
+  generateFormTests?: (
+    input: GenerateFormTestsInput,
+  ) => Promise<FormTestGenerationResult>;
+  createGeneratedFormTests?: (
+    input: CreateGeneratedFormTestsInput,
+  ) => Promise<CreateGeneratedFormTestsResult>;
   onPageAnalysisProgress: (
     listener: (progress: PageAnalysisProgress) => void,
   ) => () => void;
@@ -298,6 +392,11 @@ export interface SemanticAppApi extends DatasetCrudApi {
     projectId: string,
     testId: string,
     flowItems: TestFlowItem[],
+  ) => Promise<TestDefinition>;
+  saveTestStages?: (
+    projectId: string,
+    testId: string,
+    stages: TestStage[],
   ) => Promise<TestDefinition>;
   saveTestPostRunChecks: (
     projectId: string,
@@ -370,9 +469,20 @@ export interface SemanticAppApi extends DatasetCrudApi {
     input: SaveImapAccountInput,
     receivedAfter: string,
   ) => Promise<ImapDiagnosticPollResult>;
+  captureVisualStepContext?: (
+    projectId: string,
+    testId: string,
+    stepId: string,
+    flowItems: TestFlowItem[],
+  ) => Promise<VisualStepContextCapture>;
   startRun: (input: StartRunInput) => Promise<RunnerSnapshot>;
   stopRun: (runId: string) => Promise<RunnerSnapshot>;
   retryRunStep: (runId: string) => Promise<RunnerSnapshot>;
+  retryVariableProducer?: (runId: string) => Promise<RunnerSnapshot>;
+  provideManualVariable?: (
+    runId: string,
+    value: unknown,
+  ) => Promise<RunnerSnapshot>;
   skipRunStep: (runId: string) => Promise<RunnerSnapshot>;
   continueRun: (runId: string) => Promise<RunnerSnapshot>;
   configureRunnerShortcut: (
@@ -424,13 +534,41 @@ export interface SemanticAppApi extends DatasetCrudApi {
     projectId: string,
     target: RunHistoryPurgeTarget,
   ) => Promise<RunHistoryMutationResult>;
+  listTestSuites?: (projectId: string) => Promise<TestSuite[]>;
+  saveTestSuite?: (
+    projectId: string,
+    suiteId: string | undefined,
+    input: SaveTestSuiteInput,
+  ) => Promise<TestSuite>;
+  deleteTestSuite?: (projectId: string, suiteId: string) => Promise<boolean>;
+  createBatchRun?: (input: CreateBatchRunInput) => Promise<BatchRun>;
+  updateBatchRunItem?: (
+    batchId: string,
+    input: UpdateBatchRunItemInput,
+  ) => Promise<BatchRun>;
+  completeBatchRun?: (
+    batchId: string,
+    status: BatchRunStatus,
+    cleanupStatus?: BatchRun["cleanupStatus"],
+  ) => Promise<BatchRun>;
+  listBatchRuns?: (projectId: string) => Promise<BatchRun[]>;
+  getBatchRun?: (projectId: string, batchId: string) => Promise<BatchRun>;
+  listFlakyTestStatistics?: (
+    projectId: string,
+  ) => Promise<FlakyTestStatistic[]>;
   onRunnerStatusChange: (
     listener: (snapshot: RunnerSnapshot) => void,
   ) => () => void;
   startRecorder: (
     projectId: string,
     testId: string,
+    stageId?: string,
   ) => Promise<RecorderSnapshot>;
+  continueRecorder: (
+    projectId: string,
+    testId: string,
+    stageId?: string,
+  ) => Promise<RunnerSnapshot>;
   stopRecorder: (
     projectId: string,
     testId: string,

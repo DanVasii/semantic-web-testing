@@ -260,7 +260,7 @@ describe("ImportExportService", () => {
     expect(projectExport).not.toContain("SECRET-MYSQL");
     expect(projectExport).not.toContain("browserConfig");
     expect(readFileSync(testExportPath, "utf8")).toContain(
-      '"schemaVersion": 1',
+      '"schemaVersion": 2',
     );
   });
 });

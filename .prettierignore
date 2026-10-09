@@ -2,6 +2,7 @@
 node_modules/
 dist/
 out/
+output/
 build/
 release/
 
@@ -18,6 +19,6 @@ tmp/
 temp/
 logs/
 
-# Binary project documentation
+# Binary upload fixtures
 *.pdf
 

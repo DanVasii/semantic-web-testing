@@ -1,4 +1,8 @@
-import type { AiStepEditProposal, AiTask } from "../../shared/ai.js";
+import type {
+  AiSimilarTestProposal,
+  AiStepEditProposal,
+  AiTask,
+} from "../../shared/ai.js";
 import type { JsonValue } from "../../shared/persistence.js";
 import {
   ACTION_TYPES,
@@ -12,17 +16,373 @@ const stringArraySchema: JsonValue = {
   maxItems: 10,
 };
 
+export const FORM_TEST_GENERATION_OUTPUT_SCHEMA: JsonValue = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    summary: { type: "string", minLength: 1, maxLength: 2000 },
+    scenarios: {
+      type: "array",
+      minItems: 1,
+      maxItems: 20,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          id: { type: "string", minLength: 1, maxLength: 100 },
+          name: { type: "string", minLength: 1, maxLength: 120 },
+          description: { type: "string", maxLength: 1000 },
+          kind: { type: "string", enum: ["valid", "negative"] },
+          values: {
+            type: "array",
+            maxItems: 100,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                fieldId: { type: "string" },
+                value: { type: ["string", "number", "boolean"] },
+              },
+              required: ["fieldId", "value"],
+            },
+          },
+          omittedFieldIds: {
+            type: "array",
+            maxItems: 100,
+            items: { type: "string" },
+          },
+          invalidFieldIds: {
+            type: "array",
+            maxItems: 100,
+            items: { type: "string" },
+          },
+          expectedMessages: {
+            type: "array",
+            maxItems: 20,
+            items: { type: "string", maxLength: 500 },
+          },
+        },
+        required: [
+          "id",
+          "name",
+          "description",
+          "kind",
+          "values",
+          "omittedFieldIds",
+          "invalidFieldIds",
+          "expectedMessages",
+        ],
+      },
+    },
+  },
+  required: ["summary", "scenarios"],
+};
+
 const simpleLocatorSchema: JsonValue = {
   type: "object",
   additionalProperties: false,
   properties: {
     type: { type: "string", enum: [...SIMPLE_LOCATOR_TYPES] },
     operator: { type: "string", enum: [...MATCH_OPERATORS] },
-    value: { type: "string" },
+    value: { type: "string", minLength: 1 },
     role: { type: "string" },
     attribute: { type: "string" },
   },
   required: ["type", "operator", "value"],
+};
+
+const targetSchema: JsonValue = {
+  type: "object",
+  additionalProperties: false,
+  properties: { primary: simpleLocatorSchema },
+  required: ["primary"],
+};
+
+const looseCheckConfigSchema: JsonValue = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    target: simpleLocatorSchema,
+    state: {
+      type: "string",
+      enum: [
+        "visible",
+        "hidden",
+        "enabled",
+        "disabled",
+        "checked",
+        "unchecked",
+      ],
+    },
+    operator: { type: "string", enum: [...MATCH_OPERATORS] },
+    value: { type: "string" },
+    caseSensitive: { type: "boolean" },
+    jsSnippet: { type: "string" },
+    expectedResult: {},
+    prompt: { type: "string" },
+    minimumConfidence: {
+      type: "number",
+      minimum: 0,
+      maximum: 1,
+      description: "Permis exclusiv când checkType este visual.",
+    },
+    strategy: { type: "string", enum: ["auto", "dom", "visual"] },
+    expectedTexts: {
+      type: "array",
+      maxItems: 20,
+      items: { type: "string" },
+    },
+    matchMode: { type: "string", enum: ["any", "all", "exact"] },
+    ignoreDiacritics: { type: "boolean" },
+    visualPrompt: { type: "string" },
+    visualFallback: { type: "boolean" },
+  },
+};
+
+const elementOrTextCheckConfigSchema: JsonValue = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    target: simpleLocatorSchema,
+    state: {
+      type: "string",
+      enum: [
+        "visible",
+        "hidden",
+        "enabled",
+        "disabled",
+        "checked",
+        "unchecked",
+      ],
+    },
+    operator: { type: "string", enum: [...MATCH_OPERATORS] },
+    value: { type: "string" },
+    caseSensitive: { type: "boolean" },
+  },
+  required: ["target"],
+};
+
+const urlCheckConfigSchema: JsonValue = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    operator: { type: "string", enum: [...MATCH_OPERATORS] },
+    value: { type: "string" },
+    caseSensitive: { type: "boolean" },
+  },
+  required: ["operator", "value"],
+};
+
+const jsEvalCheckConfigSchema: JsonValue = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    jsSnippet: { type: "string" },
+    expectedResult: {},
+  },
+  required: ["jsSnippet"],
+};
+
+const visualCheckConfigSchema: JsonValue = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    prompt: { type: "string", minLength: 3, maxLength: 4000 },
+    minimumConfidence: { type: "number", minimum: 0, maximum: 1 },
+  },
+  required: ["prompt"],
+};
+
+const adaptiveCheckConfigSchema: JsonValue = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    strategy: { type: "string", enum: ["auto", "dom", "visual"] },
+    expectedTexts: {
+      type: "array",
+      maxItems: 20,
+      items: { type: "string", minLength: 1, maxLength: 1000 },
+    },
+    matchMode: { type: "string", enum: ["any", "all", "exact"] },
+    target: simpleLocatorSchema,
+    caseSensitive: { type: "boolean" },
+    ignoreDiacritics: { type: "boolean" },
+    visualPrompt: { type: "string", minLength: 3, maxLength: 4000 },
+    visualFallback: { type: "boolean" },
+    minimumConfidence: { type: "number", minimum: 0, maximum: 1 },
+  },
+  required: ["strategy", "expectedTexts", "matchMode", "visualFallback"],
+};
+
+const createdStepSchema: JsonValue = {
+  oneOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        id: { type: "string" },
+        type: { type: "string", enum: ["action"] },
+        actionType: { type: "string", enum: [...ACTION_TYPES] },
+        title: { type: "string" },
+        humanDescription: { type: "string" },
+        whyExplanation: { type: "string" },
+        target: targetSchema,
+        inputFieldId: { type: "string" },
+        valueKey: { type: "string" },
+        valueStrategy: { type: "string", enum: ["dataset", "manual"] },
+        url: { type: "string" },
+        key: { type: "string" },
+        scrollX: { type: "number" },
+        scrollY: { type: "number" },
+        scrollMode: { type: "string", enum: ["dom", "wheel"] },
+        fallbacks: {
+          type: "array",
+          maxItems: 3,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              locator: simpleLocatorSchema,
+              humanDescription: { type: "string" },
+              whyExplanation: { type: "string" },
+            },
+            required: ["locator", "humanDescription", "whyExplanation"],
+          },
+        },
+        enabled: { type: "boolean" },
+      },
+      required: [
+        "id",
+        "type",
+        "actionType",
+        "title",
+        "humanDescription",
+        "whyExplanation",
+        "fallbacks",
+        "enabled",
+      ],
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        id: { type: "string" },
+        type: { type: "string", enum: ["check"] },
+        checkType: { type: "string", enum: ["adaptive"] },
+        title: { type: "string" },
+        humanDescription: { type: "string" },
+        config: adaptiveCheckConfigSchema,
+        timeoutMs: { type: "integer", minimum: 0, maximum: 120000 },
+        enabled: { type: "boolean" },
+      },
+      required: [
+        "id",
+        "type",
+        "checkType",
+        "title",
+        "humanDescription",
+        "config",
+        "timeoutMs",
+        "enabled",
+      ],
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        id: { type: "string" },
+        type: { type: "string", enum: ["check"] },
+        checkType: { type: "string", enum: ["element", "text"] },
+        title: { type: "string" },
+        humanDescription: { type: "string" },
+        config: elementOrTextCheckConfigSchema,
+        timeoutMs: { type: "integer", minimum: 0, maximum: 120000 },
+        enabled: { type: "boolean" },
+      },
+      required: [
+        "id",
+        "type",
+        "checkType",
+        "title",
+        "humanDescription",
+        "config",
+        "timeoutMs",
+        "enabled",
+      ],
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        id: { type: "string" },
+        type: { type: "string", enum: ["check"] },
+        checkType: { type: "string", enum: ["url"] },
+        title: { type: "string" },
+        humanDescription: { type: "string" },
+        config: urlCheckConfigSchema,
+        timeoutMs: { type: "integer", minimum: 0, maximum: 120000 },
+        enabled: { type: "boolean" },
+      },
+      required: [
+        "id",
+        "type",
+        "checkType",
+        "title",
+        "humanDescription",
+        "config",
+        "timeoutMs",
+        "enabled",
+      ],
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        id: { type: "string" },
+        type: { type: "string", enum: ["check"] },
+        checkType: { type: "string", enum: ["js_eval"] },
+        title: { type: "string" },
+        humanDescription: { type: "string" },
+        config: jsEvalCheckConfigSchema,
+        timeoutMs: { type: "integer", minimum: 0, maximum: 120000 },
+        enabled: { type: "boolean" },
+      },
+      required: [
+        "id",
+        "type",
+        "checkType",
+        "title",
+        "humanDescription",
+        "config",
+        "timeoutMs",
+        "enabled",
+      ],
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        id: { type: "string" },
+        type: { type: "string", enum: ["check"] },
+        checkType: { type: "string", enum: ["visual"] },
+        title: { type: "string" },
+        humanDescription: { type: "string" },
+        config: visualCheckConfigSchema,
+        timeoutMs: { type: "integer", minimum: 0, maximum: 120000 },
+        enabled: { type: "boolean" },
+      },
+      required: [
+        "id",
+        "type",
+        "checkType",
+        "title",
+        "humanDescription",
+        "config",
+        "timeoutMs",
+        "enabled",
+      ],
+    },
+  ],
 };
 
 const editableStepPatchSchema: JsonValue = {
@@ -34,6 +394,12 @@ const editableStepPatchSchema: JsonValue = {
     whyExplanation: { type: "string" },
     instructions: { type: "string" },
     primaryLocator: simpleLocatorSchema,
+    checkType: {
+      type: "string",
+      enum: ["element", "text", "url", "js_eval", "visual", "adaptive"],
+    },
+    checkConfig: looseCheckConfigSchema,
+    timeoutMs: { type: "integer", minimum: 0, maximum: 120000 },
   },
 };
 
@@ -130,7 +496,116 @@ const runStepInsertionSchema: JsonValue = {
   required: ["anchorStepId", "position", "action", "rationale"],
 };
 
+const datasetPrimitiveSchema: JsonValue = {
+  type: ["string", "number", "boolean", "null"],
+};
+
+const similarTestDatasetSchema: JsonValue = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    name: { type: "string" },
+    values: {
+      type: "array",
+      maxItems: 100,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          key: { type: "string" },
+          value: datasetPrimitiveSchema,
+        },
+        required: ["key", "value"],
+      },
+    },
+  },
+  required: ["name", "values"],
+};
+
+export const createAiSimilarTestOutputSchema = (
+  existingStepIds?: readonly string[],
+): JsonValue => {
+  const existingStepIdSchema: JsonValue =
+    existingStepIds === undefined
+      ? { type: "string" }
+      : { type: "string", enum: [...existingStepIds] };
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      summary: { type: "string" },
+      name: { type: "string" },
+      description: { type: "string" },
+      datasets: {
+        type: "array",
+        maxItems: 20,
+        items: similarTestDatasetSchema,
+      },
+      changes: {
+        type: "array",
+        maxItems: 100,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            stepId: existingStepIdSchema,
+            patch: editableStepPatchSchema,
+            rationale: { type: "string" },
+          },
+          required: ["stepId", "patch", "rationale"],
+        },
+      },
+      insertions: {
+        type: "array",
+        maxItems: 100,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            anchorStepId: existingStepIdSchema,
+            position: { type: "string", enum: ["before", "after"] },
+            step: createdStepSchema,
+            rationale: { type: "string" },
+          },
+          required: ["anchorStepId", "position", "step", "rationale"],
+        },
+      },
+      removals: {
+        type: "array",
+        maxItems: 100,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            stepId: existingStepIdSchema,
+            rationale: { type: "string" },
+          },
+          required: ["stepId", "rationale"],
+        },
+      },
+    },
+    required: [
+      "summary",
+      "name",
+      "description",
+      "datasets",
+      "changes",
+      "insertions",
+      "removals",
+    ],
+  };
+};
+
 export const AI_OUTPUT_SCHEMAS: Record<AiTask, JsonValue> = {
+  select_google_pay_card: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      scenarioCode: { type: ["string", "null"], maxLength: 100 },
+      reason: { type: "string", minLength: 1, maxLength: 1000 },
+    },
+    required: ["scenarioCode", "reason"],
+  },
   analyze_step: {
     type: "object",
     additionalProperties: false,
@@ -163,6 +638,15 @@ export const AI_OUTPUT_SCHEMAS: Record<AiTask, JsonValue> = {
     },
     required: ["summary", "currentStepChange", "downstreamChanges"],
   },
+  create_step: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      summary: { type: "string" },
+      step: createdStepSchema,
+    },
+    required: ["summary", "step"],
+  },
   adapt_run: {
     type: "object",
     additionalProperties: false,
@@ -181,36 +665,8 @@ export const AI_OUTPUT_SCHEMAS: Record<AiTask, JsonValue> = {
     },
     required: ["summary", "changes", "insertions"],
   },
-  generate_test: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      summary: { type: "string" },
-      steps: {
-        type: "array",
-        maxItems: 100,
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            actionType: { type: "string", enum: [...ACTION_TYPES] },
-            title: { type: "string" },
-            humanDescription: { type: "string" },
-            whyExplanation: { type: "string" },
-            targetHint: { type: "string" },
-          },
-          required: [
-            "actionType",
-            "title",
-            "humanDescription",
-            "whyExplanation",
-          ],
-        },
-      },
-      downstreamSuggestions: stringArraySchema,
-    },
-    required: ["summary", "steps", "downstreamSuggestions"],
-  },
+  generate_test: createAiSimilarTestOutputSchema(),
+  generate_form_tests: FORM_TEST_GENERATION_OUTPUT_SCHEMA,
   repair_locator: {
     type: "object",
     additionalProperties: false,
@@ -381,6 +837,9 @@ const editablePatchKeys = [
   "whyExplanation",
   "instructions",
   "primaryLocator",
+  "checkType",
+  "checkConfig",
+  "timeoutMs",
 ] as const;
 
 const validateStepChange = (value: JsonValue | undefined): void => {
@@ -412,6 +871,104 @@ const validateStepChange = (value: JsonValue | undefined): void => {
   if (value.patch.primaryLocator !== undefined) {
     validateSimpleLocator(value.patch.primaryLocator);
   }
+  if (
+    value.patch.checkType !== undefined &&
+    (typeof value.patch.checkType !== "string" ||
+      !["element", "text", "url", "js_eval", "visual", "adaptive"].includes(
+        value.patch.checkType,
+      ))
+  ) {
+    throw new Error("Output-ul AI conține un tip de check nepermis.");
+  }
+  if (
+    value.patch.checkConfig !== undefined &&
+    !isObject(value.patch.checkConfig)
+  ) {
+    throw new Error("Output-ul AI conține o configurație de check invalidă.");
+  }
+  if (
+    value.patch.timeoutMs !== undefined &&
+    (typeof value.patch.timeoutMs !== "number" ||
+      !Number.isInteger(value.patch.timeoutMs) ||
+      value.patch.timeoutMs < 0 ||
+      value.patch.timeoutMs > 120_000)
+  ) {
+    throw new Error("Output-ul AI conține un timeout de check invalid.");
+  }
+};
+
+const normalizeSimilarTestChanges = (value: JsonValue[]): JsonValue[] => {
+  const normalized: JsonValue[] = [];
+  const indexByStepId = new Map<string, number>();
+
+  for (const rawChange of value) {
+    if (!isObject(rawChange) || !isObject(rawChange.patch)) {
+      normalized.push(rawChange);
+      continue;
+    }
+    const change = structuredClone(rawChange);
+    const patch = change.patch;
+    if (!isObject(patch)) {
+      normalized.push(change);
+      continue;
+    }
+    if (
+      isObject(patch.primaryLocator) &&
+      typeof patch.primaryLocator.value === "string" &&
+      patch.primaryLocator.value.trim().length === 0
+    ) {
+      delete patch.primaryLocator;
+    }
+    if (Object.keys(patch).length === 0) continue;
+    if (typeof change.stepId !== "string") {
+      normalized.push(change);
+      continue;
+    }
+    const existingIndex = indexByStepId.get(change.stepId);
+    if (existingIndex === undefined) {
+      indexByStepId.set(change.stepId, normalized.length);
+      normalized.push(change);
+      continue;
+    }
+    const existing = normalized[existingIndex];
+    if (!isObject(existing) || !isObject(existing.patch)) {
+      normalized.push(change);
+      continue;
+    }
+    existing.patch = { ...existing.patch, ...patch };
+    if (typeof change.rationale === "string") {
+      existing.rationale = change.rationale;
+    }
+  }
+
+  return normalized;
+};
+
+export const normalizeAiSimilarTestProposalOutput = (
+  value: Record<string, JsonValue>,
+): Record<string, JsonValue> => {
+  const normalized = structuredClone(value);
+  if (Array.isArray(normalized.changes)) {
+    normalized.changes = normalizeSimilarTestChanges(normalized.changes);
+  }
+  if (Array.isArray(normalized.removals)) {
+    const seen = new Set<string>();
+    normalized.removals = normalized.removals.filter((removal) => {
+      if (!isObject(removal) || typeof removal.stepId !== "string") return true;
+      if (seen.has(removal.stepId)) return false;
+      seen.add(removal.stepId);
+      return true;
+    });
+    if (Array.isArray(normalized.changes)) {
+      normalized.changes = normalized.changes.filter(
+        (change) =>
+          !isObject(change) ||
+          typeof change.stepId !== "string" ||
+          !seen.has(change.stepId),
+      );
+    }
+  }
+  return normalized;
 };
 
 export const validateAiStepEditProposal = (
@@ -436,6 +993,106 @@ export const validateAiStepEditProposal = (
   }
   value.downstreamChanges.forEach(validateStepChange);
   return value as unknown as AiStepEditProposal;
+};
+
+export const validateAiSimilarTestProposal = (
+  value: unknown,
+): AiSimilarTestProposal => {
+  if (!isObject(value)) {
+    throw new Error("Propunerea AI pentru test trebuie să fie un obiect JSON.");
+  }
+  assertNoArbitraryCode(value);
+  const proposal = normalizeAiSimilarTestProposalOutput(value);
+  requireExactKeys(proposal, [
+    "summary",
+    "name",
+    "description",
+    "datasets",
+    "changes",
+    "insertions",
+    "removals",
+  ]);
+  requireString(proposal.summary, "rezumat test");
+  requireString(proposal.name, "nume test", 120);
+  if (
+    typeof proposal.description !== "string" ||
+    proposal.description.length > 500
+  ) {
+    throw new Error("Propunerea AI conține o descriere invalidă.");
+  }
+  if (!Array.isArray(proposal.datasets) || proposal.datasets.length > 20) {
+    throw new Error("Propunerea AI conține dataset-uri invalide.");
+  }
+  for (const dataset of proposal.datasets) {
+    if (!isObject(dataset)) throw new Error("Dataset AI invalid.");
+    requireExactKeys(dataset, ["name", "values"]);
+    requireString(dataset.name, "nume dataset", 120);
+    if (!Array.isArray(dataset.values) || dataset.values.length > 100) {
+      throw new Error("Valorile dataset-ului AI sunt invalide.");
+    }
+    const keys = new Set<string>();
+    for (const entry of dataset.values) {
+      if (!isObject(entry)) throw new Error("Valoare dataset AI invalidă.");
+      requireExactKeys(entry, ["key", "value"]);
+      const key = requireString(entry.key, "cheie dataset", 120);
+      if (keys.has(key))
+        throw new Error("Dataset-ul AI conține chei duplicate.");
+      keys.add(key);
+      if (
+        entry.value !== null &&
+        typeof entry.value !== "string" &&
+        typeof entry.value !== "number" &&
+        typeof entry.value !== "boolean"
+      ) {
+        throw new Error("Dataset-ul AI conține o valoare nepermisă.");
+      }
+    }
+  }
+  if (!Array.isArray(proposal.changes) || proposal.changes.length > 100) {
+    throw new Error("Propunerea AI conține schimbări invalide.");
+  }
+  proposal.changes.forEach(validateStepChange);
+  if (!Array.isArray(proposal.insertions) || proposal.insertions.length > 100) {
+    throw new Error("Propunerea AI conține inserări invalide.");
+  }
+  for (const insertion of proposal.insertions) {
+    if (!isObject(insertion) || !isObject(insertion.step)) {
+      throw new Error("Propunerea AI conține o inserare invalidă.");
+    }
+    requireExactKeys(insertion, [
+      "anchorStepId",
+      "position",
+      "step",
+      "rationale",
+    ]);
+    requireString(insertion.anchorStepId, "ID ancoră", 200);
+    requireString(insertion.rationale, "motivație inserare");
+    if (insertion.position !== "before" && insertion.position !== "after") {
+      throw new Error("Poziția inserării AI este invalidă.");
+    }
+    if (insertion.step.type !== "action" && insertion.step.type !== "check") {
+      throw new Error("AI poate insera numai acțiuni sau verificări.");
+    }
+    if (
+      insertion.step.type === "action" &&
+      (typeof insertion.step.actionType !== "string" ||
+        !(ACTION_TYPES as readonly string[]).includes(
+          insertion.step.actionType,
+        ))
+    ) {
+      throw new Error("Output-ul AI conține o acțiune nepermisă.");
+    }
+  }
+  if (!Array.isArray(proposal.removals) || proposal.removals.length > 100) {
+    throw new Error("Propunerea AI conține eliminări invalide.");
+  }
+  for (const removal of proposal.removals) {
+    if (!isObject(removal)) throw new Error("Eliminare AI invalidă.");
+    requireExactKeys(removal, ["stepId", "rationale"]);
+    requireString(removal.stepId, "ID pas eliminat", 200);
+    requireString(removal.rationale, "motivație eliminare");
+  }
+  return proposal as unknown as AiSimilarTestProposal;
 };
 
 const validateRunRepeatUntil = (value: JsonValue | undefined): void => {
@@ -692,6 +1349,22 @@ export const validateAiOutput = (task: AiTask, value: unknown): JsonValue => {
   }
   assertNoArbitraryCode(value);
 
+  if (task === "select_google_pay_card") {
+    requireExactKeys(value, ["scenarioCode", "reason"]);
+    if (
+      value.scenarioCode !== null &&
+      (typeof value.scenarioCode !== "string" ||
+        value.scenarioCode.length === 0 ||
+        value.scenarioCode.length > 100)
+    ) {
+      throw new Error(
+        "Output-ul AI conține un cod de scenariu Google Pay invalid.",
+      );
+    }
+    requireString(value.reason, "motiv alegere Google Pay", 1000);
+    return value;
+  }
+
   if (task === "analyze_step") {
     requireExactKeys(value, [
       "summary",
@@ -712,36 +1385,83 @@ export const validateAiOutput = (task: AiTask, value: unknown): JsonValue => {
     return validateAiStepEditProposal(value) as unknown as JsonValue;
   }
 
+  if (task === "create_step") {
+    requireExactKeys(value, ["summary", "step"]);
+    requireString(value.summary, "rezumat");
+    if (!isObject(value.step)) {
+      throw new Error("Output-ul AI conține un pas invalid.");
+    }
+    if (value.step.type !== "action" && value.step.type !== "check") {
+      throw new Error("Output-ul AI conține un tip de pas nepermis.");
+    }
+    return value;
+  }
+
   if (task === "adapt_run") {
     return validateAiRunPlanProposal(value) as unknown as JsonValue;
   }
 
   if (task === "generate_test") {
-    requireExactKeys(value, ["summary", "steps", "downstreamSuggestions"]);
-    requireString(value.summary, "rezumat");
-    requireStringArray(value.downstreamSuggestions, "sugestii", 10);
-    if (!Array.isArray(value.steps) || value.steps.length > 100) {
-      throw new Error("Output-ul AI conține o listă de pași invalidă.");
+    return validateAiSimilarTestProposal(value) as unknown as JsonValue;
+  }
+
+  if (task === "generate_form_tests") {
+    requireExactKeys(value, ["summary", "scenarios"]);
+    requireString(value.summary, "rezumat formular", 2000);
+    if (
+      !Array.isArray(value.scenarios) ||
+      value.scenarios.length === 0 ||
+      value.scenarios.length > 20
+    ) {
+      throw new Error("Output-ul AI conține o listă de scenarii invalidă.");
     }
-    for (const step of value.steps) {
-      if (!isObject(step)) {
-        throw new Error("Output-ul AI conține un pas invalid.");
+    for (const scenario of value.scenarios) {
+      if (!isObject(scenario)) {
+        throw new Error(
+          "Output-ul AI conține un scenariu de formular invalid.",
+        );
       }
-      requireExactKeys(
-        step,
-        ["actionType", "title", "humanDescription", "whyExplanation"],
-        ["targetHint"],
-      );
-      const actionType = requireString(step.actionType, "tip de acțiune", 100);
-      if (!(ACTION_TYPES as readonly string[]).includes(actionType)) {
-        throw new Error("Output-ul AI conține o acțiune nepermisă.");
+      requireExactKeys(scenario, [
+        "id",
+        "name",
+        "description",
+        "kind",
+        "values",
+        "omittedFieldIds",
+        "invalidFieldIds",
+        "expectedMessages",
+      ]);
+      requireString(scenario.id, "ID scenariu", 100);
+      requireString(scenario.name, "nume scenariu", 120);
+      if (
+        typeof scenario.description !== "string" ||
+        scenario.description.length > 1000
+      ) {
+        throw new Error(
+          "Output-ul AI conține o descriere de scenariu invalidă.",
+        );
       }
-      requireString(step.title, "titlu pas", 300);
-      requireString(step.humanDescription, "descriere pas");
-      requireString(step.whyExplanation, "explicație pas");
-      if (step.targetHint !== undefined) {
-        requireString(step.targetHint, "indiciu țintă");
+      if (scenario.kind !== "valid" && scenario.kind !== "negative") {
+        throw new Error("Output-ul AI conține un tip de scenariu invalid.");
       }
+      if (!Array.isArray(scenario.values) || scenario.values.length > 100) {
+        throw new Error("Output-ul AI conține valori de formular invalide.");
+      }
+      for (const entry of scenario.values) {
+        if (!isObject(entry)) {
+          throw new Error(
+            "Output-ul AI conține o valoare de formular invalidă.",
+          );
+        }
+        requireExactKeys(entry, ["fieldId", "value"]);
+        requireString(entry.fieldId, "ID câmp", 300);
+        if (!["string", "number", "boolean"].includes(typeof entry.value)) {
+          throw new Error("Output-ul AI conține o valoare de câmp invalidă.");
+        }
+      }
+      requireStringArray(scenario.omittedFieldIds, "câmpuri omise", 100);
+      requireStringArray(scenario.invalidFieldIds, "câmpuri invalide", 100);
+      requireStringArray(scenario.expectedMessages, "mesaje așteptate", 20);
     }
     return value;
   }

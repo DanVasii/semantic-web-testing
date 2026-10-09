@@ -17,6 +17,7 @@ const getInputKind = (
   if (type === "password") return "password";
   if (type === "checkbox") return "checkbox";
   if (type === "radio") return "radio";
+  if (type === "file") return "file";
   return "text";
 };
 
@@ -40,7 +41,12 @@ export const inspectMissingInput = async (
   }
   const fieldId =
     step.inputFieldId ?? step.target?.fieldId ?? step.valueKey ?? valueKey;
-  const locator = await resolveUniqueLocator(page, definition);
+  const locator = await resolveUniqueLocator(page, definition, {
+    waitForMs: 45_000,
+    ...(step.target?.frame === undefined
+      ? { searchAllFrames: true }
+      : { frame: step.target.frame, searchAllFrames: true }),
+  });
   const input = await locator.evaluate((element) => ({
     tagName: element.tagName.toLowerCase(),
     type: element.getAttribute("type")?.toLowerCase() ?? null,
@@ -51,6 +57,9 @@ export const inspectMissingInput = async (
     valueKey,
     inputKind: getInputKind(input.tagName, input.type),
     locator: structuredClone(definition),
+    ...(step.target?.frame === undefined
+      ? {}
+      : { frame: structuredClone(step.target.frame) }),
   };
 };
 
@@ -58,7 +67,12 @@ export const readManualInputValue = async (
   page: Page,
   details: MissingDataDetails,
 ): Promise<DatasetPrimitive> => {
-  const locator = await resolveUniqueLocator(page, details.locator);
+  const locator = await resolveUniqueLocator(page, details.locator, {
+    waitForMs: 45_000,
+    ...(details.frame === undefined
+      ? { searchAllFrames: true }
+      : { frame: details.frame, searchAllFrames: true }),
+  });
   switch (details.inputKind) {
     case "checkbox":
       return locator.isChecked();
@@ -70,6 +84,24 @@ export const readManualInputValue = async (
         );
       }
       return locator.inputValue();
+    case "file": {
+      const selectedName = await locator.evaluate((element) => {
+        if (
+          !(element instanceof HTMLInputElement) ||
+          element.files?.[0] === undefined
+        ) {
+          return "";
+        }
+        return element.files[0].name;
+      });
+      if (selectedName.length === 0) {
+        throw new StepExecutionError(
+          "missing_data",
+          "Selectează un fișier în browser înainte de Continue.",
+        );
+      }
+      return selectedName;
+    }
     case "password":
     case "select":
     case "text":

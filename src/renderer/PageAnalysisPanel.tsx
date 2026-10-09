@@ -10,6 +10,7 @@ import type {
 } from "../shared/page-analysis.js";
 import type { Project } from "../shared/persistence.js";
 import { Button } from "./components/Button.js";
+import { FormAnalysisModal } from "./FormAnalysisModal.js";
 
 export interface PageAnalysisPanelProps {
   api: SemanticAppApi;
@@ -43,6 +44,7 @@ export const PageAnalysisPanel = ({
   const [pages, setPages] = useState<AnalyzedPageSummary[]>([]);
   const [progress, setProgress] = useState<PageAnalysisProgress>();
   const [result, setResult] = useState<PageAnalysisResult>();
+  const [formsPage, setFormsPage] = useState<AnalyzedPageSummary>();
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string>();
   const browserIsReady =
@@ -344,6 +346,13 @@ export const PageAnalysisPanel = ({
                   {summary.counts.forms} formulare · {summary.counts.buttons}{" "}
                   butoane
                 </p>
+                <Button
+                  className="mt-3 min-h-8 px-3 py-1"
+                  variant="secondary"
+                  onClick={() => setFormsPage(summary)}
+                >
+                  View forms ({summary.counts.forms})
+                </Button>
                 {summary.latestChange ? (
                   <p
                     className={`mt-2 text-xs font-medium ${
@@ -361,6 +370,14 @@ export const PageAnalysisPanel = ({
           </ul>
         )}
       </div>
+      <FormAnalysisModal
+        api={api}
+        open={formsPage !== undefined}
+        {...(formsPage === undefined ? {} : { page: formsPage })}
+        projectId={project.id}
+        onClose={() => setFormsPage(undefined)}
+        onTestsCreated={onAnalysisCompleted}
+      />
     </section>
   );
 };

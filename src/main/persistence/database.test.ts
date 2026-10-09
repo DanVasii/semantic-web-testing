@@ -48,7 +48,10 @@ describe("application database", () => {
 
     expect(existsSync(filePath)).toBe(true);
     expect(tables).toEqual([
+      "ai_model_pricing_cache",
       "application_ai_settings",
+      "batch_run_items",
+      "batch_runs",
       "datasets",
       "global_imap_accounts",
       "imap_accounts",
@@ -61,16 +64,57 @@ describe("application database", () => {
       "project_mysql_settings",
       "project_settings",
       "projects",
+      "run_artifacts",
       "runs",
       "schema_migrations",
       "step_results",
+      "test_suites",
       "test_versions",
       "tests",
     ]);
-    expect(version.user_version).toBe(21);
+    expect(version.user_version).toBe(29);
     expect(journalCount.count).toBe(APPLICATION_MIGRATIONS.length);
 
     database.close();
+  });
+
+  it("migrates existing AI settings and adds LM Studio defaults", async () => {
+    const directory = createTemporaryDirectory();
+    const filePath = join(directory, "application.sqlite");
+    const beforeLmStudio = await openApplicationDatabase({
+      filePath,
+      migrations: APPLICATION_MIGRATIONS.filter(({ version }) => version < 23),
+    });
+    beforeLmStudio.connection
+      .prepare(
+        `INSERT INTO application_ai_settings (
+          singleton_id, provider, ollama_base_url, ollama_model,
+          gemini_model, encrypted_gemini_api_key, updated_at
+        ) VALUES (1, 'ollama', ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "http://127.0.0.1:11434",
+        "gemma3:4b",
+        "gemini-flash",
+        "encrypted-key",
+        "2026-08-30T12:00:00.000Z",
+      );
+    beforeLmStudio.close();
+
+    const upgraded = await openApplicationDatabase({ filePath });
+    const row = upgraded.connection
+      .prepare("SELECT * FROM application_ai_settings WHERE singleton_id = 1")
+      .get() as Record<string, unknown>;
+
+    expect(row).toMatchObject({
+      provider: "ollama",
+      ollama_model: "gemma3:4b",
+      lm_studio_base_url: "http://127.0.0.1:1234",
+      lm_studio_model: "",
+      gemini_model: "gemini-flash",
+      encrypted_gemini_api_key: "encrypted-key",
+    });
+    upgraded.close();
   });
 
   it("creates a restorable backup before upgrading an existing database", async () => {

@@ -1,17 +1,28 @@
-import type { StepRunResult, TestRun } from "./persistence.js";
+import type { JsonValue, StepRunResult, TestRun } from "./persistence.js";
 import type { ImapMatchedMessage } from "./imap.js";
-import type { AiRunPlanProposal } from "./ai.js";
+import type { AiProviderId, AiRunPlanProposal } from "./ai.js";
 import type { MySqlCleanupRowSelection, MySqlRunDetails } from "./mysql.js";
-import type { LocatorDefinition, TestFlowItem } from "./test-model.js";
+import type {
+  LocatorDefinition,
+  TargetFrameContext,
+  TestFlowItem,
+} from "./test-model.js";
 import type {
   PostRunAiEvaluation,
   RunPostRunSelection,
 } from "./post-run-checks.js";
+import type {
+  SessionVariableType,
+  SessionVariableValue,
+  TestStage,
+} from "./test-stages.js";
 
 export const RUNNER_STATES = [
   "idle",
   "preparing",
   "browser_starting",
+  "resolving_stage_entry",
+  "capturing_stage_baseline",
   "waiting_for_basic_auth",
   "waiting_for_start",
   "running",
@@ -23,6 +34,8 @@ export const RUNNER_STATES = [
   "waiting_for_mysql_check",
   "waiting_for_imap_check",
   "waiting_for_ai_analysis",
+  "waiting_for_variable",
+  "transitioning_stage",
   "paused_on_error",
   "completed",
   "failed",
@@ -43,11 +56,28 @@ export type RunnerErrorCode =
   | "locator_not_found"
   | "locator_ambiguous"
   | "missing_data"
+  | "missing_variable"
   | "mysql_failed"
   | "imap_failed"
   | "wipe_failed"
   | "step_failed"
   | "unsupported_step";
+
+export interface VisualCheckDebug {
+  [key: string]: JsonValue;
+  dataUrls: string[];
+  mimeType: "image/jpeg" | "image/png";
+  byteLength: number;
+  prompt: string;
+}
+
+export interface VisualStepContextCapture {
+  imageBase64: string;
+  mimeType: "image/jpeg";
+  viewportWidth: number;
+  viewportHeight: number;
+  capturedAt: string;
+}
 
 export interface RunnerErrorDetails {
   code: RunnerErrorCode;
@@ -59,6 +89,8 @@ export interface RunnerErrorDetails {
   causeMessage?: string;
   occurredAt?: string;
   retryable?: boolean;
+  severity?: "error" | "warning";
+  visualCheckDebug?: VisualCheckDebug;
 }
 
 export class RunnerError extends Error {
@@ -81,7 +113,7 @@ export interface FallbackDecision {
 }
 
 export interface RunnerPauseDetails {
-  kind: "before_start" | "breakpoint" | "after_step";
+  kind: "before_start" | "breakpoint" | "manual_intervention" | "after_step";
   title: string;
   instructions?: string;
   previousStepId?: string;
@@ -89,13 +121,14 @@ export interface RunnerPauseDetails {
 }
 
 export type MissingDataInputKind =
-  "text" | "password" | "checkbox" | "select" | "radio";
+  "text" | "password" | "checkbox" | "select" | "radio" | "file";
 
 export interface MissingDataDetails {
   fieldId: string;
   valueKey: string;
   inputKind: MissingDataInputKind;
   locator: LocatorDefinition;
+  frame?: TargetFrameContext;
 }
 
 export type WipeResource =
@@ -142,6 +175,34 @@ export interface ImapRunDetails {
   accountId?: string;
   accountName?: string;
   matchedMessages?: ImapMatchedMessage[];
+  allEvidence?: unknown;
+}
+
+export interface AiRunRequestDetail {
+  id: string;
+  reason: string;
+  provider: Exclude<AiProviderId, "none">;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimatedUsd?: number;
+  local: boolean;
+  payload: JsonValue;
+  response: JsonValue;
+  createdAt: string;
+}
+
+export interface AiRunCost {
+  requestCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimatedUsd: number;
+  unpricedRequests: number;
+  localOnly: boolean;
+  /** Lipsește numai pentru rulările salvate înainte de introducerea detaliilor. */
+  requests?: AiRunRequestDetail[];
 }
 
 export interface RunnerSnapshot {
@@ -150,6 +211,7 @@ export interface RunnerSnapshot {
   currentStepIndex: number;
   totalSteps: number;
   flowItems?: TestFlowItem[];
+  checkItems?: Extract<TestFlowItem, { type: "check" }>[];
   currentStepId?: string;
   message?: string;
   error?: RunnerErrorDetails;
@@ -161,6 +223,42 @@ export interface RunnerSnapshot {
   mysql?: MySqlRunDetails;
   imap?: ImapRunDetails;
   postRunAi?: PostRunAiEvaluation;
+  aiCost?: AiRunCost;
+  stages?: TestStage[];
+  stage?: {
+    stageId: string;
+    stageIndex: number;
+    totalStages: number;
+    phase:
+      | "resolving_entry"
+      | "capturing_baseline"
+      | "running_flow"
+      | "running_checks"
+      | "completed";
+    currentCheckIndex: number;
+    totalChecks: number;
+  };
+  variables?: SessionVariableValue[];
+  missingVariable?: {
+    variableName: string;
+    expectedType: SessionVariableType;
+    stageId: string;
+    consumerId: string;
+    producerId?: string;
+    reason:
+      | "not_produced"
+      | "empty_value"
+      | "type_mismatch"
+      | "no_rows"
+      | "ambiguous_rows"
+      | "missing_column"
+      | "invalid_url"
+      | "collision";
+    message: string;
+    candidateCount?: number;
+    canRetryProducer: boolean;
+    canProvideManualValue: boolean;
+  };
   canStop: boolean;
   canRetry: boolean;
 }
@@ -171,12 +269,20 @@ export interface StartRunInput {
   datasetId?: string;
   mode?: RunMode;
   waitBeforeStart?: boolean;
+  clearSessionBeforeRun?: boolean;
   aiPlan?: {
     baseVersion: number;
     instruction: string;
     proposal: AiRunPlanProposal;
   };
   postRun?: RunPostRunSelection;
+  aiProvider?: Exclude<AiProviderId, "none">;
+  aiModel?: string;
+  missingVariablePolicy?: "pause" | "fail";
+  /** Rulează numai pașii flow-ului, fără checks și post-run. */
+  flowOnly?: boolean;
+  /** Limitează rularea la etapa selectată. */
+  stageId?: string;
 }
 
 export interface RunDetails {

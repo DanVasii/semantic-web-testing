@@ -62,6 +62,16 @@ describe("TestChecksPanel", () => {
           mailbox: "INBOX",
           passwordConfigured: true,
         },
+        {
+          id: "imap-2",
+          name: "Facturi",
+          host: "imap.example.test",
+          port: 993,
+          secure: true,
+          username: "billing@example.test",
+          mailbox: "Billing",
+          passwordConfigured: true,
+        },
       ]),
       saveTestPostRunChecks,
     } as unknown as SemanticAppApi;
@@ -92,34 +102,125 @@ describe("TestChecksPanel", () => {
       screen.getByRole("checkbox", { name: /Ascultare e-mail/i }),
     );
     await user.click(
-      screen.getByRole("checkbox", { name: /Confirmări.*qa@example.test/i }),
+      screen.getByRole("button", { name: /Adaugă check e-mail/i }),
+    );
+    expect(screen.queryByLabelText(/Destinatar exact/i)).toBeNull();
+    await user.type(
+      screen.getByLabelText(/Expeditor exact/i),
+      "confirm@example.test",
+    );
+    await user.click(
+      screen.getByRole("button", { name: /Adaugă check e-mail/i }),
+    );
+    await user.selectOptions(
+      screen.getByLabelText(/Inbox \/ cont IMAP/i),
+      "imap-2",
+    );
+    await user.type(
+      screen.getByLabelText(/Expeditor exact/i),
+      "invoice@example.test",
     );
     await user.click(screen.getByRole("button", { name: /Salvează checks/i }));
 
     await waitFor(() => {
-      expect(saveTestPostRunChecks).toHaveBeenCalledWith(
-        test.projectId,
-        test.id,
-        {
-          aiPrompt: "Corelează statusul din DB cu e-mailul de confirmare.",
-          mysql: {
-            enabled: true,
-            tableNames: ["appointments"],
-            identities: [{ tableName: "appointments", columns: ["id"] }],
-          },
-          imap: {
-            enabled: true,
-            accountIds: ["imap-1"],
-            mailbox: "INBOX",
-            sender: "",
-            recipient: "",
-            subjectEquals: "",
-            subjectContains: "",
-            bodyContains: "",
-          },
+      expect(saveTestPostRunChecks).toHaveBeenCalled();
+      const saved: unknown = saveTestPostRunChecks.mock.calls[0]?.[2];
+      expect(saved).toMatchObject({
+        aiPrompt: "Corelează statusul din DB cu e-mailul de confirmare.",
+        mysql: {
+          enabled: true,
+          tableNames: ["appointments"],
+          identities: [{ tableName: "appointments", columns: ["id"] }],
         },
-      );
+        imap: {
+          enabled: true,
+          accountIds: ["imap-1", "imap-2"],
+          inboxes: [
+            {
+              accountId: "imap-1",
+              mailbox: "INBOX",
+              sender: "confirm@example.test",
+            },
+            {
+              accountId: "imap-2",
+              mailbox: "Billing",
+              sender: "invoice@example.test",
+            },
+          ],
+        },
+      });
     });
     expect(onTestUpdated).toHaveBeenCalledWith(updated);
+  });
+
+  it("filters MySQL tables and preserves selections outside the active search", async () => {
+    const user = userEvent.setup();
+    const api = {
+      loadMySqlSchema: vi.fn().mockResolvedValue({
+        database: "shop",
+        loadedAt: test.createdAt,
+        tables: [
+          {
+            name: "appointments",
+            columns: [],
+            primaryKey: ["id"],
+            identityColumns: ["id"],
+            identitySource: "primary_key",
+          },
+          {
+            name: "wp_wc_orders",
+            columns: [],
+            primaryKey: ["id"],
+            identityColumns: ["id"],
+            identitySource: "primary_key",
+          },
+          {
+            name: "wp_wc_orders_meta",
+            columns: [],
+            primaryKey: ["id"],
+            identityColumns: ["id"],
+            identitySource: "primary_key",
+          },
+        ],
+      }),
+      listImapAccounts: vi.fn().mockResolvedValue([]),
+    } as unknown as SemanticAppApi;
+
+    render(
+      <TestChecksPanel
+        api={api}
+        projectId={test.projectId}
+        test={test}
+        onTestUpdated={vi.fn()}
+      />,
+    );
+
+    await user.click(
+      await screen.findByRole("checkbox", { name: /appointments/i }),
+    );
+    await user.type(screen.getByLabelText(/Caută tabel MySQL/i), "WC_ORDERS");
+
+    expect(
+      screen.queryByRole("checkbox", { name: /appointments/i }),
+    ).toBeNull();
+    expect(screen.getByText("2 din 3 tabele")).not.toBeNull();
+    await user.click(
+      screen.getByRole("button", { name: "Selectează rezultatele" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: /Șterge căutarea tabelelor/i }),
+    );
+
+    expect(
+      screen.getByRole("checkbox", { name: /appointments/i }),
+    ).toHaveProperty("checked", true);
+    expect(
+      screen.getByRole("checkbox", {
+        name: /^wp_wc_ordersIdentitate/i,
+      }),
+    ).toHaveProperty("checked", true);
+    expect(
+      screen.getByRole("checkbox", { name: /wp_wc_orders_meta/i }),
+    ).toHaveProperty("checked", true);
   });
 });

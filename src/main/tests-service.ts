@@ -8,7 +8,18 @@ import {
   type TestPostRunChecks,
 } from "../shared/post-run-checks.js";
 import { toDeclarativeTestDefinition } from "../shared/test-editor.js";
-import type { TestFlowItem } from "../shared/test-model.js";
+import type {
+  DatasetPrimitive,
+  DatasetValue,
+  TestDataset,
+  TestFlowItem,
+} from "../shared/test-model.js";
+import {
+  flattenStageFlowItems,
+  stagesForTest,
+  validateTestStageDependencies,
+  type TestStage,
+} from "../shared/test-stages.js";
 import { validateDeclarativeTest } from "../shared/test-validation.js";
 import {
   hasTestInputErrors,
@@ -26,6 +37,35 @@ export interface TestsServiceOptions {
   createId: () => string;
   now: () => Date;
   snapshotRoot: string;
+}
+
+export interface CreateAiGeneratedVariantInput {
+  name: string;
+  description: string;
+  flowItems: TestFlowItem[];
+  datasets: Array<{
+    name: string;
+    values: Record<string, DatasetPrimitive>;
+  }>;
+  instruction: string;
+  provider: string;
+  model: string;
+}
+
+export interface CreateAiGeneratedFormTestInput {
+  name: string;
+  description: string;
+  startUrl: string;
+  flowItems: TestFlowItem[];
+  dataset: {
+    name: string;
+    values: Record<string, DatasetValue>;
+  };
+  postRunChecks: TestPostRunChecks;
+  sourceFormId: string;
+  instruction: string;
+  provider: string;
+  model: string;
 }
 
 export class TestsService {
@@ -63,8 +103,9 @@ export class TestsService {
     const now = this.options.now().toISOString();
     const description = input.description?.trim();
     const startUrl = input.startUrl.trim();
+    const testId = this.options.createId();
     const test: TestDefinition = {
-      id: this.options.createId(),
+      id: testId,
       projectId,
       name: input.name.trim(),
       ...(description === undefined || description.length === 0
@@ -81,9 +122,165 @@ export class TestsService {
       createdAt: now,
       updatedAt: now,
       flowItems: [],
+      stages: [
+        {
+          id: `stage-${testId}-1`,
+          name: "Flow principal",
+          enabled: true,
+          entry: { type: "test_start" },
+          flowItems: [],
+          postChecks: [],
+        },
+      ],
       postRunChecks: defaultTestPostRunChecks(),
     };
     return this.testRepository.create(test);
+  }
+
+  public createAiGeneratedVariant(
+    projectId: string,
+    sourceTestId: string,
+    input: CreateAiGeneratedVariantInput,
+  ): { test: TestDefinition; datasets: TestDataset[] } {
+    this.requireProject(projectId);
+    const source = this.get(projectId, sourceTestId);
+    const timestamp = this.options.now().toISOString();
+    const testId = this.options.createId();
+    const description = input.description.trim();
+    const test: TestDefinition = {
+      ...structuredClone(source),
+      id: testId,
+      name: input.name.trim(),
+      ...(description.length === 0 ? {} : { description }),
+      status: input.flowItems.length === 0 ? "draft" : "valid",
+      version: 1,
+      workflowState: input.flowItems.length === 0 ? "not_recorded" : "ready",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      flowItems: structuredClone(input.flowItems),
+      stages: [
+        {
+          id: `stage-${testId}-1`,
+          name: "Flow generat AI",
+          enabled: true,
+          entry: { type: "test_start" },
+          flowItems: structuredClone(input.flowItems),
+          postChecks: [],
+        },
+      ],
+      aiGeneration: {
+        sourceType: "test",
+        sourceTestId,
+        instruction: input.instruction.trim(),
+        provider: input.provider,
+        model: input.model,
+        generatedAt: timestamp,
+      },
+    };
+    if (description.length === 0) delete test.description;
+    delete test.invalidation;
+    const datasets = input.datasets.map<TestDataset>((dataset) => ({
+      id: this.options.createId(),
+      testId,
+      name: dataset.name.trim(),
+      values: structuredClone(dataset.values),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }));
+    const validation = validateDeclarativeTest(
+      toDeclarativeTestDefinition(test, test.flowItems, datasets),
+    );
+    if (!validation.valid) {
+      throw new Error(
+        `Varianta AI nu este validă: ${validation.issues[0]?.message ?? "eroare necunoscută"}`,
+      );
+    }
+    const created = this.testRepository.create(test);
+    const createdDatasets = datasets.map((dataset) =>
+      this.datasetRepository.create(dataset),
+    );
+    return { test: created, datasets: createdDatasets };
+  }
+
+  public createAiGeneratedFormTest(
+    projectId: string,
+    input: CreateAiGeneratedFormTestInput,
+  ): { test: TestDefinition; dataset: TestDataset } {
+    const project = this.requireProject(projectId);
+    const name = input.name.trim();
+    const startUrl = input.startUrl.trim();
+    const errors = validateTestInput(
+      {
+        name,
+        description: input.description,
+        startUrl,
+        testMode: "recorded",
+        wipeBeforeRun: false,
+      },
+      project,
+    );
+    if (hasTestInputErrors(errors)) {
+      throw new Error("Testul generat din formular nu are metadate valide.");
+    }
+    const timestamp = this.options.now().toISOString();
+    const testId = this.options.createId();
+    const dataset: TestDataset = {
+      id: this.options.createId(),
+      testId,
+      name: input.dataset.name.trim(),
+      values: structuredClone(input.dataset.values),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    const test: TestDefinition = {
+      id: testId,
+      projectId,
+      name,
+      ...(input.description.trim().length === 0
+        ? {}
+        : { description: input.description.trim() }),
+      status: "valid",
+      version: 1,
+      testMode: "recorded",
+      wipeBeforeRun: false,
+      startMode: "base_url",
+      startUrl,
+      normalizedStartUrl: normalizeTestStartUrl(startUrl),
+      workflowState: "ready",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      flowItems: structuredClone(input.flowItems),
+      stages: [
+        {
+          id: `stage-${testId}-1`,
+          name: "Flow generat AI",
+          enabled: true,
+          entry: { type: "test_start" },
+          flowItems: structuredClone(input.flowItems),
+          postChecks: [],
+        },
+      ],
+      postRunChecks: validateTestPostRunChecks(input.postRunChecks),
+      aiGeneration: {
+        sourceType: "form",
+        sourceFormId: input.sourceFormId,
+        instruction: input.instruction.trim(),
+        provider: input.provider,
+        model: input.model,
+        generatedAt: timestamp,
+      },
+    };
+    const validation = validateDeclarativeTest(
+      toDeclarativeTestDefinition(test, test.flowItems, [dataset]),
+    );
+    if (!validation.valid) {
+      throw new Error(
+        `Testul generat din formular nu este valid: ${validation.issues[0]?.message ?? "eroare necunoscută"}`,
+      );
+    }
+    const created = this.testRepository.create(test);
+    this.datasetRepository.create(dataset);
+    return { test: created, dataset };
   }
 
   public update(
@@ -117,6 +314,20 @@ export class TestsService {
       workflowState: startUrlChanged ? "not_recorded" : existing.workflowState,
       updatedAt: this.options.now().toISOString(),
       flowItems: startUrlChanged ? [] : existing.flowItems,
+      ...(startUrlChanged
+        ? {
+            stages: [
+              {
+                id: `stage-${existing.id}-1`,
+                name: "Flow principal",
+                enabled: true,
+                entry: { type: "test_start" } as const,
+                flowItems: [],
+                postChecks: [],
+              },
+            ],
+          }
+        : {}),
     };
     if (description === undefined || description.length === 0) {
       delete updated.description;
@@ -166,6 +377,41 @@ export class TestsService {
     flowItems: TestFlowItem[],
   ): Promise<TestDefinition> {
     return this.saveVersionedFlow(projectId, testId, flowItems, "manual");
+  }
+
+  public async saveStages(
+    projectId: string,
+    testId: string,
+    stages: TestStage[],
+  ): Promise<TestDefinition> {
+    const existing = this.get(projectId, testId);
+    if (stages.length === 0) {
+      throw new Error("Testul trebuie să conțină cel puțin o etapă.");
+    }
+    const datasets = this.datasetRepository.listByTest(testId);
+    const datasetKeys = new Set(
+      datasets.flatMap((dataset) => Object.keys(dataset.values)),
+    );
+    const issues = validateTestStageDependencies(stages, datasetKeys);
+    if (issues.length > 0) {
+      throw new Error(
+        `Etapele testului nu sunt valide: ${issues[0]?.message ?? "eroare necunoscută"}`,
+      );
+    }
+    const now = this.options.now().toISOString();
+    const enabledItems = stages
+      .filter((stage) => stage.enabled)
+      .flatMap((stage) => [...stage.flowItems, ...stage.postChecks]);
+    const updated: TestDefinition = {
+      ...existing,
+      version: existing.version + 1,
+      status: enabledItems.length === 0 ? "draft" : "valid",
+      workflowState: enabledItems.length === 0 ? "not_recorded" : "ready",
+      updatedAt: now,
+      stages: structuredClone(stages),
+      flowItems: flattenStageFlowItems(stages),
+    };
+    return this.persistFlowVersion(existing, updated, "manual");
   }
 
   public async saveAiFlow(
@@ -243,6 +489,10 @@ export class TestsService {
   ): Promise<TestDefinition> {
     const existing = this.get(projectId, testId);
     const now = this.options.now().toISOString();
+    const currentStages = stagesForTest(existing);
+    const updatedStages = currentStages.map((stage, index) =>
+      index === 0 ? { ...stage, flowItems: structuredClone(flowItems) } : stage,
+    );
     const updated: TestDefinition = {
       ...existing,
       version: existing.version + 1,
@@ -250,11 +500,51 @@ export class TestsService {
       workflowState: flowItems.length === 0 ? "not_recorded" : "ready",
       updatedAt: now,
       flowItems,
+      ...(existing.stages === undefined ? {} : { stages: updatedStages }),
     };
     return this.persistFlowVersion(existing, updated, source);
   }
 
-  public beginRecording(projectId: string, testId: string): TestDefinition {
+  private stagesWithRecordingFlow(
+    test: TestDefinition,
+    flowItems: TestFlowItem[],
+    stageId?: string,
+  ): TestStage[] | undefined {
+    if (test.stages === undefined) return undefined;
+    const targetIndex =
+      stageId === undefined
+        ? 0
+        : test.stages.findIndex((stage) => stage.id === stageId);
+    if (targetIndex < 0) {
+      throw new Error("Etapa selectată pentru recorder nu există.");
+    }
+    return stagesForTest(test).map((stage, index) =>
+      index === targetIndex
+        ? { ...stage, flowItems: structuredClone(flowItems) }
+        : structuredClone(stage),
+    );
+  }
+
+  private recordingFlow(
+    test: TestDefinition,
+    stageId?: string,
+  ): TestFlowItem[] {
+    if (test.stages === undefined) return test.flowItems;
+    const stage =
+      stageId === undefined
+        ? test.stages[0]
+        : test.stages.find((candidate) => candidate.id === stageId);
+    if (stage === undefined) {
+      throw new Error("Etapa selectată pentru recorder nu există.");
+    }
+    return stage.flowItems;
+  }
+
+  public beginRecording(
+    projectId: string,
+    testId: string,
+    stageId?: string,
+  ): TestDefinition {
     const existing = this.get(projectId, testId);
     if (
       ![
@@ -267,12 +557,39 @@ export class TestsService {
     ) {
       throw new Error("Testul nu poate porni recorderul în starea curentă.");
     }
+    const stages = this.stagesWithRecordingFlow(existing, [], stageId);
+    const flowItems = stages === undefined ? [] : flattenStageFlowItems(stages);
     return this.testRepository.update({
       ...existing,
       status: "draft",
       workflowState: "recording",
       updatedAt: this.options.now().toISOString(),
-      flowItems: [],
+      flowItems,
+      ...(stages === undefined ? {} : { stages }),
+    });
+  }
+
+  public continueRecording(
+    projectId: string,
+    testId: string,
+    stageId?: string,
+  ): TestDefinition {
+    const existing = this.get(projectId, testId);
+    if (
+      !["recorded", "flow_analyzed", "ready"].includes(
+        existing.workflowState,
+      ) ||
+      this.recordingFlow(existing, stageId).length === 0
+    ) {
+      throw new Error(
+        "Înregistrarea poate continua numai pentru un flow existent.",
+      );
+    }
+    return this.testRepository.update({
+      ...existing,
+      status: "draft",
+      workflowState: "recording",
+      updatedAt: this.options.now().toISOString(),
     });
   }
 
@@ -280,15 +597,27 @@ export class TestsService {
     projectId: string,
     testId: string,
     step: TestFlowItem,
+    stageId?: string,
   ): TestDefinition {
     const existing = this.get(projectId, testId);
     if (existing.workflowState !== "recording") {
       throw new Error("Recorderul testului nu este activ.");
     }
-    const flowItems = [...existing.flowItems, step];
+    const firstStageFlow = [...this.recordingFlow(existing, stageId), step];
+    const stages = this.stagesWithRecordingFlow(
+      existing,
+      firstStageFlow,
+      stageId,
+    );
+    const flowItems =
+      stages === undefined ? firstStageFlow : flattenStageFlowItems(stages);
     const validation = validateDeclarativeTest(
       toDeclarativeTestDefinition(
-        { ...existing, flowItems },
+        {
+          ...existing,
+          flowItems,
+          ...(stages === undefined ? {} : { stages }),
+        },
         flowItems,
         this.datasetRepository.listByTest(testId),
       ),
@@ -301,6 +630,53 @@ export class TestsService {
     return this.testRepository.update({
       ...existing,
       flowItems,
+      ...(stages === undefined ? {} : { stages }),
+      updatedAt: this.options.now().toISOString(),
+    });
+  }
+
+  public replaceLastRecordedStep(
+    projectId: string,
+    testId: string,
+    step: TestFlowItem,
+    stageId?: string,
+  ): TestDefinition {
+    const existing = this.get(projectId, testId);
+    const currentFirstStageFlow = this.recordingFlow(existing, stageId);
+    if (
+      existing.workflowState !== "recording" ||
+      currentFirstStageFlow.length === 0
+    ) {
+      throw new Error("Recorderul nu are un pas care poate fi actualizat.");
+    }
+    const firstStageFlow = [...currentFirstStageFlow.slice(0, -1), step];
+    const stages = this.stagesWithRecordingFlow(
+      existing,
+      firstStageFlow,
+      stageId,
+    );
+    const flowItems =
+      stages === undefined ? firstStageFlow : flattenStageFlowItems(stages);
+    const validation = validateDeclarativeTest(
+      toDeclarativeTestDefinition(
+        {
+          ...existing,
+          flowItems,
+          ...(stages === undefined ? {} : { stages }),
+        },
+        flowItems,
+        this.datasetRepository.listByTest(testId),
+      ),
+    );
+    if (!validation.valid) {
+      throw new Error(
+        `Pasul recorder comasat nu este valid: ${validation.issues[0]?.message ?? "eroare necunoscută"}`,
+      );
+    }
+    return this.testRepository.update({
+      ...existing,
+      flowItems,
+      ...(stages === undefined ? {} : { stages }),
       updatedAt: this.options.now().toISOString(),
     });
   }
@@ -308,12 +684,13 @@ export class TestsService {
   public async completeRecording(
     projectId: string,
     testId: string,
+    stageId?: string,
   ): Promise<TestDefinition> {
     const existing = this.get(projectId, testId);
     if (existing.workflowState !== "recording") {
       throw new Error("Recorderul testului nu este activ.");
     }
-    if (existing.flowItems.length === 0) {
+    if (this.recordingFlow(existing, stageId).length === 0) {
       throw new Error("Înregistrarea nu conține niciun pas.");
     }
     const updated: TestDefinition = {
@@ -353,6 +730,9 @@ export class TestsService {
     return this.testRepository.update({
       ...originalTest,
       flowItems: structuredClone(originalTest.flowItems),
+      ...(originalTest.stages === undefined
+        ? {}
+        : { stages: structuredClone(originalTest.stages) }),
       updatedAt: this.options.now().toISOString(),
     });
   }

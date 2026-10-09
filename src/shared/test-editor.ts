@@ -39,6 +39,7 @@ export const createFlowItem = (
           target: createSimpleLocator(),
           state: "visible",
         },
+        timeoutMs: 5_000,
         enabled: true,
       };
     case "breakpoint":
@@ -67,7 +68,7 @@ export const toDeclarativeTestDefinition = (
   flowItems: TestFlowItem[] = test.flowItems,
   datasets: TestDataset[] = [],
 ): DeclarativeTestDefinition => ({
-  schemaVersion: 1,
+  schemaVersion: test.stages === undefined ? 1 : 2,
   id: test.id,
   projectId: test.projectId,
   name: test.name,
@@ -80,6 +81,9 @@ export const toDeclarativeTestDefinition = (
   createdAt: test.createdAt,
   updatedAt: test.updatedAt,
   flowItems,
+  ...(test.stages === undefined
+    ? {}
+    : { stages: structuredClone(test.stages) }),
   datasets,
 });
 
@@ -98,14 +102,18 @@ const locatorText = (locator: LocatorDefinition): string => {
 
 export const createProceduralDescription = (item: TestFlowItem): string => {
   if (item.type === "action") {
+    const revealDescription =
+      item.revealBefore === undefined || item.revealBefore.length === 0
+        ? ""
+        : `Dacă ținta este ascunsă, încearcă ${item.revealBefore.length} pregătiri hover înregistrate.`;
     return `${item.humanDescription} ${
       item.target === undefined
         ? ""
         : `Țintă: ${locatorText(item.target.primary)}.`
-    }`.trim();
+    } ${revealDescription}`.trim();
   }
   if (item.type === "check") {
-    return `${item.humanDescription} Tip verificare: ${item.checkType}.`;
+    return `${item.humanDescription} Tip verificare: ${item.checkType}. Timeout: ${item.timeoutMs ?? 5_000} ms. Condiție: ${JSON.stringify(item.config)}.`;
   }
   if (item.type === "manual_intervention") {
     return `${item.humanDescription} ${item.instructions}`;

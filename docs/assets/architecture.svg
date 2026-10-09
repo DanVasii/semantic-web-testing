@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1040" viewBox="0 0 1500 1040" role="img" aria-labelledby="title desc">
+  <title id="title">Semantic Web Testing — component architecture</title>
+  <desc id="desc">React communicates through preload and IPC with Electron main. Main hosts recording, execution, analysis, and integration services. It uses local SQLite and files and connects to the tested browser, MySQL, IMAP, and an optional AI provider. Links show interfaces and data, not execution order.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#526680"/></marker>
+    <style>
+      text { font-family: "Segoe UI", Arial, sans-serif; fill: #172b4d; }
+      .title { font-size: 30px; font-weight: 700; }
+      .subtitle { font-size: 17px; fill: #526680; }
+      .heading { font-size: 19px; font-weight: 700; }
+      .body { font-size: 17px; }
+      .small { font-size: 15px; fill: #526680; }
+      .edge { fill: none; stroke: #526680; stroke-width: 2; marker-end: url(#arrow); }
+      .both { marker-start: url(#arrow); }
+      .internal { fill: #fff; stroke: #8dabc9; stroke-width: 1.5; }
+      .external { fill: #f3f5f8; stroke: #acb6c5; stroke-width: 1.5; }
+      .label { font-size: 15px; fill: #344a65; paint-order: stroke; stroke: #fff; stroke-width: 6px; stroke-linejoin: round; }
+    </style>
+  </defs>
+  <rect width="1500" height="1040" fill="#fff"/>
+  <text x="40" y="55" class="title">Semantic Web Testing</text>
+  <text x="40" y="87" class="subtitle">Component architecture · interfaces, responsibilities, and boundaries</text>
+
+  <!-- Application boundary. Internal boxes are responsibility groups, not execution steps. -->
+  <rect x="40" y="130" width="880" height="810" rx="16" fill="#f5f9ff" stroke="#6b8aaa" stroke-width="2" stroke-dasharray="9 6"/>
+  <text x="65" y="166" class="heading">DESKTOP APPLICATION · Electron</text>
+
+  <rect x="80" y="205" width="290" height="100" rx="10" class="internal"/>
+  <text x="100" y="239" class="heading">Renderer · React / Tailwind</text>
+  <text x="100" y="270" class="body">Editor, runs, results, evidence</text>
+  <rect x="490" y="205" width="340" height="100" rx="10" class="internal"/>
+  <text x="510" y="239" class="heading">Preload · contextBridge</text>
+  <text x="510" y="268" class="body">Typed API exposed to the UI</text>
+  <text x="510" y="290" class="small">API boundary; not a separate process</text>
+  <path d="M370 253 H490" class="edge both"/>
+  <text x="430" y="238" text-anchor="middle" class="label">API</text>
+
+  <!-- Main process boundary and internal capabilities. -->
+  <rect x="80" y="375" width="750" height="400" rx="12" fill="#e8f1fc" stroke="#4b78a6" stroke-width="2"/>
+  <text x="103" y="407" class="heading">MAIN PROCESS · TypeScript / Node.js</text>
+  <path d="M660 305 V375" class="edge both"/>
+  <text x="679" y="334" class="label">IPC</text>
+  <text x="679" y="355" class="label">commands and events</text>
+
+  <rect x="110" y="430" width="265" height="302" rx="9" class="internal"/>
+  <text x="131" y="462" class="heading">Services and orchestration</text>
+  <text x="131" y="504" class="body">Recorder and capture queue</text>
+  <text x="131" y="539" class="body">Runner, stages, and variables</text>
+  <text x="131" y="574" class="body">Local semantic analysis</text>
+  <text x="131" y="609" class="body">Tests, datasets, and suites</text>
+  <text x="131" y="644" class="body">History and import / export</text>
+  <text x="131" y="696" class="small">Components use adapters</text>
+  <text x="131" y="717" class="small">and persistence services.</text>
+
+  <rect x="465" y="430" width="330" height="60" rx="8" class="internal"/>
+  <text x="486" y="466" class="heading">Browser manager / Playwright</text>
+  <rect x="465" y="510" width="330" height="60" rx="8" class="internal"/>
+  <text x="486" y="547" class="heading">MySQL · snapshots and diffs</text>
+  <rect x="465" y="590" width="330" height="60" rx="8" class="internal"/>
+  <text x="486" y="627" class="heading">IMAP · filters and extraction</text>
+  <rect x="465" y="670" width="330" height="60" rx="8" class="internal"/>
+  <text x="486" y="707" class="heading">AI services / provider adapter</text>
+  <path d="M375 460 H465" class="edge"/>
+  <path d="M375 540 H465" class="edge"/>
+  <path d="M375 620 H465" class="edge"/>
+  <path d="M375 700 H465" class="edge"/>
+
+  <!-- Local persistence belongs to the application, separate from the tested MySQL. -->
+  <rect x="110" y="833" width="290" height="79" rx="9" fill="#e1f2ec" stroke="#639983" stroke-width="1.5"/>
+  <text x="130" y="861" class="heading">SQLite · local app data</text>
+  <text x="130" y="888" class="body">Projects, tests, versions, runs</text>
+  <rect x="505" y="833" width="290" height="79" rx="9" fill="#e1f2ec" stroke="#639983" stroke-width="1.5"/>
+  <text x="525" y="861" class="heading">Local files · artifacts</text>
+  <text x="525" y="888" class="body">Images, analysis, traces, exports</text>
+  <path d="M190 732 V833" class="edge both"/>
+  <text x="206" y="807" class="label">node:sqlite</text>
+  <path d="M325 732 V793 H650 V833" class="edge both"/>
+  <text x="544" y="783" class="label">Node fs</text>
+
+  <!-- Systems outside the Electron application, aligned with their adapters. -->
+  <text x="1045" y="377" class="heading">CONNECTED SYSTEMS</text>
+  <text x="1045" y="403" class="small">Outside the Electron application</text>
+  <rect x="1045" y="430" width="405" height="60" rx="8" class="external"/>
+  <text x="1065" y="457" class="heading">Browser of the tested application</text>
+  <text x="1065" y="478" class="small">Interactions, DOM, and screenshots</text>
+  <rect x="1045" y="510" width="405" height="60" rx="8" class="external"/>
+  <text x="1065" y="538" class="heading">MySQL of the tested application</text>
+  <text x="1065" y="559" class="small">Baseline, differences, and extracted values</text>
+  <rect x="1045" y="590" width="405" height="60" rx="8" class="external"/>
+  <text x="1065" y="618" class="heading">Email server</text>
+  <text x="1065" y="639" class="small">Mailbox and scenario messages</text>
+  <rect x="1045" y="670" width="405" height="147" rx="8" class="external"/>
+  <text x="1065" y="703" class="heading">Selected AI provider</text>
+  <text x="1065" y="741" class="body">Local: Ollama / LM Studio</text>
+  <text x="1065" y="775" class="body">Cloud: Gemini / OpenAI</text>
+  <text x="1065" y="801" class="small">Configurable alternatives</text>
+  <path d="M795 460 H1045" class="edge"/>
+  <path d="M795 540 H1045" class="edge"/>
+  <path d="M795 620 H1045" class="edge"/>
+  <path d="M795 700 H1045" class="edge"/>
+  <text x="940" y="448" text-anchor="middle" class="label">control / observe</text>
+  <text x="940" y="528" text-anchor="middle" class="label">mysql2</text>
+  <text x="940" y="608" text-anchor="middle" class="label">IMAP</text>
+  <text x="940" y="688" text-anchor="middle" class="label">provider API</text>
+
+  <path d="M40 974 H1450" stroke="#d7e0eb"/>
+  <text x="40" y="1007" class="body">Boxes = components</text>
+  <text x="345" y="1007" class="body">Outlines = boundaries</text>
+  <text x="640" y="1007" class="body">Links = APIs and data, without execution order</text>
+</svg>

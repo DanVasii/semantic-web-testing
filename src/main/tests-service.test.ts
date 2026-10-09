@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { Project } from "../shared/persistence.js";
 import type { TestFlowItem } from "../shared/test-model.js";
+import { defaultTestPostRunChecks } from "../shared/post-run-checks.js";
 import {
   openApplicationDatabase,
   type ApplicationDatabase,
@@ -116,6 +117,47 @@ describe("TestsService", () => {
     expect(service.get(project.id, created.id).testMode).toBe("dynamic_ai");
   });
 
+  it("marks tests generated from forms with AI generation metadata", () => {
+    const created = service.createAiGeneratedFormTest(project.id, {
+      name: "Formular contact valid",
+      description: "Generat din formularul analizat.",
+      startUrl: "https://example.test/contact",
+      flowItems: [
+        {
+          id: "submit-form",
+          type: "action",
+          actionType: "click",
+          title: "Trimite formularul",
+          humanDescription: "Apasă butonul de trimitere.",
+          whyExplanation: "Finalizează scenariul.",
+          target: {
+            primary: { type: "css", operator: "equals", value: "#submit" },
+          },
+          fallbacks: [],
+          enabled: true,
+        },
+      ],
+      dataset: { name: "Date contact", values: {} },
+      postRunChecks: defaultTestPostRunChecks(),
+      sourceFormId: "form-contact",
+      instruction: "Scenariu valid",
+      provider: "gemini",
+      model: "gemini-test",
+    });
+
+    expect(created.test.aiGeneration).toEqual({
+      sourceType: "form",
+      sourceFormId: "form-contact",
+      instruction: "Scenariu valid",
+      provider: "gemini",
+      model: "gemini-test",
+      generatedAt: "2026-07-24T12:00:00.000Z",
+    });
+    expect(service.get(project.id, created.test.id).aiGeneration).toEqual(
+      created.test.aiGeneration,
+    );
+  });
+
   it("invalidates a recorded flow when the start URL changes", () => {
     const created = service.create(project.id, {
       name: "Checkout",
@@ -220,11 +262,143 @@ describe("TestsService", () => {
     );
     expect(existsSync(snapshotPath)).toBe(true);
     expect(JSON.parse(readFileSync(snapshotPath, "utf8"))).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       version: 2,
       flowItems,
       datasets: [],
     });
+  });
+
+  it("records into a selected stage without replacing the other stages", async () => {
+    const created = service.create(project.id, {
+      name: "Comandă și plată",
+      startUrl: "https://example.test/products",
+    });
+    const firstStep: TestFlowItem = {
+      id: "create-order",
+      type: "action",
+      actionType: "scroll",
+      title: "Creează comanda",
+      humanDescription: "Finalizează primul flow.",
+      whyExplanation: "Produce comanda.",
+      fallbacks: [],
+      enabled: true,
+    };
+    const configured = await service.saveStages(project.id, created.id, [
+      {
+        id: "stage-order",
+        name: "Comandă",
+        enabled: true,
+        entry: { type: "test_start" },
+        flowItems: [firstStep],
+        postChecks: [],
+      },
+      {
+        id: "stage-payment",
+        name: "Plată",
+        enabled: true,
+        entry: { type: "continue_current_page" },
+        flowItems: [],
+        postChecks: [],
+      },
+    ]);
+
+    const recording = service.beginRecording(
+      project.id,
+      configured.id,
+      "stage-payment",
+    );
+    expect(recording.stages?.[0]?.flowItems).toEqual([firstStep]);
+    const paymentStep: TestFlowItem = {
+      ...firstStep,
+      id: "pay-order",
+      title: "Plătește comanda",
+    };
+    service.appendRecordedStep(
+      project.id,
+      configured.id,
+      paymentStep,
+      "stage-payment",
+    );
+    const completed = await service.completeRecording(
+      project.id,
+      configured.id,
+      "stage-payment",
+    );
+
+    expect(completed.stages?.[0]?.flowItems).toEqual([firstStep]);
+    expect(completed.stages?.[1]?.flowItems).toEqual([paymentStep]);
+
+    const continued = service.continueRecording(
+      project.id,
+      configured.id,
+      "stage-payment",
+    );
+    expect(continued.workflowState).toBe("recording");
+    expect(continued.stages?.[0]?.flowItems).toEqual([firstStep]);
+    expect(continued.stages?.[1]?.flowItems).toEqual([paymentStep]);
+  });
+
+  it("saves stage checks with required outputs without leaking stage metadata into the legacy flow", async () => {
+    const created = service.create(project.id, {
+      name: "Comandă cu verificare DB",
+      startUrl: "https://example.test/products",
+    });
+
+    const saved = await service.saveStages(project.id, created.id, [
+      {
+        id: "stage-order",
+        name: "Comandă",
+        enabled: true,
+        entry: { type: "test_start" },
+        flowItems: [],
+        postChecks: [
+          {
+            id: "mysql-order",
+            type: "check",
+            checkType: "mysql",
+            title: "Verifică noua comandă",
+            humanDescription: "Confirmă inserarea comenzii.",
+            enabled: true,
+            required: true,
+            config: {
+              tableNames: ["orders"],
+              identities: [{ tableName: "orders", columns: ["id"] }],
+            },
+            extractors: [
+              {
+                id: "extract-order-id",
+                source: "mysql",
+                tableName: "orders",
+                rowSource: "inserted",
+                filters: [],
+                column: "id",
+                cardinality: "exactly_one",
+                output: {
+                  name: "orderId",
+                  type: "number",
+                  required: true,
+                  overwritePolicy: "deny",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    const savedCheck = saved.stages?.[0]?.postChecks[0];
+    expect(savedCheck?.required).toBe(true);
+    expect(savedCheck?.extractors?.[0]?.output).toMatchObject({
+      name: "orderId",
+      required: true,
+    });
+    expect(saved.flowItems[0]).toMatchObject({
+      id: "mysql-order",
+      checkType: "mysql",
+    });
+    expect(saved.flowItems[0]).not.toHaveProperty("required");
+    expect(saved.flowItems[0]).not.toHaveProperty("extractors");
   });
 
   it("rejects an invalid flow without creating a version", async () => {

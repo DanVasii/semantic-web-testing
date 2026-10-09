@@ -3,16 +3,21 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { AppInfo, AppInfoChannel, SemanticAppApi } from "../shared/ipc.js";
 import type {
   AiConnectionTestResult,
+  AiGenerationResult,
   AiModelInfo,
+  AiModelPricing,
   AiRequestPreview,
   AiRunPlanPreview,
   AiRunPlanProposal,
   AiRunPlanResult,
+  AiSimilarTestRequestPreview,
+  AiSimilarTestResult,
   AiSettingsSummary,
   AiStepEditPreview,
   AiStepEditProposal,
   AiStepEditResult,
   ApplyAiStepChangesResult,
+  CreateAiSimilarTestResult,
 } from "../shared/ai.js";
 import type {
   BasicAuthChallenge,
@@ -38,6 +43,7 @@ import type {
   ManualWipeResource,
   RunnerSnapshot,
   RunnerState,
+  VisualStepContextCapture,
 } from "../shared/runner.js";
 import type { TestPostRunChecks } from "../shared/post-run-checks.js";
 import type {
@@ -78,20 +84,37 @@ import type {
   RunHistoryMutationResult,
   RunStorageUsage,
 } from "../shared/run-history.js";
+import type {
+  BatchRun,
+  FlakyTestStatistic,
+  TestSuite,
+} from "../shared/test-suites.js";
+import type {
+  AnalyzedForm,
+  CreateGeneratedFormTestsResult,
+  FormTestGenerationResult,
+  ProjectFormSettings,
+} from "../shared/form-analysis.js";
 
 const APP_INFO_CHANNEL: AppInfoChannel = "app:get-info";
 const AI_CHANNELS = {
   getSettings: "ai:get-settings",
   saveSettings: "ai:save-settings",
   listModels: "ai:list-models",
+  getModelPricing: "ai:get-model-pricing",
+  saveModelPricing: "ai:save-model-pricing",
   testConnection: "ai:test-connection",
   previewRequest: "ai:preview-request",
+  generateRequest: "ai:generate-request",
   previewStepEdit: "ai:preview-step-edit",
   generateStepEdit: "ai:generate-step-edit",
   previewRunPlan: "ai:preview-run-plan",
   generateRunPlan: "ai:generate-run-plan",
   applyStepChanges: "ai:apply-step-changes",
   undoStepChange: "ai:undo-step-change",
+  previewSimilarTest: "ai:preview-similar-test",
+  generateSimilarTest: "ai:generate-similar-test",
+  createSimilarTest: "ai:create-similar-test",
 } as const;
 const PROJECT_CHANNELS = {
   list: "projects:list",
@@ -120,7 +143,14 @@ const PAGE_ANALYSIS_CHANNELS = {
   getCurrentTarget: "pages:get-current-analysis-target",
   analyzeCurrent: "pages:analyze-current",
   list: "pages:list-analyses",
+  listForms: "pages:list-forms",
   progress: "pages:analysis-progress",
+} as const;
+const FORM_CHANNELS = {
+  getSettings: "forms:get-settings",
+  saveSettings: "forms:save-settings",
+  generateTests: "forms:generate-tests",
+  createTests: "forms:create-tests",
 } as const;
 const TEST_CHANNELS = {
   list: "tests:list",
@@ -128,6 +158,7 @@ const TEST_CHANNELS = {
   create: "tests:create",
   update: "tests:update",
   saveFlow: "tests:save-flow",
+  saveStages: "tests:save-stages",
   savePostRunChecks: "tests:save-post-run-checks",
   listVersions: "tests:list-versions",
   revalidate: "tests:revalidate",
@@ -164,11 +195,15 @@ const DATASET_CHANNELS = {
   save: "datasets:save",
   delete: "datasets:delete",
   previewValue: "datasets:preview-value",
+  selectFile: "datasets:select-file",
 } as const;
 const RUNNER_CHANNELS = {
   start: "runner:start",
+  captureVisualContext: "runner:capture-visual-context",
   stop: "runner:stop",
   retry: "runner:retry",
+  retryVariableProducer: "runner:retry-variable-producer",
+  provideManualVariable: "runner:provide-manual-variable",
   skipStep: "runner:skip-step",
   continue: "runner:continue",
   configureShortcut: "runner:configure-shortcut",
@@ -192,8 +227,22 @@ const RUN_HISTORY_CHANNELS = {
   storage: "run-history:storage",
   purge: "run-history:purge",
 } as const;
+const TEST_SUITE_CHANNELS = {
+  list: "test-suites:list",
+  save: "test-suites:save",
+  delete: "test-suites:delete",
+} as const;
+const BATCH_RUN_CHANNELS = {
+  create: "batch-runs:create",
+  updateItem: "batch-runs:update-item",
+  complete: "batch-runs:complete",
+  list: "batch-runs:list",
+  get: "batch-runs:get",
+  flakyStatistics: "batch-runs:flaky-statistics",
+} as const;
 const RECORDER_CHANNELS = {
   start: "recorder:start",
+  continueRecording: "recorder:continue-recording",
   stop: "recorder:stop",
   addStep: "recorder:add-step",
   discardStep: "recorder:discard-step",
@@ -217,7 +266,14 @@ const isAppInfo = (value: unknown): value is AppInfo => {
 };
 
 const isAiProviderId = (value: unknown): boolean =>
-  value === "none" || value === "ollama" || value === "gemini";
+  value === "none" ||
+  value === "ollama" ||
+  value === "lm_studio" ||
+  value === "gemini" ||
+  value === "openai";
+
+const isEnabledAiProviderId = (value: unknown): boolean =>
+  value !== "none" && isAiProviderId(value);
 
 const isAiModelInfo = (value: unknown): value is AiModelInfo =>
   typeof value === "object" &&
@@ -231,6 +287,26 @@ const isAiModelInfo = (value: unknown): value is AiModelInfo =>
   (!("outputTokenLimit" in value) ||
     typeof value.outputTokenLimit === "number");
 
+const isOptionalPrice = (value: unknown): boolean =>
+  value === undefined ||
+  (typeof value === "number" && Number.isFinite(value) && value >= 0);
+
+const isAiModelPricing = (value: unknown): value is AiModelPricing =>
+  typeof value === "object" &&
+  value !== null &&
+  "provider" in value &&
+  (value.provider === "gemini" || value.provider === "openai") &&
+  "model" in value &&
+  typeof value.model === "string" &&
+  "status" in value &&
+  (value.status === "available" || value.status === "unavailable") &&
+  (!("inputPerMillionUsd" in value) ||
+    isOptionalPrice(value.inputPerMillionUsd)) &&
+  (!("outputPerMillionUsd" in value) ||
+    isOptionalPrice(value.outputPerMillionUsd)) &&
+  (!("cachedInputPerMillionUsd" in value) ||
+    isOptionalPrice(value.cachedInputPerMillionUsd));
+
 const isAiSettingsSummary = (value: unknown): value is AiSettingsSummary =>
   typeof value === "object" &&
   value !== null &&
@@ -243,6 +319,13 @@ const isAiSettingsSummary = (value: unknown): value is AiSettingsSummary =>
   typeof value.ollama.baseUrl === "string" &&
   "model" in value.ollama &&
   typeof value.ollama.model === "string" &&
+  "lmStudio" in value &&
+  typeof value.lmStudio === "object" &&
+  value.lmStudio !== null &&
+  "baseUrl" in value.lmStudio &&
+  typeof value.lmStudio.baseUrl === "string" &&
+  "model" in value.lmStudio &&
+  typeof value.lmStudio.model === "string" &&
   "gemini" in value &&
   typeof value.gemini === "object" &&
   value.gemini !== null &&
@@ -250,6 +333,13 @@ const isAiSettingsSummary = (value: unknown): value is AiSettingsSummary =>
   typeof value.gemini.model === "string" &&
   "apiKeyConfigured" in value.gemini &&
   typeof value.gemini.apiKeyConfigured === "boolean" &&
+  "openai" in value &&
+  typeof value.openai === "object" &&
+  value.openai !== null &&
+  "model" in value.openai &&
+  typeof value.openai.model === "string" &&
+  "apiKeyConfigured" in value.openai &&
+  typeof value.openai.apiKeyConfigured === "boolean" &&
   (!("updatedAt" in value) ||
     value.updatedAt === undefined ||
     typeof value.updatedAt === "string");
@@ -260,7 +350,7 @@ const isAiConnectionTestResult = (
   typeof value === "object" &&
   value !== null &&
   "provider" in value &&
-  (value.provider === "ollama" || value.provider === "gemini") &&
+  isEnabledAiProviderId(value.provider) &&
   "success" in value &&
   typeof value.success === "boolean" &&
   "message" in value &&
@@ -298,9 +388,11 @@ const isAiRequestPreview = (value: unknown): value is AiRequestPreview =>
   [
     "analyze_step",
     "edit_step",
+    "create_step",
     "adapt_run",
     "generate_test",
     "repair_locator",
+    "evaluate_post_run",
   ].includes(String(value.task)) &&
   "provider" in value &&
   isAiProviderId(value.provider) &&
@@ -323,6 +415,25 @@ const isAiRequestPreview = (value: unknown): value is AiRequestPreview =>
   "omittedPaths" in value &&
   Array.isArray(value.omittedPaths) &&
   value.omittedPaths.every((path) => typeof path === "string");
+
+const isAiGenerationResult = (value: unknown): value is AiGenerationResult =>
+  typeof value === "object" &&
+  value !== null &&
+  "provider" in value &&
+  isEnabledAiProviderId(value.provider) &&
+  "model" in value &&
+  typeof value.model === "string" &&
+  "output" in value &&
+  isJsonValue(value.output) &&
+  "usage" in value &&
+  typeof value.usage === "object" &&
+  value.usage !== null &&
+  "inputTokens" in value.usage &&
+  typeof value.usage.inputTokens === "number" &&
+  "outputTokens" in value.usage &&
+  typeof value.usage.outputTokens === "number" &&
+  "totalTokens" in value.usage &&
+  typeof value.usage.totalTokens === "number";
 
 const isAiStepChangeProposal = (value: unknown): boolean =>
   typeof value === "object" &&
@@ -393,7 +504,7 @@ const isAiStepEditResult = (value: unknown): value is AiStepEditResult =>
   typeof value === "object" &&
   value !== null &&
   "provider" in value &&
-  (value.provider === "gemini" || value.provider === "ollama") &&
+  isEnabledAiProviderId(value.provider) &&
   "model" in value &&
   typeof value.model === "string" &&
   "proposal" in value &&
@@ -468,7 +579,7 @@ const isAiRunPlanResult = (value: unknown): value is AiRunPlanResult =>
   typeof value === "object" &&
   value !== null &&
   "provider" in value &&
-  (value.provider === "gemini" || value.provider === "ollama") &&
+  isEnabledAiProviderId(value.provider) &&
   "model" in value &&
   typeof value.model === "string" &&
   "proposal" in value &&
@@ -482,6 +593,59 @@ const isAiRunPlanResult = (value: unknown): value is AiRunPlanResult =>
   typeof value.usage.outputTokens === "number" &&
   "totalTokens" in value.usage &&
   typeof value.usage.totalTokens === "number";
+
+const isAiSimilarTestPreview = (
+  value: unknown,
+): value is AiSimilarTestRequestPreview =>
+  typeof value === "object" &&
+  value !== null &&
+  "request" in value &&
+  isAiRequestPreview(value.request) &&
+  "baseVersion" in value &&
+  typeof value.baseVersion === "number" &&
+  "stepIds" in value &&
+  Array.isArray(value.stepIds) &&
+  value.stepIds.every((id) => typeof id === "string") &&
+  "datasetNames" in value &&
+  Array.isArray(value.datasetNames) &&
+  value.datasetNames.every((name) => typeof name === "string") &&
+  "contextMode" in value &&
+  (value.contextMode === "economic" ||
+    value.contextMode === "balanced" ||
+    value.contextMode === "full") &&
+  "tokenBreakdown" in value &&
+  typeof value.tokenBreakdown === "object" &&
+  value.tokenBreakdown !== null &&
+  "instructions" in value.tokenBreakdown &&
+  typeof value.tokenBreakdown.instructions === "number" &&
+  "sourceTest" in value.tokenBreakdown &&
+  typeof value.tokenBreakdown.sourceTest === "number" &&
+  "datasets" in value.tokenBreakdown &&
+  typeof value.tokenBreakdown.datasets === "number" &&
+  "pageContext" in value.tokenBreakdown &&
+  typeof value.tokenBreakdown.pageContext === "number" &&
+  "outputSchema" in value.tokenBreakdown &&
+  typeof value.tokenBreakdown.outputSchema === "number" &&
+  "estimatedTotal" in value.tokenBreakdown &&
+  typeof value.tokenBreakdown.estimatedTotal === "number";
+
+const isAiSimilarTestResult = (value: unknown): value is AiSimilarTestResult =>
+  typeof value === "object" &&
+  value !== null &&
+  "provider" in value &&
+  isEnabledAiProviderId(value.provider) &&
+  "model" in value &&
+  typeof value.model === "string" &&
+  "baseVersion" in value &&
+  typeof value.baseVersion === "number" &&
+  "proposal" in value &&
+  typeof value.proposal === "object" &&
+  value.proposal !== null &&
+  "diffs" in value &&
+  Array.isArray(value.diffs) &&
+  "usage" in value &&
+  typeof value.usage === "object" &&
+  value.usage !== null;
 
 const isProjectOverview = (value: unknown): value is ProjectOverview => {
   if (typeof value !== "object" || value === null) {
@@ -777,6 +941,61 @@ const isAnalyzedPageSummary = (value: unknown): value is AnalyzedPageSummary =>
   isPageAnalysisCounts(value.counts) &&
   hasStylesheetFailures(value);
 
+const isAnalyzedForm = (value: unknown): value is AnalyzedForm =>
+  typeof value === "object" &&
+  value !== null &&
+  "id" in value &&
+  typeof value.id === "string" &&
+  "pageId" in value &&
+  typeof value.pageId === "string" &&
+  "title" in value &&
+  typeof value.title === "string" &&
+  "fields" in value &&
+  Array.isArray(value.fields) &&
+  value.fields.every(
+    (field: unknown) =>
+      typeof field === "object" &&
+      field !== null &&
+      "id" in field &&
+      typeof field.id === "string" &&
+      "label" in field &&
+      typeof field.label === "string",
+  );
+
+const isProjectFormSettings = (value: unknown): value is ProjectFormSettings =>
+  typeof value === "object" &&
+  value !== null &&
+  "projectId" in value &&
+  typeof value.projectId === "string" &&
+  "defaults" in value &&
+  typeof value.defaults === "object" &&
+  value.defaults !== null;
+
+const isFormTestGenerationResult = (
+  value: unknown,
+): value is FormTestGenerationResult =>
+  typeof value === "object" &&
+  value !== null &&
+  "provider" in value &&
+  isEnabledAiProviderId(value.provider) &&
+  "model" in value &&
+  typeof value.model === "string" &&
+  "formId" in value &&
+  typeof value.formId === "string" &&
+  "summary" in value &&
+  typeof value.summary === "string" &&
+  "scenarios" in value &&
+  Array.isArray(value.scenarios);
+
+const isCreatedFormTestsResult = (
+  value: unknown,
+): value is CreateGeneratedFormTestsResult =>
+  typeof value === "object" &&
+  value !== null &&
+  "tests" in value &&
+  Array.isArray(value.tests) &&
+  value.tests.every(isTestDefinition);
+
 const pageAnalysisStages = new Set([
   "preparing",
   "capturing_html",
@@ -890,6 +1109,14 @@ const isDatasetValue = (value: unknown): boolean => {
   }
   if (value.type === "fixed") {
     return "value" in value && isDatasetPrimitive(value.value);
+  }
+  if (value.type === "file") {
+    return (
+      "path" in value &&
+      typeof value.path === "string" &&
+      "name" in value &&
+      typeof value.name === "string"
+    );
   }
   return (
     value.type === "generated" &&
@@ -1235,12 +1462,50 @@ const isRunHistoryDetails = (value: unknown): value is RunHistoryDetails =>
   "imapResults" in value &&
   Array.isArray(value.imapResults);
 
+const isTestSuite = (value: unknown): value is TestSuite =>
+  typeof value === "object" &&
+  value !== null &&
+  "id" in value &&
+  typeof value.id === "string" &&
+  "projectId" in value &&
+  typeof value.projectId === "string" &&
+  "name" in value &&
+  typeof value.name === "string" &&
+  "items" in value &&
+  Array.isArray(value.items) &&
+  "settings" in value &&
+  typeof value.settings === "object" &&
+  value.settings !== null;
+
+const isBatchRun = (value: unknown): value is BatchRun =>
+  typeof value === "object" &&
+  value !== null &&
+  "id" in value &&
+  typeof value.id === "string" &&
+  "projectId" in value &&
+  typeof value.projectId === "string" &&
+  "status" in value &&
+  typeof value.status === "string" &&
+  "items" in value &&
+  Array.isArray(value.items);
+
+const isFlakyStatistic = (value: unknown): value is FlakyTestStatistic =>
+  typeof value === "object" &&
+  value !== null &&
+  "testId" in value &&
+  typeof value.testId === "string" &&
+  "totalRuns" in value &&
+  typeof value.totalRuns === "number" &&
+  "flakyRate" in value &&
+  typeof value.flakyRate === "number";
+
 const missingDataInputKinds = new Set([
   "text",
   "password",
   "checkbox",
   "select",
   "radio",
+  "file",
 ]);
 
 const isMissingDataDetails = (value: unknown): boolean =>
@@ -1423,6 +1688,27 @@ const semanticAppApi: SemanticAppApi = {
     }
     return models;
   },
+  getAiModelPricing: async (provider, model) => {
+    const pricing: unknown = await ipcRenderer.invoke(
+      AI_CHANNELS.getModelPricing,
+      provider,
+      model,
+    );
+    if (!isAiModelPricing(pricing)) {
+      throw new TypeError("Main process returned invalid AI model pricing.");
+    }
+    return pricing;
+  },
+  saveAiModelPricing: async (input) => {
+    const pricing: unknown = await ipcRenderer.invoke(
+      AI_CHANNELS.saveModelPricing,
+      input,
+    );
+    if (!isAiModelPricing(pricing)) {
+      throw new TypeError("Main process returned invalid AI model pricing.");
+    }
+    return pricing;
+  },
   testAiConnection: async (provider) => {
     const result: unknown = await ipcRenderer.invoke(
       AI_CHANNELS.testConnection,
@@ -1444,6 +1730,16 @@ const semanticAppApi: SemanticAppApi = {
       );
     }
     return preview;
+  },
+  generateAiRequest: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      AI_CHANNELS.generateRequest,
+      input,
+    );
+    if (!isAiGenerationResult(result)) {
+      throw new TypeError("Main process returned an invalid AI generation.");
+    }
+    return result;
   },
   previewAiStepEdit: async (input) => {
     const preview: unknown = await ipcRenderer.invoke(
@@ -1514,6 +1810,50 @@ const semanticAppApi: SemanticAppApi = {
       throw new TypeError("Main process returned invalid AI undo data.");
     }
     return test;
+  },
+  previewAiSimilarTest: async (input) => {
+    const preview: unknown = await ipcRenderer.invoke(
+      AI_CHANNELS.previewSimilarTest,
+      input,
+    );
+    if (!isAiSimilarTestPreview(preview)) {
+      throw new TypeError(
+        "Main process returned an invalid similar-test preview.",
+      );
+    }
+    return preview;
+  },
+  generateAiSimilarTest: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      AI_CHANNELS.generateSimilarTest,
+      input,
+    );
+    if (!isAiSimilarTestResult(result)) {
+      throw new TypeError(
+        "Main process returned an invalid similar-test result.",
+      );
+    }
+    return result;
+  },
+  createAiSimilarTest: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      AI_CHANNELS.createSimilarTest,
+      input,
+    );
+    if (
+      typeof result !== "object" ||
+      result === null ||
+      !("test" in result) ||
+      !isTestDefinition(result.test) ||
+      !("datasets" in result) ||
+      !Array.isArray(result.datasets) ||
+      !result.datasets.every(isTestDataset)
+    ) {
+      throw new TypeError(
+        "Main process returned invalid created AI test data.",
+      );
+    }
+    return result as CreateAiSimilarTestResult;
   },
   listProjects: async () => {
     const projects: unknown = await ipcRenderer.invoke(PROJECT_CHANNELS.list);
@@ -1745,6 +2085,60 @@ const semanticAppApi: SemanticAppApi = {
 
     return pages;
   },
+  listAnalyzedPageForms: async (projectId, pageId) => {
+    const forms: unknown = await ipcRenderer.invoke(
+      PAGE_ANALYSIS_CHANNELS.listForms,
+      projectId,
+      pageId,
+    );
+    if (!Array.isArray(forms) || !forms.every(isAnalyzedForm)) {
+      throw new TypeError("Main process returned invalid analyzed forms.");
+    }
+    return forms;
+  },
+  getProjectFormSettings: async (projectId) => {
+    const settings: unknown = await ipcRenderer.invoke(
+      FORM_CHANNELS.getSettings,
+      projectId,
+    );
+    if (!isProjectFormSettings(settings)) {
+      throw new TypeError("Main process returned invalid form settings.");
+    }
+    return settings;
+  },
+  saveProjectFormSettings: async (projectId, input) => {
+    const settings: unknown = await ipcRenderer.invoke(
+      FORM_CHANNELS.saveSettings,
+      projectId,
+      input,
+    );
+    if (!isProjectFormSettings(settings)) {
+      throw new TypeError("Main process returned invalid saved form settings.");
+    }
+    return settings;
+  },
+  generateFormTests: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      FORM_CHANNELS.generateTests,
+      input,
+    );
+    if (!isFormTestGenerationResult(result)) {
+      throw new TypeError(
+        "Main process returned invalid generated form tests.",
+      );
+    }
+    return result;
+  },
+  createGeneratedFormTests: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      FORM_CHANNELS.createTests,
+      input,
+    );
+    if (!isCreatedFormTestsResult(result)) {
+      throw new TypeError("Main process returned invalid created form tests.");
+    }
+    return result;
+  },
   onPageAnalysisProgress: (listener) => {
     const handleProgress = (_event: unknown, progress: unknown): void => {
       if (isPageAnalysisProgress(progress)) {
@@ -1816,6 +2210,18 @@ const semanticAppApi: SemanticAppApi = {
     );
     if (!isTestDefinition(test)) {
       throw new TypeError("Main process returned invalid saved test data.");
+    }
+    return test;
+  },
+  saveTestStages: async (projectId, testId, stages) => {
+    const test: unknown = await ipcRenderer.invoke(
+      TEST_CHANNELS.saveStages,
+      projectId,
+      testId,
+      stages,
+    );
+    if (!isTestDefinition(test)) {
+      throw new TypeError("Main process returned invalid staged test data.");
     }
     return test;
   },
@@ -2102,6 +2508,27 @@ const semanticAppApi: SemanticAppApi = {
     }
     return datasets;
   },
+  selectDatasetFile: async (projectId, testId) => {
+    const value: unknown = await ipcRenderer.invoke(
+      DATASET_CHANNELS.selectFile,
+      projectId,
+      testId,
+    );
+    if (value === undefined) return undefined;
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      !("type" in value) ||
+      value.type !== "file" ||
+      !("path" in value) ||
+      typeof value.path !== "string" ||
+      !("name" in value) ||
+      typeof value.name !== "string"
+    ) {
+      throw new TypeError("Main process returned invalid dataset file data.");
+    }
+    return { type: "file", path: value.path, name: value.name };
+  },
   createDataset: async (projectId, testId, input) => {
     const dataset: unknown = await ipcRenderer.invoke(
       DATASET_CHANNELS.create,
@@ -2165,6 +2592,28 @@ const semanticAppApi: SemanticAppApi = {
     }
     return preview;
   },
+  captureVisualStepContext: async (projectId, testId, stepId, flowItems) => {
+    const capture: unknown = await ipcRenderer.invoke(
+      RUNNER_CHANNELS.captureVisualContext,
+      projectId,
+      testId,
+      stepId,
+      flowItems,
+    );
+    if (
+      typeof capture !== "object" ||
+      capture === null ||
+      typeof (capture as VisualStepContextCapture).imageBase64 !== "string" ||
+      (capture as VisualStepContextCapture).mimeType !== "image/jpeg" ||
+      typeof (capture as VisualStepContextCapture).viewportWidth !== "number" ||
+      typeof (capture as VisualStepContextCapture).viewportHeight !==
+        "number" ||
+      typeof (capture as VisualStepContextCapture).capturedAt !== "string"
+    ) {
+      throw new TypeError("Main process returned invalid visual context data.");
+    }
+    return capture as VisualStepContextCapture;
+  },
   startRun: async (input) => {
     const snapshot: unknown = await ipcRenderer.invoke(
       RUNNER_CHANNELS.start,
@@ -2192,6 +2641,29 @@ const semanticAppApi: SemanticAppApi = {
     );
     if (!isRunnerSnapshot(snapshot)) {
       throw new TypeError("Main process returned invalid runner data.");
+    }
+    return snapshot;
+  },
+  retryVariableProducer: async (runId) => {
+    const snapshot: unknown = await ipcRenderer.invoke(
+      RUNNER_CHANNELS.retryVariableProducer,
+      runId,
+    );
+    if (!isRunnerSnapshot(snapshot)) {
+      throw new TypeError("Main process returned invalid variable retry data.");
+    }
+    return snapshot;
+  },
+  provideManualVariable: async (runId, value) => {
+    const snapshot: unknown = await ipcRenderer.invoke(
+      RUNNER_CHANNELS.provideManualVariable,
+      runId,
+      value,
+    );
+    if (!isRunnerSnapshot(snapshot)) {
+      throw new TypeError(
+        "Main process returned invalid manual variable data.",
+      );
     }
     return snapshot;
   },
@@ -2405,6 +2877,99 @@ const semanticAppApi: SemanticAppApi = {
     }
     return result;
   },
+  listTestSuites: async (projectId) => {
+    const result: unknown = await ipcRenderer.invoke(
+      TEST_SUITE_CHANNELS.list,
+      projectId,
+    );
+    if (!Array.isArray(result) || !result.every(isTestSuite)) {
+      throw new TypeError("Main process returned invalid test suites.");
+    }
+    return result;
+  },
+  saveTestSuite: async (projectId, suiteId, input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      TEST_SUITE_CHANNELS.save,
+      projectId,
+      suiteId,
+      input,
+    );
+    if (!isTestSuite(result))
+      throw new TypeError("Main process returned an invalid suite.");
+    return result;
+  },
+  deleteTestSuite: async (projectId, suiteId) => {
+    const result: unknown = await ipcRenderer.invoke(
+      TEST_SUITE_CHANNELS.delete,
+      projectId,
+      suiteId,
+    );
+    if (typeof result !== "boolean")
+      throw new TypeError("Main process returned invalid suite deletion data.");
+    return result;
+  },
+  createBatchRun: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      BATCH_RUN_CHANNELS.create,
+      input,
+    );
+    if (!isBatchRun(result))
+      throw new TypeError("Main process returned an invalid batch.");
+    return result;
+  },
+  updateBatchRunItem: async (batchId, input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      BATCH_RUN_CHANNELS.updateItem,
+      batchId,
+      input,
+    );
+    if (!isBatchRun(result))
+      throw new TypeError("Main process returned an invalid batch item.");
+    return result;
+  },
+  completeBatchRun: async (batchId, status, cleanupStatus) => {
+    const result: unknown = await ipcRenderer.invoke(
+      BATCH_RUN_CHANNELS.complete,
+      batchId,
+      status,
+      cleanupStatus,
+    );
+    if (!isBatchRun(result))
+      throw new TypeError(
+        "Main process returned invalid batch completion data.",
+      );
+    return result;
+  },
+  listBatchRuns: async (projectId) => {
+    const result: unknown = await ipcRenderer.invoke(
+      BATCH_RUN_CHANNELS.list,
+      projectId,
+    );
+    if (!Array.isArray(result) || !result.every(isBatchRun)) {
+      throw new TypeError("Main process returned invalid batch history.");
+    }
+    return result;
+  },
+  getBatchRun: async (projectId, batchId) => {
+    const result: unknown = await ipcRenderer.invoke(
+      BATCH_RUN_CHANNELS.get,
+      projectId,
+      batchId,
+    );
+    if (!isBatchRun(result))
+      throw new TypeError("Main process returned invalid batch details.");
+    return result;
+  },
+  listFlakyTestStatistics: async (projectId) => {
+    const result: unknown = await ipcRenderer.invoke(
+      BATCH_RUN_CHANNELS.flakyStatistics,
+      projectId,
+    );
+    if (!Array.isArray(result) || !result.every(isFlakyStatistic)) {
+      throw new TypeError("Main process returned invalid flaky statistics.");
+    }
+    return result;
+  },
   onRunnerStatusChange: (listener) => {
     const handleStatus = (_event: unknown, snapshot: unknown): void => {
       if (isRunnerSnapshot(snapshot)) listener(snapshot);
@@ -2414,14 +2979,29 @@ const semanticAppApi: SemanticAppApi = {
       ipcRenderer.removeListener(RUNNER_CHANNELS.statusChanged, handleStatus);
     };
   },
-  startRecorder: async (projectId, testId) => {
+  startRecorder: async (projectId, testId, stageId) => {
     const snapshot: unknown = await ipcRenderer.invoke(
       RECORDER_CHANNELS.start,
       projectId,
       testId,
+      stageId,
     );
     if (!isRecorderSnapshot(snapshot)) {
       throw new TypeError("Main process returned invalid recorder start data.");
+    }
+    return snapshot;
+  },
+  continueRecorder: async (projectId, testId, stageId) => {
+    const snapshot: unknown = await ipcRenderer.invoke(
+      RECORDER_CHANNELS.continueRecording,
+      projectId,
+      testId,
+      stageId,
+    );
+    if (!isRunnerSnapshot(snapshot)) {
+      throw new TypeError(
+        "Main process returned invalid recording continuation data.",
+      );
     }
     return snapshot;
   },

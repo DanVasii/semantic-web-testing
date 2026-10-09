@@ -19,6 +19,7 @@ import {
 export interface StepExecutionResult {
   locatorUsed?: JsonValue;
   logs: JsonValue[];
+  warnings?: Array<{ code: string; message: string }>;
 }
 
 export class StepExecutionError extends RunnerError {
@@ -72,7 +73,10 @@ const classifyBrowserOperationError = (
   return new StepExecutionError("step_failed", message);
 };
 
-const LOCATOR_APPEARANCE_TIMEOUT_MS = 5_000;
+const LOCATOR_APPEARANCE_TIMEOUT_MS = 1_500;
+const EMBEDDED_INPUT_APPEARANCE_TIMEOUT_MS = 45_000;
+const REVEAL_TIMEOUT_MS = 800;
+const CLICK_ACTIONABILITY_TIMEOUT_MS = 3_000;
 
 const asJson = (value: unknown): JsonValue =>
   JSON.parse(JSON.stringify(value)) as JsonValue;
@@ -93,11 +97,56 @@ const resolveTarget = async (
   locatorOverride?: LocatorDefinition,
 ): Promise<{ definition: LocatorDefinition; locator: Locator }> => {
   const definition = locatorOverride ?? requireTarget(step);
+  const isFallback = locatorOverride !== undefined;
+  const preferInteractive = [
+    "click",
+    "choose_repeated_item",
+    "calendar_select",
+  ].includes(step.actionType);
   try {
+    if (step.target?.frame !== undefined) {
+      return {
+        definition,
+        locator: await resolveUniqueLocator(page, definition, {
+          waitForMs: isFallback ? 0 : EMBEDDED_INPUT_APPEARANCE_TIMEOUT_MS,
+          waitForState: "visible",
+          frame: step.target.frame,
+          preferInteractive,
+          requireEnabled: true,
+          searchAllFrames: true,
+        }),
+      };
+    }
+    try {
+      return {
+        definition,
+        locator: await resolveUniqueLocator(page, definition, {
+          waitForMs: isFallback ? 0 : LOCATOR_APPEARANCE_TIMEOUT_MS,
+          waitForState: "visible",
+          preferInteractive,
+          requireEnabled: true,
+        }),
+      };
+    } catch (error) {
+      if (
+        !(error instanceof LocatorResolutionError) ||
+        error.code !== "locator_not_found"
+      ) {
+        throw error;
+      }
+    }
     return {
       definition,
       locator: await resolveUniqueLocator(page, definition, {
-        waitForMs: LOCATOR_APPEARANCE_TIMEOUT_MS,
+        waitForMs: isFallback
+          ? 0
+          : step.actionType === "fill" || step.actionType === "upload_file"
+            ? EMBEDDED_INPUT_APPEARANCE_TIMEOUT_MS
+            : 0,
+        waitForState: "visible",
+        preferInteractive,
+        requireEnabled: true,
+        searchAllFrames: true,
       }),
     };
   } catch (error) {
@@ -106,6 +155,76 @@ const resolveTarget = async (
     }
     throw error;
   }
+};
+
+const clickLocator = async (locator: Locator): Promise<void> => {
+  try {
+    await locator.click({ timeout: CLICK_ACTIONABILITY_TIMEOUT_MS });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const normalized = message.toLowerCase();
+    if (
+      normalized.includes("not visible") ||
+      normalized.includes("not enabled") ||
+      normalized.includes("not stable") ||
+      normalized.includes("intercepts pointer events") ||
+      normalized.includes("detached") ||
+      normalized.includes("waiting for element to be")
+    ) {
+      throw new StepExecutionError(
+        "locator_not_found",
+        `Elementul a fost găsit, dar nu a devenit acționabil în ${CLICK_ACTIONABILITY_TIMEOUT_MS / 1_000} secunde.`,
+      );
+    }
+    throw error;
+  }
+};
+
+const revealTargetIfNeeded = async (
+  page: Page,
+  step: ActionStep,
+  locatorOverride?: LocatorDefinition,
+): Promise<JsonValue[]> => {
+  if (step.revealBefore === undefined || step.revealBefore.length === 0) {
+    return [];
+  }
+  const target = resolveLocator(page, locatorOverride ?? requireTarget(step));
+  if ((await target.count()) === 1 && (await target.isVisible())) return [];
+
+  for (const preparation of step.revealBefore) {
+    const definitions = [
+      preparation.target.primary,
+      ...preparation.fallbacks.map(({ locator }) => locator),
+    ];
+    for (const definition of definitions) {
+      try {
+        const trigger = await resolveUniqueLocator(page, definition, {
+          waitForMs: REVEAL_TIMEOUT_MS,
+          waitForState: "visible",
+        });
+        await trigger.hover({ timeout: REVEAL_TIMEOUT_MS });
+        await target.waitFor({ state: "visible", timeout: REVEAL_TIMEOUT_MS });
+        if ((await target.count()) === 1 && (await target.isVisible())) {
+          return [
+            {
+              level: "info",
+              message:
+                "Ținta ascunsă a fost afișată automat prin hover pe un element înregistrat.",
+            },
+          ];
+        }
+      } catch {
+        // Următorul locator sau candidat poate dezvălui ținta.
+      }
+    }
+  }
+  return [
+    {
+      level: "warning",
+      message:
+        "Pregătirile hover înregistrate nu au făcut ținta vizibilă; se continuă cu rezolvarea normală.",
+    },
+  ];
 };
 
 const resolveInputValue = (
@@ -162,41 +281,70 @@ const repeatUntilSatisfied = async (
 const applyWait = async (
   page: Page,
   wait: WaitDefinition | undefined,
-): Promise<void> => {
-  if (wait === undefined) return;
+): Promise<Array<{ code: string; message: string }>> => {
+  if (wait === undefined) return [];
   switch (wait.type) {
     case "none":
-      return;
+      return [];
     case "dom_stable":
       await page.waitForLoadState("domcontentloaded");
-      return;
+      return [];
     case "network_idle":
       await page.waitForLoadState("networkidle");
-      return;
+      return [];
     case "timeout":
       await page.waitForTimeout(wait.timeoutMs ?? 0);
-      return;
+      return [];
     case "element": {
-      if (wait.target === undefined) return;
+      if (wait.target === undefined) return [];
       const locator = await resolveUniqueLocator(page, wait.target);
       await locator.waitFor({
         state: "visible",
         ...(wait.timeoutMs === undefined ? {} : { timeout: wait.timeoutMs }),
       });
-      return;
+      return [];
     }
     case "url":
       if (wait.value !== undefined) {
         try {
-          await page.waitForURL(wait.value, {
-            ...(wait.timeoutMs === undefined
-              ? {}
-              : { timeout: wait.timeoutMs }),
-          });
+          const expected = wait.value;
+          await page.waitForURL(
+            wait.warningOnly === true
+              ? (url) => {
+                  const actual = new URL(url.toString());
+                  actual.search = "";
+                  actual.hash = "";
+                  const prefix = expected.endsWith("/**")
+                    ? expected.slice(0, -3).replace(/\/$/, "")
+                    : undefined;
+                  const normalizedActual =
+                    `${actual.origin}${actual.pathname}`.replace(/\/$/, "");
+                  const normalizedExpected = expected.replace(/\/$/, "");
+                  return prefix === undefined
+                    ? normalizedActual === normalizedExpected
+                    : normalizedActual === prefix ||
+                        normalizedActual.startsWith(`${prefix}/`);
+                }
+              : expected,
+            {
+              ...(wait.timeoutMs === undefined
+                ? {}
+                : { timeout: wait.timeoutMs }),
+            },
+          );
         } catch (error) {
+          if (wait.warningOnly === true) {
+            return [
+              {
+                code: "navigation_destination_mismatch",
+                message: `Click-ul nu a navigat la ruta așteptată ${wait.value}. URL actual: ${page.url()}.`,
+              },
+            ];
+          }
           throw classifyBrowserOperationError(error, "wait_for_url");
         }
       }
+      return [];
   }
 };
 
@@ -208,6 +356,7 @@ const executeAction = async (
 ): Promise<StepExecutionResult> => {
   let locatorUsed: JsonValue | undefined;
   let executionCount: number | undefined;
+  const preparationLogs: JsonValue[] = [];
   switch (step.actionType) {
     case "navigate":
       try {
@@ -216,9 +365,18 @@ const executeAction = async (
         throw classifyBrowserOperationError(error, "navigation");
       }
       break;
+    case "hover": {
+      const target = await resolveTarget(page, step, locatorOverride);
+      locatorUsed = asJson(target.definition);
+      await target.locator.hover();
+      break;
+    }
     case "click":
     case "choose_repeated_item":
     case "calendar_select": {
+      preparationLogs.push(
+        ...(await revealTargetIfNeeded(page, step, locatorOverride)),
+      );
       if (step.repeatUntil !== undefined) {
         executionCount = 0;
         while (!(await repeatUntilSatisfied(page, step.repeatUntil))) {
@@ -230,7 +388,7 @@ const executeAction = async (
           }
           const target = await resolveTarget(page, step, locatorOverride);
           locatorUsed = asJson(target.definition);
-          await target.locator.click();
+          await clickLocator(target.locator);
           executionCount += 1;
         }
       } else {
@@ -238,7 +396,7 @@ const executeAction = async (
         for (let index = 0; index < executionCount; index += 1) {
           const target = await resolveTarget(page, step, locatorOverride);
           locatorUsed = asJson(target.definition);
-          await target.locator.click();
+          await clickLocator(target.locator);
         }
       }
       break;
@@ -247,6 +405,12 @@ const executeAction = async (
       const target = await resolveTarget(page, step, locatorOverride);
       locatorUsed = asJson(target.definition);
       await target.locator.fill(resolveInputValue(step, dataset));
+      break;
+    }
+    case "upload_file": {
+      const target = await resolveTarget(page, step, locatorOverride);
+      locatorUsed = asJson(target.definition);
+      await target.locator.setInputFiles(resolveInputValue(step, dataset));
       break;
     }
     case "select_option": {
@@ -311,12 +475,44 @@ const executeAction = async (
       }
       break;
     case "scroll":
-      if (step.target === undefined) {
+      if (step.scrollMode === "wheel") {
+        if (step.target === undefined) {
+          const center = await page.evaluate(() => ({
+            x: Math.max(1, Math.round(innerWidth / 2)),
+            y: Math.max(1, Math.round(innerHeight / 2)),
+          }));
+          await page.mouse.move(center.x, center.y);
+        } else {
+          const target = await resolveTarget(page, step, locatorOverride);
+          locatorUsed = asJson(target.definition);
+          await target.locator.hover();
+        }
         await page.mouse.wheel(step.scrollX ?? 0, step.scrollY ?? 700);
+        await page.waitForTimeout(50);
+      } else if (step.target === undefined) {
+        await page.evaluate(
+          ({ deltaX, deltaY }) => {
+            window.scrollBy({
+              left: deltaX,
+              top: deltaY,
+              behavior: "auto",
+            });
+          },
+          { deltaX: step.scrollX ?? 0, deltaY: step.scrollY ?? 700 },
+        );
       } else {
         const target = await resolveTarget(page, step, locatorOverride);
         locatorUsed = asJson(target.definition);
-        await target.locator.scrollIntoViewIfNeeded();
+        await target.locator.evaluate(
+          (element, { deltaX, deltaY }) => {
+            element.scrollBy({
+              left: deltaX,
+              top: deltaY,
+              behavior: "auto",
+            });
+          },
+          { deltaX: step.scrollX ?? 0, deltaY: step.scrollY ?? 700 },
+        );
       }
       break;
     case "wait_for_element": {
@@ -338,10 +534,11 @@ const executeAction = async (
         "Intervenția manuală va fi disponibilă în grupa dedicată.",
       );
   }
-  await applyWait(page, step.waitAfter);
+  const waitWarnings = await applyWait(page, step.waitAfter);
   return {
     ...(locatorUsed === undefined ? {} : { locatorUsed }),
     logs: [
+      ...preparationLogs,
       {
         level: "info",
         message:
@@ -355,7 +552,13 @@ const executeAction = async (
                     : ""
                 }.`,
       },
+      ...waitWarnings.map((warning) => ({
+        level: "warning",
+        code: warning.code,
+        message: warning.message,
+      })),
     ],
+    ...(waitWarnings.length === 0 ? {} : { warnings: waitWarnings }),
   };
 };
 
@@ -405,7 +608,7 @@ const executeElementCheck = async (
   };
 };
 
-const executeCheck = async (
+const executeCheckOnce = async (
   page: Page,
   step: CheckStep,
 ): Promise<StepExecutionResult> => {
@@ -456,9 +659,112 @@ const executeCheck = async (
     }
     return { logs: [{ level: "info", message: "URL verificat cu succes." }] };
   }
+  if (step.checkType === "js_eval" && "jsSnippet" in step.config) {
+    let result: unknown;
+    try {
+      result = await page.evaluate(step.config.jsSnippet);
+    } catch (error) {
+      throw new StepExecutionError(
+        "step_failed",
+        `Evaluarea codului a eșuat: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    if (step.config.expectedResult !== undefined) {
+      const resultString = JSON.stringify(result);
+      const expectedString = JSON.stringify(step.config.expectedResult);
+      if (resultString !== expectedString) {
+        throw new StepExecutionError(
+          "step_failed",
+          `Evaluarea JS a returnat un rezultat neașteptat. Am primit: ${resultString}, ne așteptam la: ${expectedString}`,
+        );
+      }
+    } else if (
+      typeof result === "object" &&
+      result !== null &&
+      "passed" in result
+    ) {
+      const asObj = result as {
+        passed?: boolean;
+        message?: string;
+        actualValue?: unknown;
+      };
+      if (asObj.passed === false) {
+        throw new StepExecutionError(
+          "step_failed",
+          `Evaluarea JS a eșuat: ${asObj.message ?? "Fără mesaj suplimentar"} (A obținut: ${JSON.stringify(asObj.actualValue)})`,
+        );
+      }
+    } else if (!result) {
+      throw new StepExecutionError(
+        "step_failed",
+        `Evaluarea JS a returnat o valoare "falsy" (${JSON.stringify(result)}).`,
+      );
+    }
+
+    return { logs: [{ level: "info", message: "Evaluare JS cu succes." }] };
+  }
   throw new StepExecutionError(
     "unsupported_step",
     `Verificarea ${step.checkType} aparține unei grupe ulterioare.`,
+  );
+};
+
+const executeCheck = async (
+  page: Page,
+  step: CheckStep,
+): Promise<StepExecutionResult> => {
+  if (step.checkType === "mysql" || step.checkType === "imap") {
+    return executeCheckOnce(page, step);
+  }
+  const timeoutMs = step.timeoutMs ?? 5_000;
+  const pollIntervalMs = 200;
+  const maxAttempts = Math.max(1, Math.ceil(timeoutMs / pollIntervalMs) + 1);
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const result = await executeCheckOnce(page, step);
+      return {
+        ...result,
+        logs: [
+          ...result.logs,
+          {
+            level: "info",
+            message:
+              attempt === 0
+                ? "Condiția verificării a fost îndeplinită imediat."
+                : `Condiția verificării a fost îndeplinită după ${attempt + 1} încercări.`,
+          },
+        ],
+      };
+    } catch (error) {
+      lastError = error;
+      const retryable =
+        (error instanceof StepExecutionError &&
+          ["locator_not_found", "step_failed"].includes(error.code)) ||
+        (error instanceof LocatorResolutionError &&
+          error.code === "locator_not_found");
+      if (!retryable || attempt === maxAttempts - 1 || timeoutMs === 0) {
+        break;
+      }
+      await page.waitForTimeout(pollIntervalMs);
+    }
+  }
+  const reason =
+    lastError instanceof Error
+      ? lastError.message
+      : "Condiția verificării nu a fost îndeplinită.";
+  throw new StepExecutionError(
+    lastError instanceof StepExecutionError
+      ? lastError.code
+      : lastError instanceof LocatorResolutionError
+        ? lastError.code
+        : "step_failed",
+    `Timeout după ${timeoutMs} ms: ${reason}`,
+    lastError instanceof StepExecutionError ||
+      lastError instanceof LocatorResolutionError
+      ? lastError.count
+      : undefined,
   );
 };
 

@@ -20,6 +20,7 @@ import { validateDeclarativeTest } from "../../shared/test-validation.js";
 import type { TestsService } from "../tests-service.js";
 import { validateAiStepEditProposal } from "./ai-output.js";
 import type { AiSettingsService } from "./ai-settings-service.js";
+import { normalizeAiAdaptiveCheckPatch } from "./ai-similar-test-service.js";
 
 export interface PageAiContextSource {
   getAiSemanticContext: (
@@ -36,6 +37,9 @@ const editableFields = [
   "whyExplanation",
   "instructions",
   "primaryLocator",
+  "checkType",
+  "checkConfig",
+  "timeoutMs",
 ] as const;
 
 const clone = <T>(value: T): T => structuredClone(value);
@@ -121,6 +125,17 @@ const patchFieldValue = (
     }
     return undefined;
   }
+  if (field === "checkType") {
+    return item.type === "check" ? item.checkType : undefined;
+  }
+  if (field === "checkConfig") {
+    return item.type === "check" ? asJson(item.config) : undefined;
+  }
+  if (field === "timeoutMs") {
+    return item.type === "check" && item.timeoutMs !== undefined
+      ? item.timeoutMs
+      : undefined;
+  }
   if (field === "title") {
     return "title" in item && item.title !== undefined
       ? asJson(item.title)
@@ -153,7 +168,9 @@ const buildDiffs = (
       const after =
         field === "primaryLocator"
           ? change.patch.primaryLocator
-          : change.patch[field];
+          : field === "checkConfig"
+            ? change.patch.checkConfig
+            : change.patch[field];
       if (after === undefined) return [];
       const before = patchFieldValue(item, field);
       const afterJson = asJson(after);
@@ -195,6 +212,13 @@ const applyPatch = (
       item.config.target = locator;
     }
   }
+  if (item.type === "check") {
+    if (patch.checkType !== undefined) item.checkType = patch.checkType;
+    if (patch.checkConfig !== undefined) {
+      item.config = clone(patch.checkConfig);
+    }
+    if (patch.timeoutMs !== undefined) item.timeoutMs = patch.timeoutMs;
+  }
   return item;
 };
 
@@ -228,6 +252,31 @@ const assertProposalScope = (
       "Propunerea AI conține schimbări în afara downstream-ului.",
     );
   }
+};
+
+const normalizeAdaptiveChecks = (
+  test: TestDefinition,
+  proposal: AiStepEditProposal,
+  instruction: string,
+): AiStepEditProposal => {
+  const normalizeChange = (change: AiStepChangeProposal) => {
+    const source = test.flowItems.find(({ id }) => id === change.stepId);
+    return source?.type === "check"
+      ? {
+          ...clone(change),
+          patch: normalizeAiAdaptiveCheckPatch(
+            source,
+            change.patch,
+            instruction,
+          ),
+        }
+      : clone(change);
+  };
+  return {
+    ...clone(proposal),
+    currentStepChange: normalizeChange(proposal.currentStepChange),
+    downstreamChanges: proposal.downstreamChanges.map(normalizeChange),
+  };
 };
 
 export class AiStepEditingService {
@@ -296,8 +345,13 @@ export class AiStepEditingService {
       provider: preview.request.provider,
       model: preview.request.model,
     });
-    const proposal = validateAiStepEditProposal(generation.output);
+    const rawProposal = validateAiStepEditProposal(generation.output);
     const test = this.tests.get(input.projectId, input.testId);
+    const proposal = normalizeAdaptiveChecks(
+      test,
+      rawProposal,
+      input.instruction,
+    );
     assertProposalScope(test, input.selectedStepId, proposal);
     return {
       provider: generation.provider,

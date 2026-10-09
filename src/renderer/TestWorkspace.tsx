@@ -4,15 +4,20 @@ import type { SemanticAppApi } from "../shared/ipc.js";
 import type { Project, TestDefinition } from "../shared/persistence.js";
 import { getTestPrimaryAction, type TestInput } from "../shared/tests.js";
 import { Button } from "./components/Button.js";
+import { ConfirmDialog } from "./components/ConfirmDialog.js";
+import { Dropdown } from "./components/Dropdown.js";
 import { Tabs } from "./components/Tabs.js";
 import { DatasetsPanel } from "./DatasetsPanel.js";
 import { TestFormModal } from "./TestFormModal.js";
-import { TestFlowEditor } from "./TestFlowEditor.js";
-import { TestChecksPanel } from "./TestChecksPanel.js";
 import { RunnerPanel } from "./RunnerPanel.js";
+import { TestStagesEditor } from "./TestStagesEditor.js";
 import { RecorderPanel } from "./RecorderPanel.js";
 import { TestImportModal } from "./TestImportModal.js";
 import { ExportPanel } from "./ExportPanel.js";
+import { AiSimilarTestModal } from "./AiSimilarTestModal.js";
+import { ProjectRunAllModal } from "./ProjectRunAllModal.js";
+import { TestSuitesPanel } from "./TestSuitesPanel.js";
+import type { TestSuite } from "../shared/test-suites.js";
 
 export interface ProjectTestsPanelProps {
   api: SemanticAppApi;
@@ -40,13 +45,28 @@ export const ProjectTestsPanel = ({
   const [isLoading, setIsLoading] = useState(true);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [aiSourceTest, setAiSourceTest] = useState<TestDefinition>();
+  const [runAllSelection, setRunAllSelection] = useState<{
+    tests: TestDefinition[];
+    suite?: TestSuite;
+  }>();
+  const [selectedTestIds, setSelectedTestIds] = useState<Set<string>>(
+    new Set(),
+  );
+  const [deleteSelectionOpen, setDeleteSelectionOpen] = useState(false);
+  const [isDeletingSelected, setIsDeletingSelected] = useState(false);
   const [error, setError] = useState<string>();
 
   const loadTests = useCallback(async () => {
     setIsLoading(true);
     setError(undefined);
     try {
-      setTests(await api.listTests(project.id));
+      const loaded = await api.listTests(project.id);
+      setTests(loaded);
+      const loadedIds = new Set(loaded.map(({ id }) => id));
+      setSelectedTestIds(
+        (current) => new Set([...current].filter((id) => loadedIds.has(id))),
+      );
     } catch {
       setError("Testele proiectului nu au putut fi încărcate.");
     } finally {
@@ -73,6 +93,46 @@ export const ProjectTestsPanel = ({
     }
   };
 
+  const deleteSelectedTests = async (): Promise<void> => {
+    if (isDeletingSelected || selectedTestIds.size === 0) return;
+    const ids = tests
+      .map(({ id }) => id)
+      .filter((id) => selectedTestIds.has(id));
+    setIsDeletingSelected(true);
+    setError(undefined);
+    try {
+      const results = await Promise.allSettled(
+        ids.map((testId) => api.deleteTest(project.id, testId)),
+      );
+      const deletedIds = new Set(
+        ids.filter(
+          (_id, index) =>
+            results[index]?.status === "fulfilled" && results[index].value,
+        ),
+      );
+      const failedCount = ids.length - deletedIds.size;
+      if (deletedIds.size > 0) {
+        setTests((current) => current.filter(({ id }) => !deletedIds.has(id)));
+        setSelectedTestIds(
+          (current) =>
+            new Set([...current].filter((id) => !deletedIds.has(id))),
+        );
+        onTestsChanged();
+      }
+      setDeleteSelectionOpen(false);
+      if (failedCount > 0) {
+        setError(
+          `${failedCount} ${failedCount === 1 ? "test nu a putut" : "teste nu au putut"} fi șterse. Selecția a fost păstrată pentru reîncercare.`,
+        );
+      }
+    } finally {
+      setIsDeletingSelected(false);
+    }
+  };
+
+  const allTestsSelected =
+    tests.length > 0 && tests.every(({ id }) => selectedTestIds.has(id));
+
   return (
     <section
       className="mt-6 rounded-2xl border border-app-border bg-app-surface p-6 shadow-sm"
@@ -90,11 +150,18 @@ export const ProjectTestsPanel = ({
             Testele proiectului
           </h3>
           <p className="mt-1 text-sm text-app-muted">
-            Fiecare test începe cu o înregistrare manuală și are propriul URL de
-            start.
+            Fiecare test începe cu o înregistrare manuală; pagina inițială este
+            salvată automat în flow.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button
+            variant="secondary"
+            disabled={tests.length === 0}
+            onClick={() => setRunAllSelection({ tests })}
+          >
+            Rulează toate testele
+          </Button>
           <TestImportModal
             api={api}
             projectId={project.id}
@@ -131,38 +198,105 @@ export const ProjectTestsPanel = ({
         <div className="mt-5 rounded-xl border border-dashed border-app-border bg-app-canvas p-6 text-center">
           <p className="font-medium">Proiectul nu are încă teste</p>
           <p className="mt-1 text-sm text-app-muted">
-            Creează testul, configurează URL-ul de start și apoi înregistrează
-            flow-ul manual.
+            Creează testul și apoi înregistrează flow-ul manual.
           </p>
         </div>
       ) : (
         <div className="mt-5 grid gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-app-border bg-white p-3">
+            <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-app-ink">
+              <input
+                type="checkbox"
+                aria-label="Selectează toate testele"
+                checked={allTestsSelected}
+                onChange={(event) =>
+                  setSelectedTestIds(
+                    event.target.checked
+                      ? new Set(tests.map(({ id }) => id))
+                      : new Set(),
+                  )
+                }
+              />
+              Selectează toate
+            </label>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-app-muted">
+                {selectedTestIds.size} selectate
+              </span>
+              {selectedTestIds.size > 0 ? (
+                <Button
+                  variant="secondary"
+                  disabled={isDeletingSelected}
+                  onClick={() => setSelectedTestIds(new Set())}
+                >
+                  Golește selecția
+                </Button>
+              ) : null}
+              <Button
+                variant="danger"
+                disabled={selectedTestIds.size === 0 || isDeletingSelected}
+                onClick={() => setDeleteSelectionOpen(true)}
+              >
+                Șterge selectate ({selectedTestIds.size})
+              </Button>
+            </div>
+          </div>
           {tests.map((test) => (
-            <button
+            <article
               key={test.id}
-              type="button"
-              className="rounded-xl border border-app-border bg-app-canvas p-4 text-left transition hover:border-brand-500 focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:outline-none"
-              onClick={() => {
-                onOpenTest(test);
-              }}
+              className={`rounded-xl border bg-app-canvas p-4 transition hover:border-brand-500 ${
+                selectedTestIds.has(test.id)
+                  ? "border-red-300 ring-2 ring-red-100"
+                  : "border-app-border"
+              }`}
             >
-              <span className="flex flex-wrap items-start justify-between gap-3">
-                <span>
-                  <span className="block font-semibold text-app-ink">
-                    {test.name}
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex min-w-0 items-start gap-3">
+                  <input
+                    className="mt-1"
+                    type="checkbox"
+                    aria-label={`Selectează testul ${test.name}`}
+                    checked={selectedTestIds.has(test.id)}
+                    onChange={(event) =>
+                      setSelectedTestIds((current) => {
+                        const next = new Set(current);
+                        if (event.target.checked) next.add(test.id);
+                        else next.delete(test.id);
+                        return next;
+                      })
+                    }
+                  />
+                  <span className="min-w-0">
+                    <span className="flex flex-wrap items-center gap-2 font-semibold text-app-ink">
+                      {test.name}
+                      {test.aiGeneration ? (
+                        <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-800">
+                          AI generated test
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="mt-1 block break-all text-xs text-app-muted">
+                      {test.normalizedStartUrl}
+                    </span>
                   </span>
-                  <span className="mt-1 block break-all text-xs text-app-muted">
-                    {test.normalizedStartUrl}
-                  </span>
-                </span>
+                </div>
                 <span className="rounded-full border border-brand-200 bg-brand-50 px-2.5 py-1 text-xs font-semibold text-brand-800">
                   {workflowLabels[test.workflowState]}
                 </span>
-              </span>
-              <span className="mt-3 block text-sm font-medium text-brand-700">
-                {getTestPrimaryAction(test)} →
-              </span>
-            </button>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Button variant="secondary" onClick={() => onOpenTest(test)}>
+                  {getTestPrimaryAction(test)} →
+                </Button>
+                <Button
+                  variant="secondary"
+                  disabled={test.flowItems.length === 0}
+                  onClick={() => setAiSourceTest(test)}
+                >
+                  Generează similar cu AI
+                </Button>
+              </div>
+            </article>
           ))}
         </div>
       )}
@@ -179,6 +313,58 @@ export const ProjectTestsPanel = ({
         onSave={(input) => {
           void createTest(input);
         }}
+      />
+      <ConfirmDialog
+        open={deleteSelectionOpen}
+        title="Ștergi testele selectate?"
+        message={`${selectedTestIds.size} ${selectedTestIds.size === 1 ? "test va fi șters" : "teste vor fi șterse"} definitiv, împreună cu dataseturile, versiunile și rulările asociate.`}
+        confirmLabel={
+          isDeletingSelected
+            ? "Se șterg..."
+            : `Șterge ${selectedTestIds.size} ${selectedTestIds.size === 1 ? "test" : "teste"}`
+        }
+        confirmVariant="danger"
+        onCancel={() => {
+          if (!isDeletingSelected) setDeleteSelectionOpen(false);
+        }}
+        onConfirm={() => void deleteSelectedTests()}
+      />
+      {aiSourceTest ? (
+        <AiSimilarTestModal
+          api={api}
+          open
+          projectId={project.id}
+          sourceTest={aiSourceTest}
+          onClose={() => setAiSourceTest(undefined)}
+          onCreated={(created) => {
+            setTests((current) => [...current, created]);
+            onTestsChanged();
+          }}
+        />
+      ) : null}
+      <ProjectRunAllModal
+        api={api}
+        open={runAllSelection !== undefined}
+        project={project}
+        tests={runAllSelection?.tests ?? []}
+        {...(runAllSelection?.suite === undefined
+          ? {}
+          : { suite: runAllSelection.suite })}
+        onClose={() => setRunAllSelection(undefined)}
+        onFinished={() => {
+          onTestsChanged();
+        }}
+      />
+      <TestSuitesPanel
+        api={api}
+        project={project}
+        tests={tests}
+        onRunSuite={(suite, suiteTests) =>
+          setRunAllSelection({ tests: suiteTests, suite })
+        }
+        onRunFailed={(failedTests) =>
+          setRunAllSelection({ tests: failedTests })
+        }
       />
     </section>
   );
@@ -226,6 +412,8 @@ export const TestDetailPage = ({
 }: TestDetailPageProps) => {
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [isRevalidating, setIsRevalidating] = useState(false);
   const [editError, setEditError] = useState<string>();
   const activeStage = stageIndex(test.workflowState);
@@ -237,7 +425,7 @@ export const TestDetailPage = ({
         : "ready";
   const actionHelp = useMemo(() => {
     if (test.workflowState === "not_recorded") {
-      return "Recorderul va deschide URL-ul de start și va captura flow-ul manual.";
+      return "Recorderul va salva pagina curentă ca primul pas și va captura flow-ul manual.";
     }
     if (test.workflowState === "recorded") {
       return "Au rămas capturi nefinalizate; acestea trebuie reluate înainte de review.";
@@ -268,6 +456,20 @@ export const TestDetailPage = ({
       setEditError("Testul nu a putut fi revalidat manual.");
     } finally {
       setIsRevalidating(false);
+    }
+  };
+  const deleteTest = async (): Promise<void> => {
+    setIsDeleting(true);
+    setEditError(undefined);
+    try {
+      const wasDeleted = await api.deleteTest(project.id, test.id);
+      if (!wasDeleted) throw new Error("Testul nu a fost șters.");
+      setIsDeleteOpen(false);
+      onBackToProject();
+    } catch {
+      setEditError("Testul nu a putut fi șters. Încearcă din nou.");
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -302,7 +504,14 @@ export const TestDetailPage = ({
             <p className="text-xs font-semibold tracking-[0.14em] text-brand-700 uppercase">
               Detalii test
             </p>
-            <h2 className="mt-1 text-2xl font-semibold">{test.name}</h2>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <h2 className="text-2xl font-semibold">{test.name}</h2>
+              {test.aiGeneration ? (
+                <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-800">
+                  AI generated test
+                </span>
+              ) : null}
+            </div>
             {test.description ? (
               <p className="mt-2 max-w-2xl text-sm leading-6 text-app-muted">
                 {test.description}
@@ -310,17 +519,28 @@ export const TestDetailPage = ({
             ) : null}
           </div>
           <div className="flex flex-col items-end gap-2 text-right">
-            <div className="flex flex-wrap justify-end gap-2">
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setEditError(undefined);
-                  setIsEditing(true);
-                }}
-              >
-                Editează testul
-              </Button>
-            </div>
+            <Dropdown
+              align="right"
+              compact
+              label="Acțiuni test"
+              items={[
+                {
+                  id: "edit-test",
+                  label: "Editează detaliile",
+                  onSelect: () => {
+                    setEditError(undefined);
+                    setIsEditing(true);
+                  },
+                },
+                {
+                  id: "delete-test",
+                  label: "Șterge testul",
+                  tone: "danger",
+                  disabled: isDeleting,
+                  onSelect: () => setIsDeleteOpen(true),
+                },
+              ]}
+            />
             <p className="mt-2 max-w-xs text-xs text-app-muted">{actionHelp}</p>
           </div>
         </div>
@@ -368,13 +588,7 @@ export const TestDetailPage = ({
           </div>
         ) : null}
 
-        <dl className="mt-5 grid gap-3 rounded-xl border border-app-border bg-slate-50 p-4 sm:grid-cols-3">
-          <div>
-            <dt className="text-xs text-app-muted">URL de start</dt>
-            <dd className="mt-1 break-all text-sm font-medium">
-              {test.normalizedStartUrl}
-            </dd>
-          </div>
+        <dl className="mt-5 grid gap-3 rounded-xl border border-app-border bg-slate-50 p-4 sm:grid-cols-2">
           <div>
             <dt className="text-xs text-app-muted">Stare</dt>
             <dd className="mt-1 text-sm font-medium">
@@ -414,20 +628,13 @@ export const TestDetailPage = ({
           </ol>
         </div>
 
-        <RecorderPanel
-          api={api}
-          project={project}
-          test={test}
-          onTestUpdated={onTestUpdated}
-        />
-
         <section className="mt-5 rounded-xl border border-app-border bg-slate-50 p-4">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <h3 className="font-semibold">Semafor analiză înregistrare</h3>
               <p className="mt-1 text-sm text-app-muted">
-                După fiecare acțiune stabilă, inputul este blocat foarte scurt
-                până când captura paginii este salvată.
+                Acțiunile sunt puse în coadă și analizate în fundal, fără să
+                blocheze interacțiunea cu pagina.
               </p>
             </div>
             <div className="flex items-center gap-3 rounded-full border border-app-border bg-app-surface px-4 py-2">
@@ -457,7 +664,7 @@ export const TestDetailPage = ({
               />
               <span className="text-xs font-semibold">
                 {analysisSignal === "analyzing"
-                  ? "Input blocat · se analizează"
+                  ? "Analiză în fundal · poți continua"
                   : analysisSignal === "blocked"
                     ? "Oprit · capturi incomplete"
                     : "Gata pentru interacțiune"}
@@ -478,22 +685,41 @@ export const TestDetailPage = ({
             tabs={[
               {
                 id: "flow",
-                label: "Flow și rulare",
+                label: "Flow",
                 content: (
                   <>
-                    <TestFlowEditor
+                    <RecorderPanel
+                      api={api}
+                      project={project}
+                      test={test}
+                      onTestUpdated={onTestUpdated}
+                    />
+                    <TestStagesEditor
                       api={api}
                       projectId={project.id}
                       test={test}
                       onTestSaved={onTestUpdated}
+                      section="flow"
                     />
-                    <RunnerPanel api={api} project={project} test={test} />
                   </>
                 ),
               },
               {
+                id: "checks",
+                label: "Checks",
+                content: (
+                  <TestStagesEditor
+                    api={api}
+                    projectId={project.id}
+                    test={test}
+                    onTestSaved={onTestUpdated}
+                    section="checks"
+                  />
+                ),
+              },
+              {
                 id: "datasets",
-                label: "Datasets",
+                label: "Date",
                 content: (
                   <DatasetsPanel
                     api={api}
@@ -502,36 +728,57 @@ export const TestDetailPage = ({
                   />
                 ),
               },
+              {
+                id: "run",
+                label: "Rulare",
+                content: (
+                  <RunnerPanel api={api} project={project} test={test} />
+                ),
+              },
+              {
+                id: "export",
+                label: "Export",
+                content: (
+                  <>
+                    <ExportPanel
+                      api={api}
+                      projectId={project.id}
+                      testId={test.id}
+                    />
+                    <details className="mt-4 rounded-xl border border-app-border bg-slate-50 p-3">
+                      <summary className="cursor-pointer font-semibold text-app-ink">
+                        Context și explicații
+                      </summary>
+                      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                        <section className="rounded-lg bg-app-surface p-3">
+                          <h3 className="font-semibold text-app-ink">
+                            Context semantic oferit de tine
+                          </h3>
+                          <p className="mt-2 text-sm leading-6 text-app-muted">
+                            În configurare, înregistrare sau review vei putea
+                            selecta produse, carduri, rânduri repetitive și
+                            inputuri care primesc date. Selecțiile și
+                            descrierile tale vor ghida interpretarea locală și
+                            AI.
+                          </p>
+                        </section>
+                        <section className="rounded-lg bg-app-surface p-3">
+                          <h3 className="font-semibold text-app-ink">
+                            Pagini relevante testului
+                          </h3>
+                          <p className="mt-2 text-sm leading-6 text-app-muted">
+                            Vor apărea numai paginile întâlnite în această
+                            înregistrare. Analizele celorlalte teste din proiect
+                            nu vor fi trimise către AI.
+                          </p>
+                        </section>
+                      </div>
+                    </details>
+                  </>
+                ),
+              },
             ]}
           />
-        </div>
-
-        <TestChecksPanel
-          api={api}
-          projectId={project.id}
-          test={test}
-          onTestUpdated={onTestUpdated}
-        />
-
-        <ExportPanel api={api} projectId={project.id} testId={test.id} />
-
-        <div className="mt-6 grid gap-4 lg:grid-cols-2">
-          <section className="rounded-xl border border-app-border p-4">
-            <h3 className="font-semibold">Context semantic oferit de tine</h3>
-            <p className="mt-2 text-sm leading-6 text-app-muted">
-              În configurare, înregistrare sau review vei putea selecta produse,
-              carduri, rânduri repetitive și inputuri care primesc date.
-              Selecțiile și descrierile tale vor ghida interpretarea locală și
-              AI.
-            </p>
-          </section>
-          <section className="rounded-xl border border-app-border p-4">
-            <h3 className="font-semibold">Pagini relevante testului</h3>
-            <p className="mt-2 text-sm leading-6 text-app-muted">
-              Vor apărea numai paginile întâlnite în această înregistrare.
-              Analizele celorlalte teste din proiect nu vor fi trimise către AI.
-            </p>
-          </section>
         </div>
       </div>
 
@@ -547,6 +794,19 @@ export const TestDetailPage = ({
         }}
         onSave={(input) => {
           void updateTest(input);
+        }}
+      />
+      <ConfirmDialog
+        open={isDeleteOpen}
+        title="Ștergi testul?"
+        message={`Testul „${test.name}” și toate dataseturile, versiunile și rulările asociate vor fi șterse definitiv.`}
+        confirmLabel={isDeleting ? "Se șterge..." : "Șterge definitiv"}
+        confirmVariant="danger"
+        onCancel={() => {
+          if (!isDeleting) setIsDeleteOpen(false);
+        }}
+        onConfirm={() => {
+          if (!isDeleting) void deleteTest();
         }}
       />
     </section>

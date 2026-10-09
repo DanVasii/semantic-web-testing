@@ -25,13 +25,14 @@ export interface DatasetsPanelProps {
 }
 
 type DatasetValueKind =
-  "primitive" | "fixed" | GeneratedDatasetValue["strategy"];
+  "primitive" | "fixed" | "file" | GeneratedDatasetValue["strategy"];
 
 const valueKind = (value: DatasetValue): DatasetValueKind => {
   if (value === null || typeof value !== "object") {
     return "primitive";
   }
-  return value.type === "fixed" ? "fixed" : value.strategy;
+  if (value.type === "fixed" || value.type === "file") return value.type;
+  return value.strategy;
 };
 
 const defaultValue = (kind: DatasetValueKind): DatasetValue => {
@@ -40,6 +41,8 @@ const defaultValue = (kind: DatasetValueKind): DatasetValue => {
       return "";
     case "fixed":
       return { type: "fixed", value: "" };
+    case "file":
+      return { type: "file", path: "", name: "" };
     case "timestamp":
     case "uuid":
       return { type: "generated", strategy: kind };
@@ -177,6 +180,7 @@ const PrimitiveEditor = ({
 const strategyOptions = [
   { value: "primitive", label: "Valoare simplă" },
   { value: "fixed", label: "Valoare fixă" },
+  { value: "file", label: "Fișier administrat" },
   { value: "timestamp", label: "Timestamp" },
   { value: "uuid", label: "UUID" },
   { value: "random_number", label: "Număr aleator" },
@@ -193,6 +197,33 @@ const strategyOptions = [
   { value: "random_choice", label: "Alegere aleatorie din listă" },
   { value: "template", label: "Text din template" },
 ];
+
+const valueKindLabel = (value: DatasetValue): string =>
+  strategyOptions.find(({ value: kind }) => kind === valueKind(value))?.label ??
+  "Valoare";
+
+const valueSummary = (value: DatasetValue): string => {
+  if (value === null) return "null";
+  if (typeof value !== "object") return String(value) || "Șir gol";
+  if (value.type === "fixed") {
+    return value.value === null ? "null" : String(value.value) || "Șir gol";
+  }
+  if (value.type === "file") return value.name || "Niciun fișier";
+  if (value.strategy === "random_number") return `${value.min}…${value.max}`;
+  if (value.strategy === "unique_email") return value.template || "Email unic";
+  if (value.strategy === "current_date") return value.format || "Data curentă";
+  if (
+    value.strategy === "current_date_plus_days" ||
+    value.strategy === "current_date_minus_days"
+  ) {
+    return `${value.days} zile · ${value.format || "format implicit"}`;
+  }
+  if (value.strategy === "random_choice") {
+    return `${value.choices.length} opțiuni`;
+  }
+  if (value.strategy === "template") return value.template || "Template gol";
+  return value.strategy;
+};
 
 interface DatasetValueRowProps {
   api: SemanticAppApi;
@@ -248,7 +279,7 @@ const DatasetValueRow = ({
   };
 
   return (
-    <article className="rounded-xl border border-app-border bg-app-surface p-4">
+    <article className="rounded-xl border border-app-border bg-app-surface p-3 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="grid flex-1 gap-3 sm:grid-cols-2">
           <Input
@@ -282,7 +313,7 @@ const DatasetValueRow = ({
         </Button>
       </div>
 
-      <div className="mt-4">
+      <div className="mt-3">
         {kind === "primitive" ? (
           <PrimitiveEditor
             labelPrefix={fieldId}
@@ -301,6 +332,28 @@ const DatasetValueRow = ({
               onChange({ type: "fixed", value: next });
             }}
           />
+        ) : kind === "file" &&
+          value !== null &&
+          typeof value === "object" &&
+          value.type === "file" ? (
+          <div className="grid gap-2">
+            <p className="text-sm text-app-muted">
+              {value.name || "Nu a fost ales niciun fișier."}
+            </p>
+            <Button
+              variant="secondary"
+              disabled={api.selectDatasetFile === undefined}
+              onClick={() => {
+                void api
+                  .selectDatasetFile?.(projectId, testId)
+                  .then((selected) => {
+                    if (selected !== undefined) onChange(selected);
+                  });
+              }}
+            >
+              Alege și copiază fișierul
+            </Button>
+          </div>
         ) : null}
 
         {typeof value === "object" &&
@@ -466,7 +519,7 @@ const DatasetValueRow = ({
         </ul>
       ) : null}
 
-      <div className="mt-4 flex flex-wrap items-center gap-3">
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-app-border pt-3">
         <Button
           variant="secondary"
           disabled={isPreviewing}
@@ -501,6 +554,7 @@ export const DatasetsPanel = ({
 }: DatasetsPanelProps) => {
   const [datasets, setDatasets] = useState<TestDataset[]>([]);
   const [selectedId, setSelectedId] = useState<string>();
+  const [selectedFieldId, setSelectedFieldId] = useState<string>();
   const [draft, setDraft] = useState<TestDataset>();
   const [rawJson, setRawJson] = useState("");
   const [rawIssues, setRawIssues] = useState<ValidationIssue[]>([]);
@@ -514,6 +568,7 @@ export const DatasetsPanel = ({
   const selectDataset = (dataset: TestDataset): void => {
     const copy = structuredClone(dataset);
     setSelectedId(dataset.id);
+    setSelectedFieldId(Object.keys(copy.values)[0]);
     setDraft(copy);
     setRawJson(prettyDataset(copy));
     setRawIssues([]);
@@ -533,6 +588,7 @@ export const DatasetsPanel = ({
           selectDataset(items[0]);
         } else {
           setSelectedId(undefined);
+          setSelectedFieldId(undefined);
           setDraft(undefined);
           setRawJson("");
           setRawIssues([]);
@@ -552,6 +608,19 @@ export const DatasetsPanel = ({
       active = false;
     };
   }, [api, projectId, testId]);
+
+  useEffect(() => {
+    const values = draft?.values;
+    setSelectedFieldId((current) =>
+      values !== undefined &&
+      current !== undefined &&
+      Object.hasOwn(values, current)
+        ? current
+        : values === undefined
+          ? undefined
+          : Object.keys(values)[0],
+    );
+  }, [draft?.values]);
 
   const validation = useMemo(
     () => (draft ? validateTestDataset(draft) : undefined),
@@ -636,6 +705,7 @@ export const DatasetsPanel = ({
         selectDataset(remaining[0]);
       } else {
         setSelectedId(undefined);
+        setSelectedFieldId(undefined);
         setDraft(undefined);
         setRawJson("");
         setRawIssues([]);
@@ -649,7 +719,7 @@ export const DatasetsPanel = ({
   };
 
   const visualEditor = draft ? (
-    <div className="grid gap-4">
+    <div className="grid gap-3">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-64 flex-1">
           <Input
@@ -673,6 +743,7 @@ export const DatasetsPanel = ({
               ...draft,
               values: { ...draft.values, [fieldId]: "" },
             });
+            setSelectedFieldId(fieldId);
           }}
         >
           + Cheie
@@ -689,49 +760,100 @@ export const DatasetsPanel = ({
           </p>
         </div>
       ) : (
-        Object.entries(draft.values).map(([fieldId, value]) => (
-          <DatasetValueRow
-            key={fieldId}
-            api={api}
-            projectId={projectId}
-            testId={testId}
-            fieldId={fieldId}
-            value={value}
-            issues={validationIssues.filter((issue) =>
-              issue.path.startsWith(`$.values.${fieldId}`),
-            )}
-            onChange={(next) => {
-              updateDraft({
-                ...draft,
-                values: { ...draft.values, [fieldId]: next },
-              });
-            }}
-            onDelete={() => {
-              const values = { ...draft.values };
-              delete values[fieldId];
-              updateDraft({ ...draft, values });
-            }}
-            onRename={(nextFieldId) => {
-              const trimmed = nextFieldId.trim();
-              if (trimmed.length === 0) {
-                return "Cheia este obligatorie.";
-              }
-              if (trimmed !== fieldId && Object.hasOwn(draft.values, trimmed)) {
-                return "Cheia există deja.";
-              }
-              if (trimmed === fieldId) {
+        <div className="grid items-start gap-3 lg:grid-cols-[13rem_minmax(0,1fr)]">
+          <nav
+            className="max-h-[62vh] min-w-0 overflow-x-hidden overflow-y-auto rounded-xl border border-app-border bg-app-canvas p-2 lg:sticky lg:top-4"
+            aria-label="Cheile datasetului"
+          >
+            <div className="flex items-center justify-between gap-2 px-2 py-1.5">
+              <span className="text-xs font-semibold tracking-wide text-brand-700 uppercase">
+                Chei
+              </span>
+              <span className="rounded-full bg-app-surface px-2 py-0.5 text-[11px] font-semibold text-app-muted">
+                {Object.keys(draft.values).length}
+              </span>
+            </div>
+            <div className="mt-1 grid gap-1">
+              {Object.entries(draft.values).map(([fieldId, value]) => (
+                <button
+                  key={fieldId}
+                  type="button"
+                  aria-pressed={fieldId === selectedFieldId}
+                  className={`w-full rounded-lg border px-2.5 py-2 text-left ${
+                    fieldId === selectedFieldId
+                      ? "border-brand-500 bg-brand-50"
+                      : "border-transparent bg-app-surface hover:border-app-border"
+                  }`}
+                  onClick={() => setSelectedFieldId(fieldId)}
+                >
+                  <strong className="block truncate text-sm text-app-ink">
+                    {fieldId}
+                  </strong>
+                  <span className="mt-0.5 block truncate text-[10px] font-semibold tracking-wide text-app-muted uppercase">
+                    {valueKindLabel(value)}
+                  </span>
+                  <span className="mt-0.5 block truncate text-xs text-app-muted">
+                    {valueSummary(value)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </nav>
+          {selectedFieldId !== undefined &&
+          Object.hasOwn(draft.values, selectedFieldId) ? (
+            <DatasetValueRow
+              key={selectedFieldId}
+              api={api}
+              projectId={projectId}
+              testId={testId}
+              fieldId={selectedFieldId}
+              value={draft.values[selectedFieldId]!}
+              issues={validationIssues.filter((issue) =>
+                issue.path.startsWith(`$.values.${selectedFieldId}`),
+              )}
+              onChange={(next) => {
+                updateDraft({
+                  ...draft,
+                  values: { ...draft.values, [selectedFieldId]: next },
+                });
+              }}
+              onDelete={() => {
+                const values = { ...draft.values };
+                delete values[selectedFieldId];
+                const nextSelected = Object.keys(values)[0];
+                setSelectedFieldId(nextSelected);
+                updateDraft({ ...draft, values });
+              }}
+              onRename={(nextFieldId) => {
+                const trimmed = nextFieldId.trim();
+                if (trimmed.length === 0) {
+                  return "Cheia este obligatorie.";
+                }
+                if (
+                  trimmed !== selectedFieldId &&
+                  Object.hasOwn(draft.values, trimmed)
+                ) {
+                  return "Cheia există deja.";
+                }
+                if (trimmed === selectedFieldId) {
+                  return undefined;
+                }
+                const entries = Object.entries(draft.values).map(
+                  ([key, item]) =>
+                    key === selectedFieldId
+                      ? ([trimmed, item] as const)
+                      : ([key, item] as const),
+                );
+                setSelectedFieldId(trimmed);
+                updateDraft({
+                  ...draft,
+                  values: Object.fromEntries(entries),
+                });
                 return undefined;
-              }
-              const entries = Object.entries(draft.values).map(([key, item]) =>
-                key === fieldId
-                  ? ([trimmed, item] as const)
-                  : ([key, item] as const),
-              );
-              updateDraft({ ...draft, values: Object.fromEntries(entries) });
-              return undefined;
-            }}
-          />
-        ))
+              }}
+            />
+          ) : null}
+        </div>
       )}
     </div>
   ) : null;
@@ -782,11 +904,11 @@ export const DatasetsPanel = ({
   ) : null;
 
   return (
-    <section className="mt-6 rounded-xl border border-app-border bg-app-canvas p-4">
+    <section className="mt-6 rounded-xl border border-app-border bg-app-canvas p-3">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h3 className="font-semibold text-app-ink">Datasets</h3>
-          <p className="mt-1 text-sm text-app-muted">
+          <p className="mt-1 text-xs text-app-muted">
             Valorile sunt locale, salvate în clar și aparțin exclusiv acestui
             test. Nu introduce parole sau alte secrete.
           </p>
@@ -832,7 +954,7 @@ export const DatasetsPanel = ({
         </p>
       ) : null}
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-[16rem_1fr]">
+      <div className="mt-3 grid items-start gap-3 lg:grid-cols-[14rem_minmax(0,1fr)]">
         <aside className="rounded-xl border border-app-border bg-app-surface p-3">
           <form
             className="grid gap-2"
@@ -857,7 +979,7 @@ export const DatasetsPanel = ({
             </Button>
           </form>
 
-          <div className="mt-4 grid gap-2" aria-label="Lista dataseturilor">
+          <div className="mt-3 grid gap-1" aria-label="Lista dataseturilor">
             {isLoading ? (
               <p className="text-sm text-app-muted">Se încarcă...</p>
             ) : datasets.length === 0 ? (
@@ -870,7 +992,7 @@ export const DatasetsPanel = ({
                   key={dataset.id}
                   type="button"
                   aria-pressed={dataset.id === selectedId}
-                  className={`rounded-lg border px-3 py-2 text-left text-sm font-medium ${
+                  className={`rounded-lg border px-2.5 py-2 text-left text-sm font-medium ${
                     dataset.id === selectedId
                       ? "border-brand-500 bg-brand-50 text-brand-800"
                       : "border-app-border bg-app-surface text-app-ink hover:bg-app-canvas"
@@ -879,7 +1001,12 @@ export const DatasetsPanel = ({
                     selectDataset(dataset);
                   }}
                 >
-                  {dataset.name}
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="truncate">{dataset.name}</span>
+                    <span className="shrink-0 rounded-full bg-app-canvas px-1.5 py-0.5 text-[10px] text-app-muted">
+                      {Object.keys(dataset.values).length}
+                    </span>
+                  </span>
                 </button>
               ))
             )}

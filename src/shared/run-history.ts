@@ -1,5 +1,6 @@
 import type { MySqlRunDiff } from "./mysql.js";
 import type { JsonValue, StepRunResult, TestRun } from "./persistence.js";
+import type { RunArtifact } from "./test-suites.js";
 
 export interface RunHistoryFilters {
   testId?: string;
@@ -37,6 +38,7 @@ export interface RunHistoryDetails {
   imapResults: RunHistoryImapResult[];
   postRunResult?: JsonValue;
   error?: JsonValue;
+  artifacts?: RunArtifact[];
 }
 
 export interface RunStorageUsage {

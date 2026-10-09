@@ -102,6 +102,8 @@ const mapPageVersion = (row: DatabaseRow): PageVersion => ({
 const mapTest = (row: DatabaseRow): TestDefinition => {
   const description = optionalText(row, "description");
   const invalidation = optionalText(row, "invalidation_json");
+  const aiGeneration = optionalText(row, "ai_generation_json");
+  const stages = optionalText(row, "stages_json");
 
   return {
     id: text(row, "id"),
@@ -124,11 +126,22 @@ const mapTest = (row: DatabaseRow): TestDefinition => {
     flowItems: parseJson<TestDefinition["flowItems"]>(
       text(row, "flow_items_json"),
     ),
+    ...(stages === undefined
+      ? {}
+      : { stages: parseJson<NonNullable<TestDefinition["stages"]>>(stages) }),
     postRunChecks: normalizeTestPostRunChecks(
       parseJson<NonNullable<TestDefinition["postRunChecks"]>>(
         text(row, "post_run_checks_json"),
       ),
     ),
+    ...(aiGeneration === undefined
+      ? {}
+      : {
+          aiGeneration:
+            parseJson<NonNullable<TestDefinition["aiGeneration"]>>(
+              aiGeneration,
+            ),
+        }),
     ...(invalidation === undefined
       ? {}
       : {
@@ -196,11 +209,13 @@ const mapStepResult = (row: DatabaseRow): StepRunResult => {
   const locatorUsed = optionalText(row, "locator_used_json");
   const fallbackIndex = optionalNumber(row, "fallback_index");
   const error = optionalText(row, "error_json");
+  const stageId = optionalText(row, "stage_id");
 
   return {
     id: text(row, "id"),
     runId: text(row, "run_id"),
     stepId: text(row, "step_id"),
+    ...(stageId === undefined ? {} : { stageId }),
     status: text(row, "status") as StepRunResult["status"],
     ...(startedAt === undefined ? {} : { startedAt }),
     ...(endedAt === undefined ? {} : { endedAt }),
@@ -261,12 +276,28 @@ export interface ProjectBasicAuthRecord {
 }
 
 export interface ApplicationAiSettingsRecord {
-  provider: "none" | "ollama" | "gemini";
+  provider: "none" | "ollama" | "lm_studio" | "gemini" | "openai";
   ollamaBaseUrl: string;
   ollamaModel: string;
+  lmStudioBaseUrl: string;
+  lmStudioModel: string;
   geminiModel: string;
   encryptedGeminiApiKey?: string;
+  openaiModel: string;
+  encryptedOpenaiApiKey?: string;
   updatedAt: string;
+}
+
+export interface AiModelPricingRecord {
+  provider: "gemini" | "openai";
+  model: string;
+  source: "litellm" | "manual";
+  inputPerMillionUsd?: number;
+  outputPerMillionUsd?: number;
+  cachedInputPerMillionUsd?: number;
+  matchedModelId?: string;
+  fetchedAt: string;
+  expiresAt: string;
 }
 
 export interface ProjectMySqlSettingsRecord {
@@ -437,6 +468,7 @@ export class ApplicationAiSettingsRepository {
     );
     if (row === undefined) return undefined;
     const encryptedGeminiApiKey = optionalText(row, "encrypted_gemini_api_key");
+    const encryptedOpenaiApiKey = optionalText(row, "encrypted_openai_api_key");
     return {
       provider: text(
         row,
@@ -444,8 +476,12 @@ export class ApplicationAiSettingsRepository {
       ) as ApplicationAiSettingsRecord["provider"],
       ollamaBaseUrl: text(row, "ollama_base_url"),
       ollamaModel: text(row, "ollama_model"),
+      lmStudioBaseUrl: text(row, "lm_studio_base_url"),
+      lmStudioModel: text(row, "lm_studio_model"),
       geminiModel: text(row, "gemini_model"),
       ...(encryptedGeminiApiKey === undefined ? {} : { encryptedGeminiApiKey }),
+      openaiModel: text(row, "openai_model"),
+      ...(encryptedOpenaiApiKey === undefined ? {} : { encryptedOpenaiApiKey }),
       updatedAt: text(row, "updated_at"),
     };
   }
@@ -457,25 +493,101 @@ export class ApplicationAiSettingsRepository {
       .prepare(
         `INSERT INTO application_ai_settings (
           singleton_id, provider, ollama_base_url, ollama_model,
-          gemini_model, encrypted_gemini_api_key, updated_at
-        ) VALUES (1, ?, ?, ?, ?, ?, ?)
+          lm_studio_base_url, lm_studio_model, gemini_model,
+          encrypted_gemini_api_key, openai_model,
+          encrypted_openai_api_key, updated_at
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(singleton_id) DO UPDATE SET
           provider = excluded.provider,
           ollama_base_url = excluded.ollama_base_url,
           ollama_model = excluded.ollama_model,
+          lm_studio_base_url = excluded.lm_studio_base_url,
+          lm_studio_model = excluded.lm_studio_model,
           gemini_model = excluded.gemini_model,
           encrypted_gemini_api_key = excluded.encrypted_gemini_api_key,
+          openai_model = excluded.openai_model,
+          encrypted_openai_api_key = excluded.encrypted_openai_api_key,
           updated_at = excluded.updated_at`,
       )
       .run(
         settings.provider,
         settings.ollamaBaseUrl,
         settings.ollamaModel,
+        settings.lmStudioBaseUrl,
+        settings.lmStudioModel,
         settings.geminiModel,
         settings.encryptedGeminiApiKey ?? null,
+        settings.openaiModel,
+        settings.encryptedOpenaiApiKey ?? null,
         settings.updatedAt,
       );
     return settings;
+  }
+
+  public getModelPricing(
+    provider: AiModelPricingRecord["provider"],
+    model: string,
+  ): AiModelPricingRecord | undefined {
+    const row = asRow(
+      this.database
+        .prepare(
+          `SELECT * FROM ai_model_pricing_cache
+           WHERE provider = ? AND model = ?`,
+        )
+        .get(provider, model),
+    );
+    if (row === undefined) return undefined;
+    const inputPerMillionUsd = optionalNumber(row, "input_per_million_usd");
+    const outputPerMillionUsd = optionalNumber(row, "output_per_million_usd");
+    const cachedInputPerMillionUsd = optionalNumber(
+      row,
+      "cached_input_per_million_usd",
+    );
+    const matchedModelId = optionalText(row, "matched_model_id");
+    return {
+      provider: text(row, "provider") as AiModelPricingRecord["provider"],
+      model: text(row, "model"),
+      source: text(row, "source") as AiModelPricingRecord["source"],
+      ...(inputPerMillionUsd === undefined ? {} : { inputPerMillionUsd }),
+      ...(outputPerMillionUsd === undefined ? {} : { outputPerMillionUsd }),
+      ...(cachedInputPerMillionUsd === undefined
+        ? {}
+        : { cachedInputPerMillionUsd }),
+      ...(matchedModelId === undefined ? {} : { matchedModelId }),
+      fetchedAt: text(row, "fetched_at"),
+      expiresAt: text(row, "expires_at"),
+    };
+  }
+
+  public saveModelPricing(record: AiModelPricingRecord): AiModelPricingRecord {
+    this.database
+      .prepare(
+        `INSERT INTO ai_model_pricing_cache (
+          provider, model, source, input_per_million_usd,
+          output_per_million_usd, cached_input_per_million_usd,
+          matched_model_id, fetched_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(provider, model) DO UPDATE SET
+          source = excluded.source,
+          input_per_million_usd = excluded.input_per_million_usd,
+          output_per_million_usd = excluded.output_per_million_usd,
+          cached_input_per_million_usd = excluded.cached_input_per_million_usd,
+          matched_model_id = excluded.matched_model_id,
+          fetched_at = excluded.fetched_at,
+          expires_at = excluded.expires_at`,
+      )
+      .run(
+        record.provider,
+        record.model,
+        record.source,
+        record.inputPerMillionUsd ?? null,
+        record.outputPerMillionUsd ?? null,
+        record.cachedInputPerMillionUsd ?? null,
+        record.matchedModelId ?? null,
+        record.fetchedAt,
+        record.expiresAt,
+      );
+    return record;
   }
 }
 
@@ -759,8 +871,9 @@ export class TestRepository {
           id, project_id, name, description, status, version, test_mode,
           wipe_before_run, start_mode, start_url, normalized_start_url,
           workflow_state, created_at, updated_at, flow_items_json,
-          post_run_checks_json, invalidation_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          post_run_checks_json, invalidation_json, ai_generation_json,
+          stages_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         test.id,
@@ -780,6 +893,8 @@ export class TestRepository {
         json(test.flowItems),
         json(test.postRunChecks ?? defaultTestPostRunChecks()),
         test.invalidation === undefined ? null : json(test.invalidation),
+        test.aiGeneration === undefined ? null : json(test.aiGeneration),
+        test.stages === undefined ? null : json(test.stages),
       );
     return test;
   }
@@ -808,7 +923,8 @@ export class TestRepository {
           name = ?, description = ?, status = ?, version = ?,
           test_mode = ?, wipe_before_run = ?, start_mode = ?, start_url = ?,
           normalized_start_url = ?, workflow_state = ?, updated_at = ?,
-          flow_items_json = ?, post_run_checks_json = ?, invalidation_json = ?
+          flow_items_json = ?, post_run_checks_json = ?, invalidation_json = ?,
+          ai_generation_json = ?, stages_json = ?
         WHERE id = ?`,
       )
       .run(
@@ -826,6 +942,8 @@ export class TestRepository {
         json(test.flowItems),
         json(test.postRunChecks ?? defaultTestPostRunChecks()),
         test.invalidation === undefined ? null : json(test.invalidation),
+        test.aiGeneration === undefined ? null : json(test.aiGeneration),
+        test.stages === undefined ? null : json(test.stages),
         test.id,
       );
     return test;
@@ -1149,14 +1267,15 @@ export class RunRepository {
     this.database
       .prepare(
         `INSERT INTO step_results (
-          id, run_id, step_id, status, started_at, ended_at,
+          id, run_id, step_id, stage_id, status, started_at, ended_at,
           locator_used_json, fallback_index, error_json, logs_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         result.id,
         result.runId,
         result.stepId,
+        result.stageId ?? null,
         result.status,
         result.startedAt ?? null,
         result.endedAt ?? null,
@@ -1201,14 +1320,39 @@ export class MySqlRunDataRepository {
     return structuredClone(snapshot);
   }
 
-  public findBaseline(runId: string): MySqlRunSnapshot | undefined {
+  public findBaseline(
+    runId: string,
+    baselineKey?: string,
+  ): MySqlRunSnapshot | undefined {
     const row = asRow(
       this.database
         .prepare(
           `SELECT * FROM mysql_run_snapshots
-           WHERE run_id = ? AND kind = 'baseline'`,
+           WHERE run_id = ? AND kind = 'baseline'
+             AND ${baselineKey === undefined ? "check_step_id IS NULL" : "check_step_id = ?"}`,
         )
-        .get(runId),
+        .get(...(baselineKey === undefined ? [runId] : [runId, baselineKey])),
+    );
+    return row === undefined ? undefined : mapMySqlRunSnapshot(row);
+  }
+
+  public listBaselines(runId: string): MySqlRunSnapshot[] {
+    return asRows(
+      this.database
+        .prepare(
+          `SELECT * FROM mysql_run_snapshots
+           WHERE run_id = ? AND kind = 'baseline'
+           ORDER BY captured_at, id`,
+        )
+        .all(runId),
+    ).map(mapMySqlRunSnapshot);
+  }
+
+  public findSnapshot(id: string): MySqlRunSnapshot | undefined {
+    const row = asRow(
+      this.database
+        .prepare("SELECT * FROM mysql_run_snapshots WHERE id = ?")
+        .get(id),
     );
     return row === undefined ? undefined : mapMySqlRunSnapshot(row);
   }

@@ -12,6 +12,7 @@ import type {
   RecorderRawEvent,
   RecorderSnapshot,
 } from "../../shared/recorder.js";
+import type { ActionStep } from "../../shared/test-model.js";
 import {
   openApplicationDatabase,
   type ApplicationDatabase,
@@ -24,6 +25,7 @@ import {
 import { TestsService } from "../tests-service.js";
 import {
   RecorderService,
+  stableNavigationPattern,
   type RecorderAnalysisGateway,
   type RecorderBrowserGateway,
 } from "./recorder-service.js";
@@ -75,8 +77,8 @@ class MockPage extends EventEmitter {
     return this.frame;
   }
 
-  public capture(event: RecorderRawEvent): void {
-    this.binding?.({}, event);
+  public capture(event: RecorderRawEvent, sourceFrame = this.frame): void {
+    this.binding?.({ frame: sourceFrame }, event);
   }
 
   public navigate(url: string): void {
@@ -267,6 +269,89 @@ const createService = (analysis: RecorderAnalysisGateway): RecorderService =>
   );
 
 describe("RecorderService", () => {
+  it("keeps JavaScript dialogs open for the person recording", async () => {
+    const service = createService({
+      analyzeCurrentPage: vi.fn().mockResolvedValue(analysisResult()),
+    });
+    const dialog = {
+      accept: vi.fn(),
+      dismiss: vi.fn(),
+    };
+
+    await service.start(project.id, "test-1");
+    expect(page.listenerCount("dialog")).toBe(1);
+
+    page.emit("dialog", dialog);
+    expect(dialog.accept).not.toHaveBeenCalled();
+    expect(dialog.dismiss).not.toHaveBeenCalled();
+
+    await service.stop(project.id, "test-1");
+    expect(page.listenerCount("dialog")).toBe(0);
+  });
+
+  it("merges a click and its dynamic navigation into one warning-only step", async () => {
+    const service = createService({
+      analyzeCurrentPage: vi.fn().mockResolvedValue(analysisResult()),
+    });
+    await service.start(project.id, "test-1");
+    page.capture({
+      type: "click",
+      url: "https://example.test/checkout",
+      timestamp: "2026-07-25T10:00:01.000Z",
+      target: {
+        tagName: "button",
+        text: "Finalizează comanda",
+        role: "button",
+        dataAttributes: { "data-testid": "place-order" },
+      },
+    });
+    await waitForCapturedSteps(service, 2);
+
+    page.navigate(
+      "https://example.test/order-received/987654321?key=abc#summary",
+    );
+    await vi.waitFor(() => {
+      expect(
+        service.getStatus(project.id, "test-1").test.flowItems[1],
+      ).toMatchObject({
+        actionType: "click",
+        waitAfter: {
+          type: "url",
+          value: "https://example.test/order-received/**",
+          warningOnly: true,
+        },
+      });
+    });
+    expect(service.getStatus(project.id, "test-1").test.flowItems).toHaveLength(
+      2,
+    );
+    expect(stableNavigationPattern("https://example.test/cart?coupon=1")).toBe(
+      "https://example.test/cart",
+    );
+  });
+
+  it("preserves the cross-origin frame context of a recorded input", async () => {
+    const service = createService({
+      analyzeCurrentPage: vi.fn().mockResolvedValue(analysisResult()),
+    });
+    await service.start(project.id, "test-1");
+    const stripeFrame = {
+      url: () => "https://js.stripe.com/v3/elements-inner-payment",
+    } as unknown as Frame;
+
+    page.capture(fillEvent(), stripeFrame);
+    await waitForCapturedSteps(service, 2);
+
+    expect(
+      service.getStatus(project.id, "test-1").test.flowItems[1],
+    ).toMatchObject({
+      actionType: "fill",
+      target: {
+        frame: { origin: "https://js.stripe.com" },
+      },
+    });
+  });
+
   it("runs start, live analysis, automatic save and Done as a recorder version", async () => {
     const analyzeCurrentPage = vi.fn().mockResolvedValue(analysisResult());
     const service = createService({ analyzeCurrentPage });
@@ -288,14 +373,18 @@ describe("RecorderService", () => {
     );
 
     page.capture(fillEvent());
-    await waitForCapturedSteps(service, 1);
+    await waitForCapturedSteps(service, 2);
     const recorded = service.getStatus(project.id, "test-1");
     expect(recorded).toMatchObject({
       state: "recording",
       signal: "green",
-      capturedSteps: 1,
+      capturedSteps: 2,
       test: {
         flowItems: [
+          {
+            actionType: "navigate",
+            url: "https://example.test/checkout",
+          },
           {
             actionType: "fill",
             pageId: "page-1",
@@ -319,7 +408,51 @@ describe("RecorderService", () => {
     );
     expect(states).toContain("yellow:analyzing");
     expect(states).toContain("green:recording");
-    expect(page.evaluateCalls.length).toBeGreaterThan(3);
+    expect(page.evaluateCalls).toHaveLength(3);
+  });
+
+  it("keeps separate dataset values when the same field is filled more than once", async () => {
+    const service = createService({
+      analyzeCurrentPage: vi.fn().mockResolvedValue(analysisResult()),
+    });
+    await service.start(project.id, "test-1");
+    const searchTarget: NonNullable<RecorderRawEvent["target"]> = {
+      tagName: "input",
+      inputType: "search",
+      label: "Căutare produse",
+      role: "textbox",
+      dataAttributes: {},
+    };
+
+    page.capture({
+      type: "fill",
+      url: "https://example.test/shop",
+      timestamp: "2026-07-25T10:00:01.000Z",
+      target: searchTarget,
+      value: "telefon",
+    });
+    await waitForCapturedSteps(service, 2);
+
+    page.capture({
+      type: "fill",
+      url: "https://example.test/shop",
+      timestamp: "2026-07-25T10:00:02.000Z",
+      target: searchTarget,
+      value: "tabletă",
+    });
+    await waitForCapturedSteps(service, 3);
+
+    expect(
+      service
+        .getStatus(project.id, "test-1")
+        .test.flowItems.map((item) =>
+          item.type === "action" ? item.valueKey : undefined,
+        ),
+    ).toEqual([undefined, "cautare_produse", "cautare_produse_2"]);
+    expect(datasetRepository.listByTest("test-1")[0]?.values).toMatchObject({
+      cautare_produse: { type: "fixed", value: "telefon" },
+      cautare_produse_2: { type: "fixed", value: "tabletă" },
+    });
   });
 
   it("retries a failed analysis and saves the step automatically", async () => {
@@ -340,7 +473,7 @@ describe("RecorderService", () => {
     });
 
     service.retry(project.id, "test-1");
-    await waitForCapturedSteps(service, 1);
+    await waitForCapturedSteps(service, 2);
     expect(analyzeCurrentPage).toHaveBeenCalledTimes(2);
   });
 
@@ -389,12 +522,114 @@ describe("RecorderService", () => {
     await service.start(project.id, "test-1");
 
     page.capture(fillEvent());
-    await waitForCapturedSteps(service, 2);
-    expect(analyzeCurrentPage).toHaveBeenCalledTimes(3);
+    await waitForCapturedSteps(service, 3);
+    expect(analyzeCurrentPage).toHaveBeenCalledTimes(2);
     expect(
-      service.getStatus(project.id, "test-1").test.flowItems[0],
+      service.getStatus(project.id, "test-1").test.flowItems[1],
     ).toMatchObject({ pageId: "page-2" });
     expect(service.getStatus(project.id, "test-1").queuedEvents).toBe(0);
+  });
+
+  it("queues interactions while analysis is running and reuses the page capture", async () => {
+    let resolveAnalysis: ((result: PageAnalysisResult) => void) | undefined;
+    const analyzeCurrentPage = vi.fn(
+      () =>
+        new Promise<PageAnalysisResult>((resolve) => {
+          resolveAnalysis = resolve;
+        }),
+    );
+    const service = createService({ analyzeCurrentPage });
+    await service.start(project.id, "test-1");
+
+    page.capture(fillEvent());
+    page.capture({
+      type: "scroll",
+      url: "https://example.test/checkout",
+      timestamp: "2026-07-25T10:00:01.500Z",
+      scrollX: 0,
+      scrollY: 420,
+      scrollMode: "wheel",
+    });
+    page.capture({
+      type: "scroll",
+      url: "https://example.test/checkout",
+      timestamp: "2026-07-25T10:00:01.750Z",
+      scrollX: 0,
+      scrollY: 180,
+      scrollMode: "wheel",
+    });
+    await Promise.resolve();
+    resolveAnalysis?.(analysisResult());
+
+    await waitForCapturedSteps(service, 3);
+    expect(analyzeCurrentPage).toHaveBeenCalledTimes(1);
+    expect(
+      service
+        .getStatus(project.id, "test-1")
+        .test.flowItems.map((item) =>
+          item.type === "action" ? item.actionType : item.type,
+        ),
+    ).toEqual(["navigate", "fill", "scroll"]);
+    expect(
+      service.getStatus(project.id, "test-1").test.flowItems[2],
+    ).toMatchObject({
+      actionType: "scroll",
+      scrollY: 600,
+      scrollMode: "wheel",
+    });
+  });
+
+  it("does not merge consecutive scrolls from different containers", async () => {
+    let resolveAnalysis: ((result: PageAnalysisResult) => void) | undefined;
+    const analyzeCurrentPage = vi.fn(
+      () =>
+        new Promise<PageAnalysisResult>((resolve) => {
+          resolveAnalysis = resolve;
+        }),
+    );
+    const service = createService({ analyzeCurrentPage });
+    await service.start(project.id, "test-1");
+
+    page.capture(fillEvent());
+    page.capture({
+      type: "scroll",
+      url: "https://example.test/checkout",
+      timestamp: "2026-07-25T10:00:01.500Z",
+      scrollX: 0,
+      scrollY: 120,
+      target: {
+        tagName: "div",
+        id: "filters",
+        dataAttributes: {},
+      },
+    });
+    page.capture({
+      type: "scroll",
+      url: "https://example.test/checkout",
+      timestamp: "2026-07-25T10:00:01.750Z",
+      scrollX: 0,
+      scrollY: 180,
+      target: {
+        tagName: "div",
+        id: "results",
+        dataAttributes: {},
+      },
+    });
+    await Promise.resolve();
+    resolveAnalysis?.(analysisResult());
+
+    await waitForCapturedSteps(service, 4);
+    const scrolls = service
+      .getStatus(project.id, "test-1")
+      .test.flowItems.filter(
+        (item): item is ActionStep =>
+          item.type === "action" && item.actionType === "scroll",
+      );
+    expect(scrolls).toHaveLength(2);
+    expect(scrolls[0]).toMatchObject({ scrollY: 120 });
+    expect(scrolls[0]?.target?.primary).toMatchObject({ value: "#filters" });
+    expect(scrolls[1]).toMatchObject({ scrollY: 180 });
+    expect(scrolls[1]?.target?.primary).toMatchObject({ value: "#results" });
   });
 
   it("restores the existing test when a re-recording is stopped empty", async () => {
@@ -403,9 +638,9 @@ describe("RecorderService", () => {
     });
     await service.start(project.id, "test-1");
     page.capture(fillEvent());
-    await waitForCapturedSteps(service, 1);
+    await waitForCapturedSteps(service, 2);
     const completed = await service.stop(project.id, "test-1");
-    const existingStep = completed.test.flowItems[0];
+    const existingFlow = completed.test.flowItems;
 
     const restarted = await service.start(project.id, "test-1");
     expect(restarted).toMatchObject({
@@ -421,7 +656,7 @@ describe("RecorderService", () => {
       canStart: true,
       test: {
         workflowState: "flow_analyzed",
-        flowItems: [existingStep],
+        flowItems: existingFlow,
       },
     });
     expect(service.getStatus(project.id, "test-1")).toMatchObject({
@@ -429,9 +664,33 @@ describe("RecorderService", () => {
       canStart: true,
       test: {
         workflowState: "flow_analyzed",
-        flowItems: [existingStep],
+        flowItems: existingFlow,
       },
     });
+  });
+
+  it("continues recording from the current page without clearing existing steps", async () => {
+    const service = createService({
+      analyzeCurrentPage: vi.fn().mockResolvedValue(analysisResult()),
+    });
+    await service.start(project.id, "test-1");
+    page.capture(fillEvent());
+    await waitForCapturedSteps(service, 2);
+    const completed = await service.stop(project.id, "test-1");
+
+    const continued = await service.continueRecording(project.id, "test-1");
+
+    expect(continued).toMatchObject({
+      state: "recording",
+      signal: "green",
+      continuationReady: true,
+      capturedSteps: completed.test.flowItems.length,
+      test: {
+        workflowState: "recording",
+        flowItems: completed.test.flowItems,
+      },
+    });
+    expect(browser.openProjectUrl).toHaveBeenCalledOnce();
   });
 
   it("keeps the start action available when browser preparation fails", async () => {

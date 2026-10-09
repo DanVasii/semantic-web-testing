@@ -162,6 +162,7 @@ export interface MySqlCleanupLog {
 
 export interface MySqlRunDetails {
   baselineSnapshotId?: string;
+  baselineSnapshotIds?: string[];
   diffs: MySqlRunDiff[];
   cleanupPreview?: MySqlCleanupPreview;
   cleanupLogs: MySqlCleanupLog[];

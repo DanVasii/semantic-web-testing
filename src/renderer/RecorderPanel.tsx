@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { SemanticAppApi } from "../shared/ipc.js";
 import type { Project, TestDefinition } from "../shared/persistence.js";
+import type { RunnerSnapshot } from "../shared/runner.js";
 import type {
   RecorderSnapshot,
   RecorderStepDraft,
@@ -13,6 +14,7 @@ import {
 } from "../shared/test-model.js";
 import { Button } from "./components/Button.js";
 import { ConfirmDialog } from "./components/ConfirmDialog.js";
+import { Toast } from "./components/Toast.js";
 
 export interface RecorderPanelProps {
   api: SemanticAppApi;
@@ -93,7 +95,12 @@ export const RecorderPanel = ({
   const [fallbacksJson, setFallbacksJson] = useState("");
   const [isWorking, setIsWorking] = useState(false);
   const [showRerecordConfirm, setShowRerecordConfirm] = useState(false);
+  const [selectedStageId, setSelectedStageId] = useState(
+    () => test.stages?.[0]?.id ?? "",
+  );
   const [error, setError] = useState<string>();
+  const [replay, setReplay] = useState<RunnerSnapshot>();
+  const [showContinuationReady, setShowContinuationReady] = useState(false);
 
   const acceptSnapshot = useCallback(
     (next: RecorderSnapshot): void => {
@@ -117,6 +124,10 @@ export const RecorderPanel = ({
         next.test.workflowState !== test.workflowState
       ) {
         onTestUpdated(next.test);
+      }
+      if (next.continuationReady === true) {
+        setReplay(undefined);
+        setShowContinuationReady(true);
       }
     },
     [
@@ -143,9 +154,22 @@ export const RecorderPanel = ({
     const unsubscribe = api.onRecorderStatusChange((next) => {
       if (mounted) acceptSnapshot(next);
     });
+    const unsubscribeRunner =
+      typeof api.onRunnerStatusChange === "function"
+        ? api.onRunnerStatusChange((next) => {
+            if (
+              mounted &&
+              next.run?.projectId === project.id &&
+              next.run.testId === test.id
+            ) {
+              setReplay(next);
+            }
+          })
+        : () => undefined;
     return () => {
       mounted = false;
       unsubscribe();
+      unsubscribeRunner();
     };
   }, [acceptSnapshot, api, project.id, test.id]);
 
@@ -156,6 +180,30 @@ export const RecorderPanel = ({
     setError(undefined);
     try {
       acceptSnapshot(await operation());
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setIsWorking(false);
+    }
+  };
+
+  const startSelectedStage = (): Promise<RecorderSnapshot> =>
+    selectedStageId.length === 0
+      ? api.startRecorder(project.id, test.id)
+      : api.startRecorder(project.id, test.id, selectedStageId);
+
+  const continueRecording = async (): Promise<void> => {
+    setIsWorking(true);
+    setError(undefined);
+    setShowContinuationReady(false);
+    try {
+      setReplay(
+        await api.continueRecorder(
+          project.id,
+          test.id,
+          selectedStageId.length === 0 ? undefined : selectedStageId,
+        ),
+      );
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
@@ -205,18 +253,33 @@ export const RecorderPanel = ({
     snapshot.signal === "green" &&
     snapshot.capturedSteps > 0 &&
     snapshot.canStop;
+  const selectedStage = test.stages?.find(({ id }) => id === selectedStageId);
   const isRerecord =
     snapshot?.canStart === true &&
-    (snapshot.test.flowItems.length > 0 ||
+    ((selectedStage?.flowItems.length ?? snapshot.test.flowItems.length) > 0 ||
       snapshot.test.workflowState !== "not_recorded");
   const editingDisabled = isWorking || snapshot?.signal === "yellow";
+  const replayActive =
+    replay !== undefined &&
+    !["completed", "failed", "stopped"].includes(replay.state);
+  const replayCanContinue =
+    replay !== undefined &&
+    [
+      "waiting_for_start",
+      "waiting_at_breakpoint",
+      "waiting_after_step",
+      "waiting_for_manual_intervention",
+      "waiting_for_missing_data",
+    ].includes(replay.state);
   const supportedActions = useMemo(
     () =>
       ACTION_TYPES.filter((action) =>
         [
           "navigate",
+          "hover",
           "click",
           "fill",
+          "upload_file",
           "select_option",
           "check",
           "uncheck",
@@ -229,6 +292,16 @@ export const RecorderPanel = ({
 
   return (
     <section className="mt-6 rounded-xl border border-app-border bg-app-canvas p-4">
+      {showContinuationReady ? (
+        <div className="fixed top-4 right-4 z-[70] w-[min(24rem,calc(100vw-2rem))]">
+          <Toast
+            variant="success"
+            title="Recorder pregătit"
+            message="Poți începe să înregistrezi restul pașilor."
+            onDismiss={() => setShowContinuationReady(false)}
+          />
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h3 className="font-semibold">Recorder semantic</h3>
@@ -242,18 +315,46 @@ export const RecorderPanel = ({
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
+        {test.stages !== undefined && test.stages.length > 1 ? (
+          <label className="text-xs font-semibold text-app-muted">
+            Etapa înregistrată
+            <select
+              className="ml-2 min-h-10 rounded-lg border border-app-border bg-app-surface px-3 text-sm"
+              value={selectedStageId}
+              disabled={
+                isWorking || replayActive || snapshot?.canStart !== true
+              }
+              onChange={(event) => setSelectedStageId(event.target.value)}
+            >
+              {test.stages.map((stage, index) => (
+                <option key={stage.id} value={stage.id}>
+                  {index + 1}. {stage.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         {snapshot?.canStart ? (
           <Button
-            disabled={isWorking}
+            disabled={isWorking || replayActive}
             onClick={() => {
               if (isRerecord) {
                 setShowRerecordConfirm(true);
               } else {
-                void run(() => api.startRecorder(project.id, test.id));
+                void run(startSelectedStage);
               }
             }}
           >
-            {isRerecord ? "Reînregistrează testul" : "Înregistrează testul"}
+            {isRerecord ? "Reînregistrează flow-ul" : "Înregistrează flow-ul"}
+          </Button>
+        ) : null}
+        {snapshot?.canStart && isRerecord ? (
+          <Button
+            variant="secondary"
+            disabled={isWorking || replayActive}
+            onClick={() => void continueRecording()}
+          >
+            Continuă înregistrarea
           </Button>
         ) : null}
         {canFinish ? (
@@ -283,6 +384,74 @@ export const RecorderPanel = ({
             : `${snapshot.capturedSteps} pași adăugați · ${snapshot.queuedEvents} evenimente în coadă`}
         </span>
       </div>
+
+      {replay !== undefined && !showContinuationReady ? (
+        <div className="mt-4 rounded-lg border border-brand-200 bg-brand-50 p-3">
+          <p className="font-semibold text-brand-900">
+            Se redă flow-ul existent
+          </p>
+          <p className="mt-1 text-sm text-brand-800">
+            {replay.message ?? replay.state} · pasul{" "}
+            {Math.max(0, replay.currentStepIndex + 1)} din {replay.totalSteps}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {replayCanContinue && replay.run ? (
+              <Button
+                onClick={() => {
+                  void api
+                    .continueRun(replay.run!.id)
+                    .then(setReplay)
+                    .catch((reason: unknown) => setError(errorMessage(reason)));
+                }}
+              >
+                Continuă replay-ul
+              </Button>
+            ) : null}
+            {replay.state === "paused_on_error" && replay.run ? (
+              <>
+                <Button
+                  onClick={() => {
+                    void api
+                      .retryRunStep(replay.run!.id)
+                      .then(setReplay)
+                      .catch((reason: unknown) =>
+                        setError(errorMessage(reason)),
+                      );
+                  }}
+                >
+                  Reîncearcă pasul
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    void api
+                      .skipRunStep(replay.run!.id)
+                      .then(setReplay)
+                      .catch((reason: unknown) =>
+                        setError(errorMessage(reason)),
+                      );
+                  }}
+                >
+                  Sari peste pas
+                </Button>
+              </>
+            ) : null}
+            {replayActive && replay.run ? (
+              <Button
+                variant="danger"
+                onClick={() => {
+                  void api
+                    .stopRun(replay.run!.id)
+                    .then(setReplay)
+                    .catch((reason: unknown) => setError(errorMessage(reason)));
+                }}
+              >
+                Oprește replay-ul
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       {error ? (
         <p
@@ -496,7 +665,7 @@ export const RecorderPanel = ({
       <ConfirmDialog
         open={showRerecordConfirm}
         title="Reînregistrezi testul?"
-        message="La pornire, pașii existenți sunt înlocuiți de noua înregistrare. Dacă o oprești fără niciun pas, versiunea actuală va fi restaurată."
+        message={`La pornire, pașii existenți din etapa „${selectedStage?.name ?? "Flow principal"}” sunt înlocuiți de noua înregistrare. Dacă o oprești fără niciun pas, versiunea actuală va fi restaurată.`}
         confirmLabel="Reînregistrează"
         confirmVariant="danger"
         onCancel={() => {
@@ -504,7 +673,7 @@ export const RecorderPanel = ({
         }}
         onConfirm={() => {
           setShowRerecordConfirm(false);
-          void run(() => api.startRecorder(project.id, test.id));
+          void run(startSelectedStage);
         }}
       />
     </section>

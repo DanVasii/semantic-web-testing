@@ -1,4 +1,4 @@
-import type { BrowserContext, Frame, Page } from "playwright-core";
+import type { BrowserContext, Dialog, Frame, Page } from "playwright-core";
 
 import type {
   BrowserLaunchOptions,
@@ -64,10 +64,12 @@ interface RecorderSession {
   project: Project;
   originalTest: TestDefinition;
   test: TestDefinition;
+  stageId?: string;
   bindingName: string;
   snapshot: RecorderSnapshot;
   pages: Set<Page>;
   navigationListeners: Map<Page, (frame: Frame) => void>;
+  dialogListeners: Map<Page, (dialog: Dialog) => void>;
   context: BrowserContext;
   contextPageListener: (page: Page) => void;
   queue: Array<{ event: RecorderRawEvent; page: Page }>;
@@ -76,7 +78,60 @@ interface RecorderSession {
   failedDraft?: RecorderStepDraft;
   navigationGeneration: number;
   lastNavigationUrl: string;
+  initialNavigationUrl?: string;
+  analyzedGeneration?: number;
+  lastAnalyzedPageId?: string;
+  lastRecordedEvent?: { event: RecorderRawEvent; page: Page };
 }
+
+const recordedFlow = (
+  test: TestDefinition,
+  stageId?: string,
+): TestDefinition["flowItems"] => {
+  if (test.stages === undefined) return test.flowItems;
+  const stage =
+    stageId === undefined
+      ? test.stages[0]
+      : test.stages.find((candidate) => candidate.id === stageId);
+  return stage?.flowItems ?? [];
+};
+
+const dynamicRouteSegment = (segment: string): boolean =>
+  /^\d+$/.test(segment) ||
+  /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(segment) ||
+  (/\d/.test(segment) && segment.length >= 8) ||
+  /^[0-9a-f]{16,}$/i.test(segment);
+
+export const stableNavigationPattern = (value: string): string => {
+  const url = new URL(value);
+  const segments = url.pathname.split("/").filter(Boolean);
+  const dynamicIndex = segments.findIndex(dynamicRouteSegment);
+  const stableSegments =
+    dynamicIndex < 0 ? segments : segments.slice(0, dynamicIndex);
+  const stablePath =
+    stableSegments.length === 0 ? "/" : `/${stableSegments.join("/")}`;
+  return dynamicIndex < 0
+    ? `${url.origin}${stablePath}`
+    : `${url.origin}${stablePath === "/" ? "" : stablePath}/**`;
+};
+
+const canMergeNavigation = (
+  session: RecorderSession,
+  current: { event: RecorderRawEvent; page: Page },
+): boolean => {
+  const previous = session.lastRecordedEvent;
+  if (
+    current.event.type !== "navigate" ||
+    previous?.event.type !== "click" ||
+    previous.page !== current.page
+  ) {
+    return false;
+  }
+  const elapsed =
+    new Date(current.event.timestamp).getTime() -
+    new Date(previous.event.timestamp).getTime();
+  return Number.isFinite(elapsed) && elapsed >= 0 && elapsed <= 5_000;
+};
 
 const activeBrowserStates = new Set([
   "starting",
@@ -105,6 +160,34 @@ const copySnapshot = (snapshot: RecorderSnapshot): RecorderSnapshot => ({
     : { pendingStep: structuredClone(snapshot.pendingStep) }),
 });
 
+const withUniqueCapturedValueKey = (
+  test: TestDefinition,
+  draft: RecorderStepDraft,
+): RecorderStepDraft => {
+  const baseKey = draft.step.valueKey;
+  if (baseKey === undefined || draft.capturedValue === undefined) return draft;
+
+  const usedKeys = new Set(
+    test.flowItems.flatMap((item) =>
+      item.type === "action" && item.valueKey !== undefined
+        ? [item.valueKey]
+        : [],
+    ),
+  );
+  if (!usedKeys.has(baseKey)) return draft;
+
+  let suffix = 2;
+  while (usedKeys.has(`${baseKey}_${suffix}`)) suffix += 1;
+
+  return {
+    ...draft,
+    step: {
+      ...draft.step,
+      valueKey: `${baseKey}_${suffix}`,
+    },
+  };
+};
+
 const isStringRecord = (value: unknown): value is Record<string, string> =>
   typeof value === "object" &&
   value !== null &&
@@ -126,6 +209,7 @@ const isRecorderRawEvent = (value: unknown): value is RecorderRawEvent => {
     typeof value.type !== "string" ||
     ![
       "click",
+      "hover",
       "fill",
       "select",
       "checkbox",
@@ -142,9 +226,24 @@ const isRecorderRawEvent = (value: unknown): value is RecorderRawEvent => {
     return false;
   }
   return (
-    !("target" in value) ||
-    value.target === undefined ||
-    isElementSnapshot(value.target)
+    (!("target" in value) ||
+      value.target === undefined ||
+      isElementSnapshot(value.target)) &&
+    (!("hoverCandidates" in value) ||
+      value.hoverCandidates === undefined ||
+      (Array.isArray(value.hoverCandidates) &&
+        value.hoverCandidates.length <= 3 &&
+        value.hoverCandidates.every(isElementSnapshot))) &&
+    (!("scrollMode" in value) ||
+      value.scrollMode === undefined ||
+      value.scrollMode === "dom" ||
+      value.scrollMode === "wheel") &&
+    (!("frameContext" in value) ||
+      value.frameContext === undefined ||
+      (typeof value.frameContext === "object" &&
+        value.frameContext !== null &&
+        "origin" in value.frameContext &&
+        typeof value.frameContext.origin === "string"))
   );
 };
 
@@ -205,6 +304,24 @@ export class RecorderService {
   public async start(
     projectId: string,
     testId: string,
+    stageId?: string,
+  ): Promise<RecorderSnapshot> {
+    return this.startSession(projectId, testId, stageId, false);
+  }
+
+  public async continueRecording(
+    projectId: string,
+    testId: string,
+    stageId?: string,
+  ): Promise<RecorderSnapshot> {
+    return this.startSession(projectId, testId, stageId, true);
+  }
+
+  private async startSession(
+    projectId: string,
+    testId: string,
+    stageId: string | undefined,
+    continuation: boolean,
   ): Promise<RecorderSnapshot> {
     const sessionKey = this.key(projectId, testId);
     if (this.sessions.has(sessionKey)) {
@@ -217,9 +334,14 @@ export class RecorderService {
       testId,
       state: "preparing",
       signal: "yellow",
-      message: "Se pregătește browserul și recorderul.",
+      message: continuation
+        ? "Flow-ul a ajuns la final. Se pornește recorderul."
+        : "Se pregătește browserul și recorderul.",
       test: originalTest,
-      capturedSteps: 0,
+      ...(stageId === undefined ? {} : { stageId }),
+      capturedSteps: continuation
+        ? recordedFlow(originalTest, stageId).length
+        : 0,
       queuedEvents: 0,
       canStart: false,
       canStop: false,
@@ -231,8 +353,12 @@ export class RecorderService {
     let page: Page;
     let context: BrowserContext;
     try {
-      await this.prepareBrowser(project, originalTest);
-      test = this.testsService.beginRecording(projectId, testId);
+      if (!continuation) {
+        await this.prepareBrowser(project, originalTest, stageId);
+      }
+      test = continuation
+        ? this.testsService.continueRecording(projectId, testId, stageId)
+        : this.testsService.beginRecording(projectId, testId, stageId);
       page = this.browser.getRunnerPage(projectId);
       context = this.browser.getRunnerContext(projectId);
     } catch (error) {
@@ -247,27 +373,37 @@ export class RecorderService {
       project,
       originalTest,
       test,
+      ...(stageId === undefined ? {} : { stageId }),
       bindingName,
       pages: new Set(),
       navigationListeners: new Map(),
+      dialogListeners: new Map(),
       context,
       contextPageListener: () => undefined,
       queue: [],
       navigationGeneration: 0,
       lastNavigationUrl: page.url(),
+      ...(!continuation &&
+      (stageId === undefined || originalTest.stages?.[0]?.id === stageId)
+        ? { initialNavigationUrl: page.url() }
+        : {}),
       snapshot: {
         projectId,
         testId,
         state: "recording",
         signal: "green",
-        message: "Recorder activ. Execută următoarea acțiune în browser.",
+        message: continuation
+          ? "Poți începe să înregistrezi restul pașilor."
+          : "Recorder activ. Execută următoarea acțiune în browser.",
         test,
-        capturedSteps: 0,
+        ...(stageId === undefined ? {} : { stageId }),
+        capturedSteps: recordedFlow(test, stageId).length,
         queuedEvents: 0,
         canStart: false,
         canStop: false,
         canRetry: false,
         canIgnore: false,
+        ...(continuation ? { continuationReady: true } : {}),
       },
     };
     session.contextPageListener = (nextPage) => {
@@ -306,15 +442,20 @@ export class RecorderService {
     if (session.processing !== undefined) {
       await session.processing;
     }
+    const capturedFlow = recordedFlow(session.test, session.stageId);
     const cleanFinish =
       session.snapshot.state === "recording" &&
       session.snapshot.signal === "green" &&
       session.queue.length === 0 &&
       session.snapshot.pendingStep === undefined &&
-      session.test.flowItems.length > 0;
-    const emptyRecording = session.test.flowItems.length === 0;
+      capturedFlow.length > 0;
+    const emptyRecording = capturedFlow.length === 0;
     const test = cleanFinish
-      ? await this.testsService.completeRecording(projectId, testId)
+      ? await this.testsService.completeRecording(
+          projectId,
+          testId,
+          session.stageId,
+        )
       : emptyRecording
         ? this.testsService.cancelRecording(
             projectId,
@@ -334,7 +475,8 @@ export class RecorderService {
           ? "Înregistrarea goală a fost anulată. Poți porni din nou recorderul."
           : "Recorderul s-a oprit cu pași sau analize nefinalizate.",
       test,
-      capturedSteps: test.flowItems.length,
+      ...(session.stageId === undefined ? {} : { stageId: session.stageId }),
+      capturedSteps: recordedFlow(test, session.stageId).length,
       queuedEvents: 0,
       canStart: canStartRecording(test.workflowState),
       canStop: false,
@@ -355,12 +497,17 @@ export class RecorderService {
     if (session.snapshot.pendingStep === undefined) {
       throw new Error("Nu există un pas recorder în preview.");
     }
+    const uniqueDraft = withUniqueCapturedValueKey(
+      session.test,
+      structuredClone(draft),
+    );
     session.test = this.testsService.appendRecordedStep(
       projectId,
       testId,
-      structuredClone(draft.step),
+      uniqueDraft.step,
+      session.stageId,
     );
-    this.persistCapturedValue(session.test, draft);
+    this.persistCapturedValue(session.test, uniqueDraft);
     delete session.currentEvent;
     delete session.failedDraft;
     const nextSnapshot = { ...session.snapshot };
@@ -375,7 +522,7 @@ export class RecorderService {
           ? "Pas adăugat. Recorderul este pregătit pentru următoarea acțiune."
           : "Pas adăugat. Se procesează evenimentul următor.",
       test: session.test,
-      capturedSteps: session.test.flowItems.length,
+      capturedSteps: recordedFlow(session.test, session.stageId).length,
       queuedEvents: session.queue.length,
       canStop: session.queue.length === 0,
       canRetry: false,
@@ -501,7 +648,6 @@ export class RecorderService {
     session: RecorderSession,
     current: { event: RecorderRawEvent; page: Page },
   ): Promise<void> {
-    await this.setBlocked(session, true);
     this.publish(session, {
       ...session.snapshot,
       state: "analyzing",
@@ -517,30 +663,112 @@ export class RecorderService {
     });
     session.failedDraft = draft;
     try {
-      await this.wait(this.stabilizationMs);
-      let generation = session.navigationGeneration;
-      let result = await this.analysis.analyzeCurrentPage(session.project.id);
-      if (generation !== session.navigationGeneration) {
-        generation = session.navigationGeneration;
+      let pageId = session.lastAnalyzedPageId;
+      if (
+        pageId === undefined ||
+        session.analyzedGeneration !== session.navigationGeneration
+      ) {
         await this.wait(this.stabilizationMs);
-        result = await this.analysis.analyzeCurrentPage(session.project.id);
+        let generation = session.navigationGeneration;
+        let result = await this.analysis.analyzeCurrentPage(session.project.id);
         if (generation !== session.navigationGeneration) {
-          throw new Error(
-            "Pagina s-a schimbat din nou în timpul capturii. Reîncearcă.",
-          );
+          generation = session.navigationGeneration;
+          await this.wait(this.stabilizationMs);
+          result = await this.analysis.analyzeCurrentPage(session.project.id);
+          if (generation !== session.navigationGeneration) {
+            throw new Error(
+              "Pagina s-a schimbat din nou în timpul capturii. Reîncearcă.",
+            );
+          }
         }
+        pageId = result.page.id;
+        session.lastAnalyzedPageId = pageId;
+        session.analyzedGeneration = generation;
       }
       draft = buildRecorderStep(current.event, {
         createId: () => draft.step.id,
-        pageId: result.page.id,
+        pageId,
       });
+      if (
+        session.initialNavigationUrl !== undefined &&
+        recordedFlow(session.test, session.stageId).length === 0
+      ) {
+        const initialNavigation = buildRecorderStep(
+          {
+            type: "navigate",
+            url: session.initialNavigationUrl,
+            timestamp: this.options.now().toISOString(),
+          },
+          { createId: this.options.createId },
+        ).step;
+        session.test = this.testsService.appendRecordedStep(
+          session.project.id,
+          session.test.id,
+          initialNavigation,
+          session.stageId,
+        );
+      }
+      if (canMergeNavigation(session, current)) {
+        const previous = recordedFlow(session.test, session.stageId).at(-1);
+        if (previous?.type === "action" && previous.actionType === "click") {
+          const pattern = stableNavigationPattern(current.event.url);
+          const destination = new URL(current.event.url).pathname;
+          const baseTitle = previous.title.replace(
+            /\s+pentru a naviga la .+$/u,
+            "",
+          );
+          const baseDescription = previous.humanDescription.replace(
+            /\s+Destinația așteptată este .+\.$/u,
+            "",
+          );
+          const merged = {
+            ...previous,
+            title: `${baseTitle} pentru a naviga la ${destination}`,
+            humanDescription: `${baseDescription} Destinația așteptată este ${pattern}.`,
+            waitAfter: {
+              type: "url" as const,
+              value: pattern,
+              timeoutMs: 5_000,
+              warningOnly: true,
+            },
+          };
+          session.test = this.testsService.replaceLastRecordedStep(
+            session.project.id,
+            session.test.id,
+            merged,
+            session.stageId,
+          );
+          session.lastAnalyzedPageId = pageId;
+          delete session.currentEvent;
+          delete session.failedDraft;
+          const nextSnapshot = { ...session.snapshot };
+          delete nextSnapshot.pendingStep;
+          delete nextSnapshot.error;
+          this.publish(session, {
+            ...nextSnapshot,
+            state: "recording",
+            signal: session.queue.length === 0 ? "green" : "yellow",
+            message: "Navigarea a fost comasată cu click-ul anterior.",
+            test: session.test,
+            capturedSteps: recordedFlow(session.test, session.stageId).length,
+            queuedEvents: session.queue.length,
+            canStop: session.queue.length === 0,
+            canRetry: false,
+            canIgnore: false,
+          });
+          return;
+        }
+      }
+      draft = withUniqueCapturedValueKey(session.test, draft);
       session.failedDraft = draft;
       session.test = this.testsService.appendRecordedStep(
         session.project.id,
         session.test.id,
         structuredClone(draft.step),
+        session.stageId,
       );
       this.persistCapturedValue(session.test, draft);
+      session.lastRecordedEvent = current;
       delete session.currentEvent;
       delete session.failedDraft;
       const nextSnapshot = { ...session.snapshot };
@@ -555,15 +783,12 @@ export class RecorderService {
             ? "Pas salvat automat. Poți continua în browser."
             : "Pas salvat automat. Se analizează următorul eveniment.",
         test: session.test,
-        capturedSteps: session.test.flowItems.length,
+        capturedSteps: recordedFlow(session.test, session.stageId).length,
         queuedEvents: session.queue.length,
         canStop: session.queue.length === 0,
         canRetry: false,
         canIgnore: false,
       });
-      if (session.queue.length === 0) {
-        await this.setBlocked(session, false);
-      }
     } catch (error) {
       this.publish(session, {
         ...session.snapshot,
@@ -613,6 +838,13 @@ export class RecorderService {
     };
     session.navigationListeners.set(page, navigationListener);
     page.on("framenavigated", navigationListener);
+    const dialogListener = (): void => {
+      // Playwright dismisses JavaScript dialogs automatically when no listener
+      // exists. Keeping the dialog unresolved lets the person recording choose
+      // OK, Cancel or a prompt value directly in the headed browser.
+    };
+    session.dialogListeners.set(page, dialogListener);
+    page.on("dialog", dialogListener);
   }
 
   private enqueue(
@@ -623,12 +855,28 @@ export class RecorderService {
   ): void {
     if (
       !allowWhileBusy &&
-      (session.snapshot.state !== "recording" ||
-        session.snapshot.signal !== "green")
+      !["recording", "analyzing"].includes(session.snapshot.state)
     ) {
       return;
     }
-    session.queue.push({ event: structuredClone(event), page });
+    const queuedEvent = structuredClone(event);
+    const previous = session.queue.at(-1);
+    if (
+      queuedEvent.type === "scroll" &&
+      previous?.event.type === "scroll" &&
+      previous.page === page &&
+      previous.event.scrollMode === queuedEvent.scrollMode &&
+      JSON.stringify(previous.event.target) ===
+        JSON.stringify(queuedEvent.target)
+    ) {
+      previous.event = {
+        ...queuedEvent,
+        scrollX: (previous.event.scrollX ?? 0) + (queuedEvent.scrollX ?? 0),
+        scrollY: (previous.event.scrollY ?? 0) + (queuedEvent.scrollY ?? 0),
+      };
+    } else {
+      session.queue.push({ event: queuedEvent, page });
+    }
     this.publish(session, {
       ...session.snapshot,
       state: "recording",
@@ -682,6 +930,10 @@ export class RecorderService {
         if (listener !== undefined) {
           page.off("framenavigated", listener);
         }
+        const dialogListener = session.dialogListeners.get(page);
+        if (dialogListener !== undefined) {
+          page.off("dialog", dialogListener);
+        }
         await stopRecorderCapture(page, session.bindingName).catch(
           () => undefined,
         );
@@ -705,6 +957,7 @@ export class RecorderService {
   private async prepareBrowser(
     project: Project,
     test: TestDefinition,
+    stageId?: string,
   ): Promise<void> {
     const status = this.browser.getStatus();
     if (
@@ -745,6 +998,7 @@ export class RecorderService {
           : { viewport: project.browserConfig.viewport }),
       });
     }
+    if (stageId !== undefined && activeBrowserStates.has(status.state)) return;
     const navigation = await this.browser.openProjectUrl(
       project.id,
       test.startUrl,

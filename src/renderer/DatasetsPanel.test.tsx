@@ -150,4 +150,44 @@ describe("DatasetsPanel", () => {
       );
     });
   });
+
+  it("shows a compact key list and edits only the selected value", async () => {
+    const user = userEvent.setup();
+    const multipleValues: TestDataset = {
+      ...dataset,
+      values: {
+        customer_email: { type: "fixed", value: "ana@example.test" },
+        order_id: { type: "generated", strategy: "uuid" },
+        retry_count: 3,
+      },
+    };
+    const api = createApi({
+      listDatasets: vi.fn().mockResolvedValue([multipleValues]),
+    });
+
+    render(<DatasetsPanel api={api} projectId="project-1" testId="test-1" />);
+
+    expect(
+      await screen.findByRole("navigation", { name: "Cheile datasetului" }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("combobox", {
+        name: "Strategie pentru customer_email",
+      }),
+    ).not.toBeNull();
+    expect(
+      screen.queryByRole("combobox", { name: "Strategie pentru order_id" }),
+    ).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /^order_id/i }));
+
+    expect(
+      screen.getByRole("combobox", { name: "Strategie pentru order_id" }),
+    ).not.toBeNull();
+    expect(
+      screen.queryByRole("combobox", {
+        name: "Strategie pentru customer_email",
+      }),
+    ).toBeNull();
+  });
 });

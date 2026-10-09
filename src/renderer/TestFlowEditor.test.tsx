@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -47,6 +53,105 @@ const createApi = (): SemanticAppApi =>
 afterEach(cleanup);
 
 describe("TestFlowEditor", () => {
+  it("configures an AI-selected Google Pay TEST card on a recorded click", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    const recordedTest: TestDefinition = {
+      ...test,
+      workflowState: "flow_analyzed",
+      flowItems: [
+        {
+          id: "google-pay",
+          type: "action",
+          actionType: "click",
+          title: "Apasă Google Pay",
+          humanDescription: "Deschide Google Pay.",
+          whyExplanation: "Testează plata.",
+          target: {
+            primary: {
+              type: "role",
+              role: "button",
+              operator: "equals",
+              value: "Google Pay",
+            },
+          },
+          fallbacks: [],
+          enabled: true,
+        },
+      ],
+    };
+    render(
+      <TestFlowEditor
+        api={api}
+        projectId={recordedTest.projectId}
+        test={recordedTest}
+        onTestSaved={vi.fn()}
+      />,
+    );
+
+    await user.type(
+      screen.getByLabelText("Card Google Pay TEST dorit"),
+      "Alege cardul Visa pentru scenariul Incorrect CVC.",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Salvează flow-ul testului" }),
+    );
+
+    await waitFor(() => expect(api.saveTestFlow).toHaveBeenCalledOnce());
+    expect(vi.mocked(api.saveTestFlow).mock.calls[0]?.[2][0]).toMatchObject({
+      googlePayCardDescription:
+        "Alege cardul Visa pentru scenariul Incorrect CVC.",
+    });
+  });
+
+  it("copies a console diagnostic for a primary locator", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const recordedTest: TestDefinition = {
+      ...test,
+      workflowState: "flow_analyzed",
+      flowItems: [
+        {
+          id: "copy-locator",
+          type: "action",
+          actionType: "click",
+          title: "Continuă",
+          humanDescription: "Apasă Continuă.",
+          whyExplanation: "Continuă scenariul.",
+          target: {
+            primary: {
+              type: "role",
+              role: "button",
+              operator: "equals",
+              value: "Continuă",
+            },
+          },
+          fallbacks: [],
+          enabled: true,
+        },
+      ],
+    };
+    render(
+      <TestFlowEditor
+        api={createApi()}
+        projectId={recordedTest.projectId}
+        test={recordedTest}
+        onTestSaved={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Copiază JS" }));
+
+    expect(writeText).toHaveBeenCalledWith(
+      expect.stringContaining('"role": "button"'),
+    );
+    expect(await screen.findByText("Copiat")).not.toBeNull();
+  });
+
   it("keeps MySQL snapshot configuration outside flow steps", async () => {
     const user = userEvent.setup();
     const api = createApi();
@@ -64,6 +169,41 @@ describe("TestFlowEditor", () => {
     const checkType = screen.getByLabelText(/Tip verificare/i);
     expect(checkType.querySelector('option[value="mysql"]')).toBeNull();
     expect(api.loadMySqlSchema).not.toHaveBeenCalled();
+  });
+
+  it("edits a text check condition and its wait timeout", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    render(
+      <TestFlowEditor
+        api={api}
+        projectId={test.projectId}
+        test={test}
+        onTestSaved={vi.fn()}
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText("Tip pas nou"), "check");
+    await user.click(screen.getByRole("button", { name: "+ Adaugă pas" }));
+    await user.selectOptions(screen.getByLabelText("Tip verificare"), "text");
+    await user.clear(screen.getByLabelText("Valoare așteptată"));
+    await user.type(screen.getByLabelText("Valoare așteptată"), "Salvat");
+    await user.clear(screen.getByLabelText("Timeout verificare (ms)"));
+    await user.type(screen.getByLabelText("Timeout verificare (ms)"), "10000");
+    await user.click(
+      screen.getByRole("button", { name: "Salvează flow-ul testului" }),
+    );
+
+    await waitFor(() => {
+      expect(api.saveTestFlow).toHaveBeenCalled();
+    });
+    const savedItems = vi.mocked(api.saveTestFlow).mock.calls[0]?.[2];
+    expect(savedItems?.[0]).toMatchObject({
+      type: "check",
+      checkType: "text",
+      timeoutMs: 10_000,
+      config: { operator: "contains", value: "Salvat" },
+    });
   });
 
   it("allows an unchanged recorded flow to be explicitly approved", async () => {
@@ -134,6 +274,9 @@ describe("TestFlowEditor", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "+ Adaugă pas" }));
+    expect(
+      screen.getByRole("region", { name: "Conținutul pasului" }),
+    ).not.toBeNull();
     const title = screen.getByLabelText("Titlu");
     await user.clear(title);
     expect(
@@ -154,18 +297,22 @@ describe("TestFlowEditor", () => {
     expect(screen.getByText("Ancoră")).not.toBeNull();
     await user.click(screen.getByRole("button", { name: "+ Fallback" }));
     expect(screen.getByText("Fallback-uri (1/3)")).not.toBeNull();
-    await user.click(screen.getByRole("button", { name: "Duplică" }));
-    expect(screen.getAllByRole("button", { name: "Duplică" })).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "Acțiuni pas" }));
+    await user.click(screen.getByRole("menuitem", { name: "Duplică pasul" }));
     expect(
       screen
         .getByRole("navigation", { name: "Pașii testului" })
         .querySelectorAll("li"),
     ).toHaveLength(2);
+    await user.click(screen.getByRole("button", { name: "Acțiuni pas" }));
     await user.click(
-      screen.getByRole("button", { name: "Mută pasul 2 în sus" }),
+      screen.getByRole("menuitem", { name: "Mută pasul în sus" }),
     );
     await user.click(screen.getByLabelText("Activ"));
-    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await user.click(screen.getByRole("button", { name: "Istoric" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "Anulează ultima modificare" }),
+    );
 
     await user.click(
       screen.getByRole("button", { name: "Salvează flow-ul testului" }),
@@ -211,6 +358,93 @@ describe("TestFlowEditor", () => {
     expect(screen.getByText(/repeated_component/)).not.toBeNull();
   });
 
+  it("edits one reveal candidate and one fallback at a time", async () => {
+    const user = userEvent.setup();
+    const action = {
+      id: "step-with-alternatives",
+      type: "action" as const,
+      actionType: "click" as const,
+      title: "Deschide meniul",
+      humanDescription: "Deschide meniul ascuns.",
+      whyExplanation: "Continuă navigarea.",
+      target: {
+        primary: {
+          type: "css" as const,
+          operator: "equals" as const,
+          value: "#menu",
+        },
+      },
+      revealBefore: [
+        {
+          action: "hover" as const,
+          target: {
+            primary: {
+              type: "css" as const,
+              operator: "equals" as const,
+              value: "#header-1",
+            },
+          },
+          fallbacks: [],
+        },
+        {
+          action: "hover" as const,
+          target: {
+            primary: {
+              type: "css" as const,
+              operator: "equals" as const,
+              value: "#header-2",
+            },
+          },
+          fallbacks: [],
+        },
+      ],
+      fallbacks: [
+        {
+          locator: {
+            type: "text" as const,
+            operator: "equals" as const,
+            value: "Meniu",
+          },
+          humanDescription: "Text meniu",
+          whyExplanation: "Alternativă semantică.",
+        },
+        {
+          locator: {
+            type: "role" as const,
+            role: "button",
+            operator: "equals" as const,
+            value: "Meniu",
+          },
+          humanDescription: "Buton meniu",
+          whyExplanation: "Alternativă ARIA.",
+        },
+      ],
+      enabled: true,
+    };
+
+    render(
+      <TestFlowEditor
+        api={createApi()}
+        projectId={test.projectId}
+        test={{ ...test, flowItems: [action] }}
+        onTestSaved={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByLabelText(/Locator hover \d strategie/)).toHaveLength(
+      1,
+    );
+    expect(
+      screen.getAllByLabelText(/Locator fallback \d strategie/),
+    ).toHaveLength(1);
+    await user.click(screen.getByRole("tab", { name: "Hover 2" }));
+    expect(screen.getByLabelText("Locator hover 2 strategie")).not.toBeNull();
+    await user.click(screen.getByRole("tab", { name: /2\. Buton meniu/ }));
+    expect(
+      screen.getByLabelText("Locator fallback 2 strategie"),
+    ).not.toBeNull();
+  });
+
   it("configures dataset keys for input actions", async () => {
     const user = userEvent.setup();
     const api = createApi();
@@ -249,6 +483,132 @@ describe("TestFlowEditor", () => {
       valueStrategy: "dataset",
       target: { fieldId: "customer_email" },
     });
+  });
+
+  it("edits and saves templated URLs for navigation actions", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    render(
+      <TestFlowEditor
+        api={api}
+        projectId={test.projectId}
+        test={test}
+        onTestSaved={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "+ Adaugă pas" }));
+    await user.selectOptions(screen.getByLabelText("Tip acțiune"), "navigate");
+
+    const url = screen.getByLabelText("URL sau template");
+    expect(url.getAttribute("value")).toBe("{{baseUrl}}");
+    expect(screen.queryByLabelText("Locator principal strategie")).toBeNull();
+    expect(screen.queryByText(/Fallback-uri/)).toBeNull();
+
+    fireEvent.change(url, { target: { value: "{{payment_url}}" } });
+    await user.click(
+      screen.getByRole("button", { name: "Salvează flow-ul testului" }),
+    );
+
+    await waitFor(() => {
+      expect(api.saveTestFlow).toHaveBeenCalledOnce();
+    });
+    expect(vi.mocked(api.saveTestFlow).mock.calls[0]?.[2][0]).toMatchObject({
+      actionType: "navigate",
+      url: "{{payment_url}}",
+    });
+  });
+
+  it("inserts available variables at the URL cursor or appends them", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    api.listDatasets = vi.fn().mockResolvedValue([
+      {
+        id: "dataset-1",
+        testId: test.id,
+        name: "Date comandă",
+        values: { order_id: { type: "fixed", value: "123" } },
+        createdAt: test.createdAt,
+        updatedAt: test.updatedAt,
+      },
+    ]);
+    render(
+      <TestFlowEditor
+        api={api}
+        projectId={test.projectId}
+        test={test}
+        onTestSaved={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "+ Adaugă pas" }));
+    await user.selectOptions(screen.getByLabelText("Tip acțiune"), "navigate");
+    const urlElement = screen.getByLabelText("URL sau template");
+    if (!(urlElement instanceof HTMLInputElement)) {
+      throw new Error("URL editor is not an input.");
+    }
+    const url = urlElement;
+    await user.clear(url);
+    await user.type(url, "https://example.test//details");
+    url.selectionStart = 21;
+    url.selectionEnd = 21;
+    await user.click(
+      await screen.findByRole("button", { name: "{{order_id}}" }),
+    );
+    expect(url.value).toBe("https://example.test/{{order_id}}/details");
+
+    fireEvent.blur(url);
+    await user.click(screen.getByRole("button", { name: "{{runId}}" }));
+    expect(url.value).toBe(
+      "https://example.test/{{order_id}}/details{{runId}}",
+    );
+  });
+
+  it("replays prior steps before opening the visual region selector", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    api.captureVisualStepContext = vi.fn().mockResolvedValue({
+      imageBase64: Buffer.from("visual-context").toString("base64"),
+      mimeType: "image/jpeg",
+      viewportWidth: 1280,
+      viewportHeight: 720,
+      capturedAt: "2026-07-24T12:00:00.000Z",
+    });
+    render(
+      <TestFlowEditor
+        api={api}
+        projectId={test.projectId}
+        test={test}
+        onTestSaved={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "+ Adaugă pas" }));
+    await user.selectOptions(screen.getByLabelText("Tip acțiune"), "visual_ai");
+    await user.type(
+      screen.getByLabelText("Ce trebuie să facă AI-ul"),
+      "Selectează prima zi disponibilă.",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Capturează zona vizuală" }),
+    );
+
+    expect(api.captureVisualStepContext).toHaveBeenCalledWith(
+      test.projectId,
+      test.id,
+      expect.any(String),
+      expect.arrayContaining([
+        expect.objectContaining({
+          actionType: "visual_ai",
+          visualInstruction: "Selectează prima zi disponibilă.",
+        }),
+      ]),
+    );
+    expect(
+      await screen.findByRole("dialog", {
+        name: "Selectează zona văzută de AI",
+      }),
+    ).not.toBeNull();
   });
 
   it("shows AI editing only for tests explicitly marked dynamic", () => {
@@ -318,8 +678,9 @@ describe("TestFlowEditor", () => {
     await user.selectOptions(screen.getByLabelText("Tip pas nou"), "action");
     await user.click(screen.getByRole("button", { name: "+ Adaugă pas" }));
     await user.click(screen.getByRole("button", { name: /1\. Breakpoint/ }));
+    await user.click(screen.getByRole("button", { name: "Acțiuni pas" }));
     await user.click(
-      screen.getByRole("button", { name: "Mută pasul 1 în jos" }),
+      screen.getByRole("menuitem", { name: "Mută pasul în jos" }),
     );
     await user.click(screen.getByLabelText("Activ"));
     await user.click(

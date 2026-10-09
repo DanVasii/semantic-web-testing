@@ -47,6 +47,16 @@
         "value": { "$ref": "#/$defs/primitive" }
       }
     },
+    "fileValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "path", "name"],
+      "properties": {
+        "type": { "const": "file" },
+        "path": { "type": "string", "minLength": 1, "maxLength": 32000 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 500 }
+      }
+    },
     "timestampValue": {
       "type": "object",
       "additionalProperties": false,
@@ -150,6 +160,7 @@
       "oneOf": [
         { "$ref": "#/$defs/primitive" },
         { "$ref": "#/$defs/fixedValue" },
+        { "$ref": "#/$defs/fileValue" },
         { "$ref": "#/$defs/generatedValue" }
       ]
     }

@@ -20,8 +20,11 @@ import { ProjectBasicAuthSettingsPanel } from "./ProjectBasicAuthSettings.js";
 export interface BrowserSelectorProps {
   api: SemanticAppApi;
   browserStatus: BrowserManagerStatus;
-  onProjectUpdated: (overview: ProjectOverview) => void;
+  embedded?: boolean;
+  onBrowserReady?: () => void;
+  onProjectUpdated?: (overview: ProjectOverview) => void;
   project: Project;
+  showBasicAuthSettings?: boolean;
 }
 
 const storageKey = (projectId: string): string =>
@@ -43,8 +46,11 @@ const requiresProfile = (mode: BrowserSessionMode): boolean =>
 export const BrowserSelector = ({
   api,
   browserStatus,
+  embedded = false,
+  onBrowserReady,
   onProjectUpdated,
   project,
+  showBasicAuthSettings = true,
 }: BrowserSelectorProps) => {
   const [detections, setDetections] = useState<DetectedBrowser[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -152,7 +158,7 @@ export const BrowserSelector = ({
 
     try {
       const updated = await api.updateBrowserConfig(project.id, nextConfig);
-      onProjectUpdated(updated);
+      onProjectUpdated?.(updated);
     } catch {
       setBrowserConfig(previousConfig);
       setError("Configurația browserului nu a putut fi salvată.");
@@ -221,6 +227,7 @@ export const BrowserSelector = ({
         setSuccessMessage(
           `${selectedBrowser.displayName} a fost pornit și URL-ul proiectului a fost deschis.`,
         );
+        onBrowserReady?.();
       }
     } catch (caughtError) {
       const message =
@@ -249,6 +256,7 @@ export const BrowserSelector = ({
       );
       if (navigation.state === "opened") {
         setSuccessMessage("URL-ul proiectului a fost deschis într-un tab nou.");
+        onBrowserReady?.();
       }
     } catch {
       setError("URL-ul proiectului nu a putut fi deschis.");
@@ -287,6 +295,7 @@ export const BrowserSelector = ({
         setSuccessMessage(
           "Conexiunea a fost recuperată și URL-ul proiectului a fost redeschis.",
         );
+        onBrowserReady?.();
       }
     } catch {
       setError("Conexiunea cu browserul nu a putut fi recuperată.");
@@ -320,7 +329,9 @@ export const BrowserSelector = ({
   };
 
   return (
-    <section className="mt-6 rounded-xl border border-app-border bg-app-canvas p-4">
+    <section
+      className={`${embedded ? "" : "mt-6"} rounded-xl border border-app-border bg-app-canvas p-4`}
+    >
       <div className="grid gap-4 lg:grid-cols-2">
         <Select
           label="Browser disponibil"
@@ -511,7 +522,9 @@ export const BrowserSelector = ({
           {browserStatus.message}
         </p>
       ) : null}
-      <ProjectBasicAuthSettingsPanel api={api} project={project} />
+      {showBasicAuthSettings ? (
+        <ProjectBasicAuthSettingsPanel api={api} project={project} />
+      ) : null}
     </section>
   );
 };

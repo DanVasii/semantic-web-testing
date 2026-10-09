@@ -517,9 +517,14 @@ export class PlaywrightBrowserManager implements BrowserManager {
         ? browserType.executablePath()
         : undefined);
     const contextOptions = this.createContextOptions(options);
+    const nativeWindowArguments =
+      !this.headless && engine === "chromium" ? ["--start-maximized"] : [];
     const launchOptions: LaunchOptions = {
       headless: this.headless,
       ...(executablePath === undefined ? {} : { executablePath }),
+      ...(nativeWindowArguments.length === 0
+        ? {}
+        : { args: nativeWindowArguments }),
     };
 
     if (options.sessionMode === "persistent_profile") {
@@ -552,7 +557,10 @@ export class PlaywrightBrowserManager implements BrowserManager {
         {
           ...launchOptions,
           ...contextOptions,
-          args: [`--remote-debugging-port=${remoteDebuggingPort}`],
+          args: [
+            ...nativeWindowArguments,
+            `--remote-debugging-port=${remoteDebuggingPort}`,
+          ],
         },
       );
       const cdpEndpoint = `http://127.0.0.1:${remoteDebuggingPort}`;
@@ -871,6 +879,7 @@ export class PlaywrightBrowserManager implements BrowserManager {
   private createContextOptions(
     options: BrowserLaunchOptions,
   ): BrowserContextOptions {
+    if (!this.headless) return { viewport: null };
     return options.viewport === undefined
       ? {}
       : { viewport: { ...options.viewport } };

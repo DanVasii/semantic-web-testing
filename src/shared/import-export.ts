@@ -1,8 +1,10 @@
 import type { TestDefinition } from "./persistence.js";
 import type { DatasetValue, TestDataset, TestFlowItem } from "./test-model.js";
 import type { ValidationIssue } from "./test-validation.js";
+import type { TestStage } from "./test-stages.js";
 
 export const TRANSFER_SCHEMA_VERSION = 1 as const;
+export const TEST_TRANSFER_SCHEMA_VERSION = 2 as const;
 
 export interface PortableDataset {
   name: string;
@@ -17,10 +19,12 @@ export interface PortableTest {
   startMode: "base_url" | "current_page";
   startUrl: string;
   flowItems: TestFlowItem[];
+  stages?: TestStage[];
 }
 
 export interface PortableTestDocument {
-  schemaVersion: typeof TRANSFER_SCHEMA_VERSION;
+  schemaVersion:
+    typeof TRANSFER_SCHEMA_VERSION | typeof TEST_TRANSFER_SCHEMA_VERSION;
   kind: "semantic-test";
   test: PortableTest;
   datasets: PortableDataset[];
@@ -50,6 +54,7 @@ export interface TestImportPreview {
     testMode: PortableTest["testMode"];
     startUrl: string;
     flowItemCount: number;
+    stageCount?: number;
   };
   datasets: {
     name: string;

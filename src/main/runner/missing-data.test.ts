@@ -50,6 +50,7 @@ describe("missing input runtime", () => {
     ["input", "checkbox", "checkbox"],
     ["select", null, "select"],
     ["input", "radio", "radio"],
+    ["input", "file", "file"],
   ] as const)("detects %s/%s as %s", async (tagName, type, expected) => {
     const { page } = harness(tagName, type);
     await expect(inspectMissingInput(page, step)).resolves.toMatchObject({
@@ -113,5 +114,37 @@ describe("missing input runtime", () => {
         locator: step.target!.primary,
       }),
     ).rejects.toThrow("Selectează o opțiune radio");
+  });
+
+  it("accepts a file selected manually and rejects an empty file input", async () => {
+    const selectedLocator = {
+      count: vi.fn().mockResolvedValue(1),
+      evaluate: vi.fn().mockResolvedValue("document.pdf"),
+    } as unknown as Locator;
+    const emptyLocator = {
+      count: vi.fn().mockResolvedValue(1),
+      evaluate: vi.fn().mockResolvedValue(""),
+    } as unknown as Locator;
+    const details = {
+      fieldId: "document",
+      valueKey: "document",
+      inputKind: "file" as const,
+      locator: step.target!.primary,
+    };
+
+    await expect(
+      readManualInputValue(
+        {
+          locator: vi.fn().mockReturnValue(selectedLocator),
+        } as unknown as Page,
+        details,
+      ),
+    ).resolves.toBe("document.pdf");
+    await expect(
+      readManualInputValue(
+        { locator: vi.fn().mockReturnValue(emptyLocator) } as unknown as Page,
+        details,
+      ),
+    ).rejects.toThrow("Selectează un fișier");
   });
 });

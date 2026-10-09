@@ -6,6 +6,8 @@ import type {
   TestDefinition,
   TestRun,
 } from "../shared/persistence.js";
+import type { AiRunCost } from "../shared/runner.js";
+import { AiRunCostDetails } from "./components/AiRunCostDetails.js";
 import type {
   RunHistoryDetails,
   RunHistoryEntry,
@@ -56,6 +58,47 @@ const formatBytes = (bytes: number): string => {
 };
 
 const json = (value: unknown): string => JSON.stringify(value, null, 2);
+
+const aiCostFrom = (value: unknown): AiRunCost | undefined => {
+  if (typeof value !== "object" || value === null || !("aiCost" in value)) {
+    return undefined;
+  }
+  const cost = value.aiCost;
+  if (
+    typeof cost !== "object" ||
+    cost === null ||
+    !("requestCount" in cost) ||
+    typeof cost.requestCount !== "number" ||
+    !("inputTokens" in cost) ||
+    typeof cost.inputTokens !== "number" ||
+    !("outputTokens" in cost) ||
+    typeof cost.outputTokens !== "number" ||
+    !("totalTokens" in cost) ||
+    typeof cost.totalTokens !== "number" ||
+    !("estimatedUsd" in cost) ||
+    typeof cost.estimatedUsd !== "number" ||
+    !("unpricedRequests" in cost) ||
+    typeof cost.unpricedRequests !== "number" ||
+    !("localOnly" in cost) ||
+    typeof cost.localOnly !== "boolean"
+  ) {
+    return undefined;
+  }
+  return {
+    requestCount: cost.requestCount,
+    inputTokens: cost.inputTokens,
+    outputTokens: cost.outputTokens,
+    totalTokens: cost.totalTokens,
+    estimatedUsd: cost.estimatedUsd,
+    unpricedRequests: cost.unpricedRequests,
+    localOnly: cost.localOnly,
+    ...("requests" in cost && Array.isArray(cost.requests)
+      ? {
+          requests: cost.requests as NonNullable<AiRunCost["requests"]>,
+        }
+      : {}),
+  };
+};
 
 export const RunHistoryPage = ({
   api,
@@ -374,42 +417,81 @@ export const RunHistoryPage = ({
   );
 };
 
-const RunDetails = ({ details }: { details: RunHistoryDetails }) => (
-  <div className="grid max-h-[70vh] gap-5 overflow-y-auto pr-1 text-sm">
-    <section>
-      <h4 className="font-semibold">Pași și fallback-uri</h4>
-      {details.steps.length === 0 ? (
-        <p className="mt-2 text-app-muted">Nu există rezultate de pas.</p>
-      ) : (
-        <ul className="mt-2 grid gap-2">
-          {details.steps.map((step) => (
-            <li
-              key={step.id}
-              className="rounded-lg border border-app-border p-3"
-            >
-              <p className="font-medium">
-                {step.stepId} · {step.status}
-                {step.fallbackIndex === undefined
-                  ? ""
-                  : ` · fallback ${step.fallbackIndex + 1}`}
-              </p>
-              {step.logs.length > 0 ? (
-                <pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-xs text-app-muted">
-                  {json(step.logs)}
-                </pre>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-    <DetailsJson title="Dataset efectiv" value={details.dataset} />
-    <DetailsJson title="MySQL diff" value={details.mysqlDiffs} />
-    <DetailsJson title="Rezultat IMAP" value={details.imapResults} />
-    <DetailsJson title="Rezultat post-run / AI" value={details.postRunResult} />
-    <DetailsJson title="Eroare finală" value={details.error} />
-  </div>
-);
+const RunDetails = ({ details }: { details: RunHistoryDetails }) => {
+  const aiCost = aiCostFrom(details.postRunResult);
+  return (
+    <div className="grid max-h-[70vh] gap-5 overflow-y-auto pr-1 text-sm">
+      {aiCost ? <AiRunCostDetails cost={aiCost} /> : null}
+      <section>
+        <h4 className="font-semibold">Pași și fallback-uri</h4>
+        {details.steps.length === 0 ? (
+          <p className="mt-2 text-app-muted">Nu există rezultate de pas.</p>
+        ) : (
+          <ul className="mt-2 grid gap-2">
+            {details.steps.map((step) => (
+              <li
+                key={step.id}
+                className="rounded-lg border border-app-border p-3"
+              >
+                <p className="font-medium">
+                  {step.stepId} · {step.status}
+                  {step.fallbackIndex === undefined
+                    ? ""
+                    : ` · fallback ${step.fallbackIndex + 1}`}
+                </p>
+                {step.logs.length > 0 ? (
+                  <pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-xs text-app-muted">
+                    {json(step.logs)}
+                  </pre>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+      <DetailsJson title="Dataset efectiv" value={details.dataset} />
+      <DetailsJson title="MySQL diff" value={details.mysqlDiffs} />
+      <DetailsJson title="Rezultat IMAP" value={details.imapResults} />
+      <DetailsJson
+        title="Rezultat post-run / AI"
+        value={details.postRunResult}
+      />
+      <DetailsJson title="Eroare finală" value={details.error} />
+      <section>
+        <h4 className="font-semibold">Artefacte de diagnostic</h4>
+        {(details.artifacts ?? []).length === 0 ? (
+          <p className="mt-2 text-app-muted">
+            Nu există artefacte pentru această rulare.
+          </p>
+        ) : (
+          <ul className="mt-2 grid gap-2">
+            {(details.artifacts ?? []).map((artifact) => (
+              <li
+                key={artifact.id}
+                className="rounded-lg border border-app-border p-3"
+              >
+                <strong>{artifact.kind}</strong> ·{" "}
+                {Math.ceil(artifact.sizeBytes / 1024)} KB
+                <code className="mt-1 block break-all text-xs">
+                  {artifact.filePath}
+                </code>
+                <button
+                  type="button"
+                  className="mt-2 text-xs font-semibold text-brand-700 hover:underline"
+                  onClick={() =>
+                    void navigator.clipboard.writeText(artifact.filePath)
+                  }
+                >
+                  Copiază calea
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
+  );
+};
 
 const DetailsJson = ({ title, value }: { title: string; value: unknown }) => (
   <section>

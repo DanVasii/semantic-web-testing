@@ -30,9 +30,6 @@ export const TestFormModal = ({
 }: TestFormModalProps) => {
   const [name, setName] = useState(test?.name ?? "");
   const [description, setDescription] = useState(test?.description ?? "");
-  const [startUrl, setStartUrl] = useState(
-    test?.normalizedStartUrl ?? project.normalizedBaseUrl,
-  );
   const [testMode, setTestMode] = useState<NonNullable<TestInput["testMode"]>>(
     test?.testMode ?? "recorded",
   );
@@ -42,7 +39,6 @@ export const TestFormModal = ({
     if (open) {
       setName(test?.name ?? "");
       setDescription(test?.description ?? "");
-      setStartUrl(test?.normalizedStartUrl ?? project.normalizedBaseUrl);
       setTestMode(test?.testMode ?? "recorded");
       setErrors({});
     }
@@ -51,7 +47,6 @@ export const TestFormModal = ({
     project.normalizedBaseUrl,
     test?.description,
     test?.name,
-    test?.normalizedStartUrl,
     test?.testMode,
   ]);
 
@@ -59,7 +54,7 @@ export const TestFormModal = ({
     const input: TestInput = {
       name,
       ...(description.trim().length === 0 ? {} : { description }),
-      startUrl,
+      startUrl: test?.normalizedStartUrl ?? project.normalizedBaseUrl,
       testMode,
       wipeBeforeRun: false,
     };
@@ -78,11 +73,8 @@ export const TestFormModal = ({
     >
       <div className="grid gap-4">
         <p>
-          Testul începe printr-o înregistrare manuală. URL-ul de start poate fi
-          diferit de pagina principală, dar trebuie să aparțină proiectului.
-          {test === undefined
-            ? ""
-            : " Schimbarea lui invalidează înregistrarea existentă."}
+          Testul începe printr-o înregistrare manuală. Pagina de pornire este
+          salvată automat ca primul pas al flow-ului și poate fi editată acolo.
         </p>
         <Input
           label="Numele testului"
@@ -120,17 +112,6 @@ export const TestFormModal = ({
             <span className="text-sm text-red-700">{errors.testMode}</span>
           ) : null}
         </label>
-        <Input
-          label="URL de start"
-          value={startUrl}
-          inputMode="url"
-          {...(errors.startUrl ? { error: errors.startUrl } : {})}
-          hint="Query string-ul și hash-ul sunt păstrate pentru pornirea testului."
-          disabled={isSaving}
-          onChange={(event) => {
-            setStartUrl(event.target.value);
-          }}
-        />
         <div className="grid gap-1.5">
           <label
             htmlFor="test-description"

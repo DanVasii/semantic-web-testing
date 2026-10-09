@@ -434,6 +434,210 @@ export const APPLICATION_MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    version: 22,
+    name: "add_ai_test_generation_metadata",
+    up(database) {
+      database.exec(`
+        ALTER TABLE tests
+        ADD COLUMN ai_generation_json TEXT;
+      `);
+    },
+  },
+  {
+    version: 23,
+    name: "add_lm_studio_ai_provider",
+    up(database) {
+      database.exec(`
+        ALTER TABLE application_ai_settings
+        RENAME TO application_ai_settings_legacy;
+
+        CREATE TABLE application_ai_settings (
+          singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+          provider TEXT NOT NULL
+            CHECK(provider IN ('none', 'ollama', 'lm_studio', 'gemini')),
+          ollama_base_url TEXT NOT NULL,
+          ollama_model TEXT NOT NULL,
+          lm_studio_base_url TEXT NOT NULL,
+          lm_studio_model TEXT NOT NULL,
+          gemini_model TEXT NOT NULL,
+          encrypted_gemini_api_key TEXT,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+
+        INSERT INTO application_ai_settings (
+          singleton_id, provider, ollama_base_url, ollama_model,
+          lm_studio_base_url, lm_studio_model, gemini_model,
+          encrypted_gemini_api_key, updated_at
+        )
+        SELECT
+          singleton_id, provider, ollama_base_url, ollama_model,
+          'http://127.0.0.1:1234', '', gemini_model,
+          encrypted_gemini_api_key, updated_at
+        FROM application_ai_settings_legacy;
+
+        DROP TABLE application_ai_settings_legacy;
+      `);
+    },
+  },
+  {
+    version: 24,
+    name: "create_test_suites",
+    up(database) {
+      database.exec(`
+        CREATE TABLE test_suites (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          description TEXT,
+          items_json TEXT NOT NULL,
+          settings_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE INDEX test_suites_project_id_idx ON test_suites(project_id);
+      `);
+    },
+  },
+  {
+    version: 25,
+    name: "create_batch_runs",
+    up(database) {
+      database.exec(`
+        CREATE TABLE batch_runs (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          suite_id TEXT REFERENCES test_suites(id) ON DELETE SET NULL,
+          name TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('running','passed','failed','stopped')),
+          settings_json TEXT NOT NULL,
+          started_at TEXT NOT NULL,
+          ended_at TEXT,
+          cleanup_status TEXT CHECK(cleanup_status IN ('preserved','completed','failed'))
+        ) STRICT;
+
+        CREATE TABLE batch_run_items (
+          id TEXT PRIMARY KEY,
+          batch_run_id TEXT NOT NULL REFERENCES batch_runs(id) ON DELETE CASCADE,
+          test_id TEXT NOT NULL,
+          test_name TEXT NOT NULL,
+          position INTEGER NOT NULL CHECK(position >= 0),
+          dataset_id TEXT,
+          run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+          status TEXT NOT NULL CHECK(status IN (
+            'queued','running','passed','flaky','failed','stopped','skipped'
+          )),
+          retry_count INTEGER NOT NULL DEFAULT 0 CHECK(retry_count >= 0),
+          error TEXT
+        ) STRICT;
+
+        CREATE INDEX batch_runs_project_id_idx ON batch_runs(project_id);
+        CREATE INDEX batch_run_items_batch_id_idx ON batch_run_items(batch_run_id);
+        CREATE INDEX batch_run_items_test_id_idx ON batch_run_items(test_id);
+      `);
+    },
+  },
+  {
+    version: 26,
+    name: "create_run_artifacts",
+    up(database) {
+      database.exec(`
+        CREATE TABLE run_artifacts (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK(kind IN ('screenshot','html','console','network','trace')),
+          file_path TEXT NOT NULL,
+          mime_type TEXT NOT NULL,
+          size_bytes INTEGER NOT NULL CHECK(size_bytes >= 0),
+          created_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE INDEX run_artifacts_run_id_idx ON run_artifacts(run_id);
+      `);
+    },
+  },
+  {
+    version: 27,
+    name: "add_multi_flow_test_stages",
+    up(database) {
+      database.exec(`
+        ALTER TABLE tests
+        ADD COLUMN stages_json TEXT;
+
+        ALTER TABLE step_results
+        ADD COLUMN stage_id TEXT;
+
+        CREATE INDEX step_results_stage_id_idx
+          ON step_results(run_id, stage_id);
+
+        DROP INDEX mysql_run_baseline_unique;
+
+        CREATE UNIQUE INDEX mysql_run_baseline_stage_unique
+          ON mysql_run_snapshots(run_id, check_step_id)
+          WHERE kind = 'baseline';
+      `);
+    },
+  },
+  {
+    version: 28,
+    name: "add_openai_ai_provider",
+    up(database) {
+      database.exec(`
+        ALTER TABLE application_ai_settings
+        RENAME TO application_ai_settings_legacy;
+
+        CREATE TABLE application_ai_settings (
+          singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+          provider TEXT NOT NULL
+            CHECK(provider IN ('none', 'ollama', 'lm_studio', 'gemini', 'openai')),
+          ollama_base_url TEXT NOT NULL,
+          ollama_model TEXT NOT NULL,
+          lm_studio_base_url TEXT NOT NULL,
+          lm_studio_model TEXT NOT NULL,
+          gemini_model TEXT NOT NULL,
+          encrypted_gemini_api_key TEXT,
+          openai_model TEXT NOT NULL,
+          encrypted_openai_api_key TEXT,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+
+        INSERT INTO application_ai_settings (
+          singleton_id, provider, ollama_base_url, ollama_model,
+          lm_studio_base_url, lm_studio_model, gemini_model,
+          encrypted_gemini_api_key, openai_model,
+          encrypted_openai_api_key, updated_at
+        )
+        SELECT
+          singleton_id, provider, ollama_base_url, ollama_model,
+          lm_studio_base_url, lm_studio_model, gemini_model,
+          encrypted_gemini_api_key, '', NULL, updated_at
+        FROM application_ai_settings_legacy;
+
+        DROP TABLE application_ai_settings_legacy;
+      `);
+    },
+  },
+  {
+    version: 29,
+    name: "create_ai_model_pricing_cache",
+    up(database) {
+      database.exec(`
+        CREATE TABLE ai_model_pricing_cache (
+          provider TEXT NOT NULL CHECK(provider IN ('gemini', 'openai')),
+          model TEXT NOT NULL,
+          source TEXT NOT NULL CHECK(source IN ('litellm', 'manual')),
+          input_per_million_usd REAL,
+          output_per_million_usd REAL,
+          cached_input_per_million_usd REAL,
+          matched_model_id TEXT,
+          fetched_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          PRIMARY KEY(provider, model)
+        ) STRICT;
+      `);
+    },
+  },
 ];
 
 export const assertValidMigrations = (

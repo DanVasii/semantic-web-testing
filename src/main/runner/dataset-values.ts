@@ -35,6 +35,7 @@ export const materializeDatasetValue = (
 ): DatasetPrimitive => {
   if (value === null || typeof value !== "object") return value;
   if (value.type === "fixed") return value.value;
+  if (value.type === "file") return value.path;
 
   switch (value.strategy) {
     case "timestamp":

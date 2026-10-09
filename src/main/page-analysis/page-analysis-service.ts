@@ -8,10 +8,16 @@ import type {
   PageAnalysisResult,
   PageAnalysisTarget,
 } from "../../shared/page-analysis.js";
+import type {
+  AnalyzedForm,
+  AnalyzedFormField,
+  FormFieldSemanticType,
+} from "../../shared/form-analysis.js";
 import { normalizeAnalyzedPageUrl } from "../../shared/page-analysis.js";
 import type { Page, PageVersion } from "../../shared/persistence.js";
 import type { JsonValue } from "../../shared/persistence.js";
 import type { SemanticAnalysis } from "../../shared/semantic-analysis.js";
+import type { LocatorDefinition } from "../../shared/test-model.js";
 import {
   PageRepository,
   ProjectRepository,
@@ -110,6 +116,213 @@ const serializeJson = (value: unknown): string =>
   `${JSON.stringify(value, null, 2)}\n`;
 
 type CapturedElement = PageCapture["allElements"][number];
+
+const formLocator = (element: CapturedElement): LocatorDefinition => ({
+  type: "css",
+  operator: "equals",
+  value: element.cssSelector,
+});
+
+const semanticTypeForField = (
+  element: CapturedElement,
+  label: string,
+): FormFieldSemanticType => {
+  const type = element.attributes.type?.toLowerCase() ?? "";
+  const autocomplete = element.attributes.autocomplete?.toLowerCase() ?? "";
+  if (["checkbox", "radio"].includes(type)) return "unknown";
+  const haystack = [
+    type,
+    autocomplete,
+    element.attributes.name,
+    element.attributes.id,
+    element.attributes.placeholder,
+    element.ariaAttributes["aria-label"],
+    label,
+  ]
+    .filter((value): value is string => value !== undefined)
+    .join(" ")
+    .toLowerCase();
+  if (type === "email" || /\b(e-?mail|email)\b/.test(haystack)) return "email";
+  if (type === "tel" || /\b(phone|telefon|mobile|mobil)\b/.test(haystack))
+    return "phone";
+  if (/\b(given-name|first[-_ ]?name|prenume)\b/.test(haystack))
+    return "first_name";
+  if (/\b(family-name|last[-_ ]?name|surname|nume familie)\b/.test(haystack))
+    return "last_name";
+  if (/\b(full[-_ ]?name|name|nume complet)\b/.test(haystack))
+    return "full_name";
+  if (/\b(company|organization|companie|firma)\b/.test(haystack))
+    return "company";
+  if (/\b(postal|zip|postcode|cod poștal|cod postal)\b/.test(haystack))
+    return "postal_code";
+  if (/\b(county|state|province|județ|judet)\b/.test(haystack)) return "county";
+  if (/\b(city|locality|oraș|oras)\b/.test(haystack)) return "city";
+  if (/\b(country|țară|tara)\b/.test(haystack)) return "country";
+  if (/\b(address|street|adresă|adresa|stradă|strada)\b/.test(haystack))
+    return "address";
+  if (type === "password" || /\b(password|parolă|parola)\b/.test(haystack))
+    return "password";
+  if (/\b(message|comment|notes|mesaj|comentariu)\b/.test(haystack))
+    return "message";
+  return "unknown";
+};
+
+const numericAttribute = (
+  element: CapturedElement,
+  name: string,
+): number | undefined => {
+  const raw = element.attributes[name];
+  if (raw === undefined || raw.trim().length === 0) return undefined;
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 0 ? value : undefined;
+};
+
+const fieldLabel = (
+  field: CapturedElement,
+  elements: CapturedElement[],
+): string => {
+  const id = field.attributes.id;
+  const explicit = elements.find(
+    (element) =>
+      element.tag === "label" &&
+      id !== undefined &&
+      element.attributes.for === id,
+  );
+  const wrapping = elements.find(
+    (element) =>
+      element.tag === "label" && field.path.startsWith(`${element.path}/`),
+  );
+  return (
+    explicit?.text ||
+    wrapping?.text ||
+    field.ariaAttributes["aria-label"] ||
+    field.attributes.placeholder ||
+    field.attributes.name ||
+    field.attributes.id ||
+    "Câmp fără etichetă"
+  ).slice(0, 200);
+};
+
+const analyzedFormsFromArtifact = (
+  artifact: StoredAnalysisArtifact,
+): AnalyzedForm[] =>
+  artifact.forms.map((form, formIndex) => {
+    const rawFields = form.fieldPaths
+      .map((path) =>
+        artifact.allElements.find((element) => element.path === path),
+      )
+      .filter((element): element is CapturedElement => element !== undefined)
+      .filter(
+        (element) =>
+          ["input", "select", "textarea"].includes(element.tag) &&
+          !["button", "hidden", "image", "reset", "submit"].includes(
+            element.attributes.type?.toLowerCase() ?? "",
+          ),
+      );
+    const fields = rawFields.map((field, fieldIndex): AnalyzedFormField => {
+      const label = fieldLabel(field, artifact.allElements);
+      const minLength = numericAttribute(field, "minlength");
+      const maxLength = numericAttribute(field, "maxlength");
+      return {
+        id: `field-${createHash("sha1").update(field.path).digest("hex").slice(0, 12)}`,
+        name:
+          field.attributes.name ||
+          field.attributes.id ||
+          `field_${fieldIndex + 1}`,
+        label,
+        tag: field.tag as AnalyzedFormField["tag"],
+        inputType:
+          field.tag === "input"
+            ? field.attributes.type?.toLowerCase() || "text"
+            : field.tag,
+        semanticType: semanticTypeForField(field, label),
+        required:
+          "required" in field.attributes ||
+          field.ariaAttributes["aria-required"] === "true",
+        disabled: field.states.disabled,
+        locator: formLocator(field),
+        ...(field.attributes.autocomplete === undefined
+          ? {}
+          : { autocomplete: field.attributes.autocomplete }),
+        ...(field.attributes.placeholder === undefined
+          ? {}
+          : { placeholder: field.attributes.placeholder }),
+        ...(field.attributes.pattern === undefined
+          ? {}
+          : { pattern: field.attributes.pattern }),
+        ...(minLength === undefined ? {} : { minLength }),
+        ...(maxLength === undefined ? {} : { maxLength }),
+        ...(field.attributes.min === undefined
+          ? {}
+          : { min: field.attributes.min }),
+        ...(field.attributes.max === undefined
+          ? {}
+          : { max: field.attributes.max }),
+        ...(field.attributes.step === undefined
+          ? {}
+          : { step: field.attributes.step }),
+        ...(field.attributes.accept === undefined
+          ? {}
+          : { accept: field.attributes.accept }),
+        ...("multiple" in field.attributes ? { multiple: true } : {}),
+        options:
+          field.tag !== "select"
+            ? []
+            : artifact.allElements
+                .filter(
+                  (candidate) =>
+                    candidate.tag === "option" &&
+                    candidate.parentPath === field.path,
+                )
+                .map((option) => ({
+                  value: option.attributes.value ?? option.text,
+                  label:
+                    option.text ||
+                    option.attributes.label ||
+                    option.attributes.value ||
+                    "",
+                })),
+      };
+    });
+    const submitElement = artifact.buttons.find(
+      (button) =>
+        button.formPath === form.path &&
+        ["", "submit"].includes(button.attributes.type?.toLowerCase() ?? ""),
+    );
+    const title =
+      form.name ||
+      artifact.allElements.find((element) => element.path === form.path)
+        ?.ariaAttributes["aria-label"] ||
+      `Formular ${formIndex + 1}`;
+    return {
+      id: `form-${createHash("sha1").update(form.cssSelector).digest("hex").slice(0, 12)}`,
+      pageId: artifact.pageId,
+      pageVersionId: artifact.pageVersionId,
+      pageTitle: artifact.title,
+      pageUrl: artifact.url,
+      title,
+      method: form.method,
+      action: form.action,
+      locator: {
+        type: "css",
+        operator: "equals",
+        value: form.cssSelector,
+      },
+      fields,
+      ...(submitElement === undefined
+        ? {}
+        : {
+            submit: {
+              label:
+                submitElement.text ||
+                submitElement.attributes.value ||
+                submitElement.ariaAttributes["aria-label"] ||
+                "Trimite formularul",
+              locator: formLocator(submitElement),
+            },
+          }),
+    };
+  });
 
 const calendarControlPattern =
   /calendar|datepicker|date-picker|(?:^|[-_])cal[-_]|prev[-_]?month|next[-_]?month|month[-_]?prev|month[-_]?next/i;
@@ -574,6 +787,30 @@ export class PageAnalysisService {
     return summaries.filter(
       (summary): summary is AnalyzedPageSummary => summary !== undefined,
     );
+  }
+
+  public async listForms(
+    projectId: string,
+    pageId: string,
+  ): Promise<AnalyzedForm[]> {
+    this.requireProject(projectId);
+    const page = this.pageRepository.findById(pageId);
+    if (page === undefined || page.projectId !== projectId) {
+      throw new Error("Pagina analizată nu există.");
+    }
+    const version = this.pageRepository.findLatestVersion(pageId);
+    if (version === undefined) return [];
+    try {
+      const artifact = JSON.parse(
+        await readFile(
+          this.resolveArtifactPath(version.analysisFilePath),
+          "utf8",
+        ),
+      ) as StoredAnalysisArtifact;
+      return analyzedFormsFromArtifact(artifact);
+    } catch {
+      throw new Error("Formularele paginii nu au putut fi citite din analiză.");
+    }
   }
 
   public async getAiSemanticContext(

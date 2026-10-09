@@ -12,6 +12,7 @@ import type {
 import type { SemanticAppApi } from "../shared/ipc.js";
 import { EXTERNAL_AI_TEST_PROMPT } from "../shared/external-ai-prompt.js";
 import { ImapSettingsPanel } from "./ImapSettingsPanel.js";
+import { AiModelPricingPanel } from "./components/AiModelPricingPanel.js";
 import { Button } from "./components/Button.js";
 import { Input } from "./components/Input.js";
 import { Modal } from "./components/Modal.js";
@@ -26,6 +27,7 @@ export interface AiSettingsModalProps {
 const taskOptions = [
   { value: "analyze_step", label: "Analiză pas înregistrat" },
   { value: "generate_test", label: "Generare propunere test" },
+  { value: "generate_form_tests", label: "Generare teste formular" },
   { value: "repair_locator", label: "Reparare locator" },
 ];
 
@@ -83,21 +85,35 @@ const previewContext = (task: AiTask) => {
 const settingsInput = ({
   apiKey,
   geminiModel,
+  lmStudioBaseUrl,
+  lmStudioModel,
   ollamaBaseUrl,
   ollamaModel,
   provider,
+  openaiApiKey,
+  openaiModel,
 }: {
   apiKey: string;
   geminiModel: string;
+  lmStudioBaseUrl: string;
+  lmStudioModel: string;
   ollamaBaseUrl: string;
   ollamaModel: string;
   provider: AiProviderId;
+  openaiApiKey: string;
+  openaiModel: string;
 }): SaveAiSettingsInput => ({
   provider,
   ollamaBaseUrl,
   ollamaModel,
+  lmStudioBaseUrl,
+  lmStudioModel,
   geminiModel,
+  openaiModel,
   ...(apiKey.trim().length === 0 ? {} : { geminiApiKey: apiKey.trim() }),
+  ...(openaiApiKey.trim().length === 0
+    ? {}
+    : { openaiApiKey: openaiApiKey.trim() }),
 });
 
 export const AiSettingsModal = ({
@@ -109,8 +125,14 @@ export const AiSettingsModal = ({
   const [provider, setProvider] = useState<AiProviderId>("none");
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState("http://127.0.0.1:11434");
   const [ollamaModel, setOllamaModel] = useState("");
+  const [lmStudioBaseUrl, setLmStudioBaseUrl] = useState(
+    "http://127.0.0.1:1234",
+  );
+  const [lmStudioModel, setLmStudioModel] = useState("");
   const [geminiModel, setGeminiModel] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [openaiModel, setOpenaiModel] = useState("");
+  const [openaiApiKey, setOpenaiApiKey] = useState("");
   const [models, setModels] = useState<AiModelInfo[]>([]);
   const [connectionResult, setConnectionResult] =
     useState<AiConnectionTestResult>();
@@ -136,6 +158,7 @@ export const AiSettingsModal = ({
     setPreview(undefined);
     setModels([]);
     setApiKey("");
+    setOpenaiApiKey("");
     void api
       .getAiSettings()
       .then((loaded) => {
@@ -144,10 +167,14 @@ export const AiSettingsModal = ({
         setProvider(loaded.provider);
         setOllamaBaseUrl(loaded.ollama.baseUrl);
         setOllamaModel(loaded.ollama.model);
+        setLmStudioBaseUrl(loaded.lmStudio.baseUrl);
+        setLmStudioModel(loaded.lmStudio.model);
         setGeminiModel(loaded.gemini.model);
+        setOpenaiModel(loaded.openai?.model ?? "");
         if (
           loaded.provider !== "none" &&
-          (loaded.provider !== "gemini" || loaded.gemini.apiKeyConfigured)
+          (loaded.provider !== "gemini" || loaded.gemini.apiKeyConfigured) &&
+          (loaded.provider !== "openai" || loaded.openai?.apiKeyConfigured)
         ) {
           setIsLoadingModels(true);
           void api
@@ -174,7 +201,15 @@ export const AiSettingsModal = ({
     };
   }, [api, open]);
 
-  const selectedModel = provider === "ollama" ? ollamaModel : geminiModel;
+  const selectedModel =
+    provider === "ollama"
+      ? ollamaModel
+      : provider === "lm_studio"
+        ? lmStudioModel
+        : provider === "gemini"
+          ? geminiModel
+          : openaiModel;
+
   const modelOptions = useMemo(() => {
     const entries = [...models];
     if (
@@ -209,6 +244,9 @@ export const AiSettingsModal = ({
     if (nextProvider === "gemini" && !settings?.gemini.apiKeyConfigured) {
       return;
     }
+    if (nextProvider === "openai" && !settings?.openai?.apiKeyConfigured) {
+      return;
+    }
     setIsLoadingModels(true);
     try {
       setModels(await api.listAiModels(nextProvider));
@@ -230,13 +268,18 @@ export const AiSettingsModal = ({
         settingsInput({
           apiKey,
           geminiModel,
+          lmStudioBaseUrl,
+          lmStudioModel,
           ollamaBaseUrl,
           ollamaModel,
           provider,
+          openaiApiKey,
+          openaiModel,
         }),
       );
       setSettings(saved);
       setApiKey("");
+      setOpenaiApiKey("");
       if (loadCatalog && saved.provider !== "none") {
         setModels(await api.listAiModels(saved.provider));
       }
@@ -283,7 +326,10 @@ export const AiSettingsModal = ({
         provider: provider === "gemini" ? "none" : provider,
         ollamaBaseUrl,
         ollamaModel,
+        lmStudioBaseUrl,
+        lmStudioModel,
         geminiModel,
+        openaiModel,
         clearGeminiApiKey: true,
       });
       setSettings(saved);
@@ -294,6 +340,34 @@ export const AiSettingsModal = ({
       setSuccessMessage("Cheia Gemini API a fost ștearsă.");
     } catch {
       setError("Cheia Gemini API nu a putut fi ștearsă.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const removeOpenAiKey = async (): Promise<void> => {
+    setIsSaving(true);
+    setError(undefined);
+    setSuccessMessage(undefined);
+    try {
+      const saved = await api.saveAiSettings({
+        provider: provider === "openai" ? "none" : provider,
+        ollamaBaseUrl,
+        ollamaModel,
+        lmStudioBaseUrl,
+        lmStudioModel,
+        geminiModel,
+        openaiModel,
+        clearOpenaiApiKey: true,
+      });
+      setSettings(saved);
+      setProvider(saved.provider);
+      setOpenaiApiKey("");
+      setModels([]);
+      setConnectionResult(undefined);
+      setSuccessMessage("Cheia OpenAI API a fost ștearsă.");
+    } catch {
+      setError("Cheia OpenAI API nu a putut fi ștearsă.");
     } finally {
       setIsSaving(false);
     }
@@ -324,6 +398,10 @@ export const AiSettingsModal = ({
     provider === "gemini" &&
     !settings?.gemini.apiKeyConfigured &&
     apiKey.trim().length === 0;
+  const openaiNeedsKey =
+    provider === "openai" &&
+    !settings?.openai?.apiKeyConfigured &&
+    openaiApiKey.trim().length === 0;
 
   const copyExternalAiPrompt = async (): Promise<void> => {
     try {
@@ -369,7 +447,9 @@ export const AiSettingsModal = ({
               options={[
                 { value: "none", label: "None · AI dezactivat" },
                 { value: "ollama", label: "Ollama" },
+                { value: "lm_studio", label: "LM Studio · local" },
                 { value: "gemini", label: "Gemini API" },
+                { value: "openai", label: "OpenAI API" },
               ]}
               onChange={(event) => {
                 const nextProvider = event.target.value as AiProviderId;
@@ -406,6 +486,26 @@ export const AiSettingsModal = ({
             </div>
           ) : null}
 
+          {provider === "lm_studio" ? (
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <Input
+                label="URL LM Studio"
+                value={lmStudioBaseUrl}
+                disabled={isBusy}
+                placeholder="http://127.0.0.1:1234"
+                hint="Pornește Local Server din fila Developer în LM Studio. Poți introduce și un URL care se termină în /v1."
+                onChange={(event) => setLmStudioBaseUrl(event.target.value)}
+              />
+              <Select
+                label="Model implicit LM Studio"
+                value={lmStudioModel}
+                disabled={isBusy}
+                options={modelOptions}
+                onChange={(event) => setLmStudioModel(event.target.value)}
+              />
+            </div>
+          ) : null}
+
           {provider === "gemini" ? (
             <div className="mt-4 grid gap-4 md:grid-cols-2">
               <Input
@@ -435,9 +535,45 @@ export const AiSettingsModal = ({
             </div>
           ) : null}
 
+          {provider === "openai" ? (
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <Input
+                label={
+                  settings?.openai?.apiKeyConfigured
+                    ? "Cheie OpenAI API nouă (opțional)"
+                    : "Cheie OpenAI API"
+                }
+                type="password"
+                autoComplete="new-password"
+                value={openaiApiKey}
+                disabled={isBusy}
+                hint={
+                  settings?.openai?.apiKeyConfigured
+                    ? "Cheia existentă este criptată. Lasă gol pentru a o păstra."
+                    : "Cheia va fi criptată de sistemul de operare; nu folosim .env."
+                }
+                onChange={(event) => setOpenaiApiKey(event.target.value)}
+              />
+              <Select
+                label="Model implicit OpenAI"
+                value={openaiModel}
+                disabled={isBusy}
+                options={modelOptions}
+                onChange={(event) => setOpenaiModel(event.target.value)}
+              />
+            </div>
+          ) : null}
+
+          <AiModelPricingPanel
+            api={api}
+            provider={provider}
+            model={selectedModel}
+            className="mt-4"
+          />
+
           <div className="mt-4 flex flex-wrap gap-2">
             <Button
-              disabled={isBusy || geminiNeedsKey}
+              disabled={isBusy || geminiNeedsKey || openaiNeedsKey}
               onClick={() => void save()}
             >
               {isSaving ? "Se salvează..." : "Salvează setările AI"}
@@ -445,7 +581,7 @@ export const AiSettingsModal = ({
             {provider !== "none" ? (
               <Button
                 variant="secondary"
-                disabled={isBusy || geminiNeedsKey}
+                disabled={isBusy || geminiNeedsKey || openaiNeedsKey}
                 onClick={() => void testConnection()}
               >
                 {isTesting
@@ -460,6 +596,15 @@ export const AiSettingsModal = ({
                 onClick={() => void removeGeminiKey()}
               >
                 Șterge cheia Gemini
+              </Button>
+            ) : null}
+            {settings?.openai?.apiKeyConfigured ? (
+              <Button
+                variant="danger"
+                disabled={isBusy}
+                onClick={() => void removeOpenAiKey()}
+              >
+                Șterge cheia OpenAI
               </Button>
             ) : null}
           </div>

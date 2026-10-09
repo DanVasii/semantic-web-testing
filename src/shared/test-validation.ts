@@ -7,6 +7,10 @@ import {
   type DeclarativeTestDefinition,
   type TestDataset,
 } from "./test-model.js";
+import {
+  validateTestStageDependencies,
+  type TestStage,
+} from "./test-stages.js";
 
 export type ValidationIssueCode =
   | "invalid_json"
@@ -339,6 +343,39 @@ const validateHttpUrl = (
   }
 };
 
+const validateHttpUrlTemplate = (
+  value: unknown,
+  path: string,
+  context: ValidationContext,
+): void => {
+  if (!validateString(value, path, context, { min: 1, max: 4096 })) {
+    return;
+  }
+  const template = value;
+  const validToken = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
+  const remainder = template.replace(validToken, "");
+  if (remainder.includes("{{") || remainder.includes("}}")) {
+    context.add(
+      path,
+      "invalid_format",
+      "Template-ul URL conține o variabilă incompletă sau invalidă.",
+    );
+    return;
+  }
+  const exactVariable = template.match(
+    /^\s*\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\}\s*$/,
+  );
+  if (exactVariable !== null) return;
+  if (template.includes("{{")) {
+    const candidate = template.replace(validToken, (_token, name: string) =>
+      name === "baseUrl" ? "https://template.invalid" : "value",
+    );
+    validateHttpUrl(candidate, path, context);
+    return;
+  }
+  validateHttpUrl(template, path, context);
+};
+
 const validateLocatorValue = (
   value: unknown,
   path: string,
@@ -561,7 +598,12 @@ const validateTarget = (
   if (target === undefined) {
     return;
   }
-  allowOnly(target, ["fieldId", "primary", "stability"], path, context);
+  allowOnly(
+    target,
+    ["fieldId", "primary", "stability", "frame"],
+    path,
+    context,
+  );
   requireProperties(target, ["primary"], path, context);
   if (target.fieldId !== undefined) {
     validateFieldId(target.fieldId, `${path}.fieldId`, context);
@@ -572,6 +614,27 @@ const validateTarget = (
       min: 0,
       max: 1,
     });
+  }
+  if (target.frame !== undefined) {
+    const frame = requireRecord(target.frame, `${path}.frame`, context);
+    if (frame !== undefined) {
+      allowOnly(frame, ["origin"], `${path}.frame`, context);
+      requireProperties(frame, ["origin"], `${path}.frame`, context);
+      validateHttpUrl(frame.origin, `${path}.frame.origin`, context);
+      if (typeof frame.origin === "string") {
+        try {
+          if (new URL(frame.origin).origin !== frame.origin) {
+            context.add(
+              `${path}.frame.origin`,
+              "invalid_format",
+              "Contextul frame trebuie să conțină numai origin-ul HTTP(S).",
+            );
+          }
+        } catch {
+          // validateHttpUrl raportează formatul invalid.
+        }
+      }
+    }
   }
 };
 
@@ -609,6 +672,47 @@ const validateFallback = (
   });
 };
 
+const validateRevealPreparation = (
+  value: unknown,
+  path: string,
+  context: ValidationContext,
+): void => {
+  const preparation = requireRecord(value, path, context);
+  if (preparation === undefined) return;
+  allowOnly(preparation, ["action", "target", "fallbacks"], path, context);
+  requireProperties(
+    preparation,
+    ["action", "target", "fallbacks"],
+    path,
+    context,
+  );
+  validateEnum(
+    preparation.action,
+    ["hover"] as const,
+    `${path}.action`,
+    context,
+  );
+  validateTarget(preparation.target, `${path}.target`, context);
+  if (!Array.isArray(preparation.fallbacks)) {
+    context.add(
+      `${path}.fallbacks`,
+      "invalid_type",
+      "Fallback-urile pregătirii trebuie să fie o listă.",
+    );
+    return;
+  }
+  if (preparation.fallbacks.length > 3) {
+    context.add(
+      `${path}.fallbacks`,
+      "limit_exceeded",
+      "O pregătire poate avea maximum 3 fallback-uri.",
+    );
+  }
+  preparation.fallbacks.forEach((fallback, index) => {
+    validateFallback(fallback, `${path}.fallbacks[${index}]`, context);
+  });
+};
+
 const validateWait = (
   value: unknown,
   path: string,
@@ -618,7 +722,12 @@ const validateWait = (
   if (wait === undefined) {
     return;
   }
-  allowOnly(wait, ["type", "timeoutMs", "target", "value"], path, context);
+  allowOnly(
+    wait,
+    ["type", "timeoutMs", "target", "value", "warningOnly"],
+    path,
+    context,
+  );
   requireProperties(wait, ["type"], path, context);
   const typeValid = validateEnum(
     wait.type,
@@ -641,6 +750,9 @@ const validateWait = (
       min: 1,
       max: 4096,
     });
+  }
+  if (wait.warningOnly !== undefined) {
+    validateBoolean(wait.warningOnly, `${path}.warningOnly`, context);
   }
   if (typeValid && wait.type === "element" && wait.target === undefined) {
     context.add(
@@ -723,8 +835,13 @@ const validateActionStep = (
     "key",
     "scrollX",
     "scrollY",
+    "scrollMode",
     "repeat",
     "repeatUntil",
+    "visualInstruction",
+    "visualRegion",
+    "googlePayCardDescription",
+    "revealBefore",
     "waitAfter",
     "fallbacks",
     "enabled",
@@ -786,7 +903,7 @@ const validateActionStep = (
     );
   }
   if (action.url !== undefined) {
-    validateHttpUrl(action.url, `${path}.url`, context);
+    validateHttpUrlTemplate(action.url, `${path}.url`, context);
   }
   if (action.key !== undefined) {
     validateString(action.key, `${path}.key`, context, {
@@ -808,6 +925,14 @@ const validateActionStep = (
       max: 100000,
     });
   }
+  if (action.scrollMode !== undefined) {
+    validateEnum(
+      action.scrollMode,
+      ["dom", "wheel"] as const,
+      `${path}.scrollMode`,
+      context,
+    );
+  }
   if (action.repeat !== undefined) {
     validateNumber(action.repeat, `${path}.repeat`, context, {
       integer: true,
@@ -818,12 +943,129 @@ const validateActionStep = (
   if (action.repeatUntil !== undefined) {
     validateRepeatUntil(action.repeatUntil, `${path}.repeatUntil`, context);
   }
+  if (action.visualInstruction !== undefined) {
+    validateString(
+      action.visualInstruction,
+      `${path}.visualInstruction`,
+      context,
+      { min: 3, max: 4000 },
+    );
+  }
+  if (action.googlePayCardDescription !== undefined) {
+    validateString(
+      action.googlePayCardDescription,
+      `${path}.googlePayCardDescription`,
+      context,
+      { min: 3, max: 1000 },
+    );
+  }
+  if (action.visualRegion !== undefined) {
+    const region = requireRecord(
+      action.visualRegion,
+      `${path}.visualRegion`,
+      context,
+    );
+    if (region !== undefined) {
+      allowOnly(
+        region,
+        [
+          "x",
+          "y",
+          "width",
+          "height",
+          "viewportWidth",
+          "viewportHeight",
+          "referenceImageBase64",
+        ],
+        `${path}.visualRegion`,
+        context,
+      );
+      requireProperties(
+        region,
+        ["x", "y", "width", "height", "viewportWidth", "viewportHeight"],
+        `${path}.visualRegion`,
+        context,
+      );
+      for (const key of ["x", "y", "width", "height"] as const) {
+        validateNumber(region[key], `${path}.visualRegion.${key}`, context, {
+          min: key === "width" || key === "height" ? 0.01 : 0,
+          max: 1,
+        });
+      }
+      validateNumber(
+        region.viewportWidth,
+        `${path}.visualRegion.viewportWidth`,
+        context,
+        { integer: true, min: 1, max: 10000 },
+      );
+      validateNumber(
+        region.viewportHeight,
+        `${path}.visualRegion.viewportHeight`,
+        context,
+        { integer: true, min: 1, max: 10000 },
+      );
+      if (region.referenceImageBase64 !== undefined) {
+        validateString(
+          region.referenceImageBase64,
+          `${path}.visualRegion.referenceImageBase64`,
+          context,
+          { min: 1, max: 5_000_000 },
+        );
+      }
+      if (
+        typeof region.x === "number" &&
+        typeof region.width === "number" &&
+        region.x + region.width > 1.000001
+      ) {
+        context.add(
+          `${path}.visualRegion.width`,
+          "invalid_value",
+          "Zona vizuală depășește lățimea viewportului.",
+        );
+      }
+      if (
+        typeof region.y === "number" &&
+        typeof region.height === "number" &&
+        region.y + region.height > 1.000001
+      ) {
+        context.add(
+          `${path}.visualRegion.height`,
+          "invalid_value",
+          "Zona vizuală depășește înălțimea viewportului.",
+        );
+      }
+    }
+  }
   if (action.repeat !== undefined && action.repeatUntil !== undefined) {
     context.add(
       `${path}.repeatUntil`,
       "invalid_value",
       "repeat și repeatUntil nu pot fi folosite împreună.",
     );
+  }
+  if (action.revealBefore !== undefined) {
+    if (!Array.isArray(action.revealBefore)) {
+      context.add(
+        `${path}.revealBefore`,
+        "invalid_type",
+        "Pregătirile de afișare trebuie să fie o listă.",
+      );
+    } else {
+      if (action.revealBefore.length > 3) {
+        context.add(
+          `${path}.revealBefore`,
+          "limit_exceeded",
+          "Un pas poate avea maximum 3 pregătiri de afișare.",
+        );
+      }
+      action.revealBefore.forEach((preparation, index) => {
+        validateRevealPreparation(
+          preparation,
+          `${path}.revealBefore[${index}]`,
+          context,
+        );
+      });
+    }
   }
   if (action.waitAfter !== undefined) {
     validateWait(action.waitAfter, `${path}.waitAfter`, context);
@@ -852,8 +1094,10 @@ const validateActionStep = (
     return;
   }
   const targetActions = new Set([
+    "hover",
     "click",
     "fill",
+    "upload_file",
     "select_option",
     "check",
     "uncheck",
@@ -879,7 +1123,7 @@ const validateActionStep = (
     );
   }
   if (
-    ["fill", "select_option"].includes(actionType) &&
+    ["fill", "upload_file", "select_option"].includes(actionType) &&
     action.inputFieldId === undefined
   ) {
     context.add(
@@ -889,7 +1133,7 @@ const validateActionStep = (
     );
   }
   if (
-    ["fill", "select_option"].includes(actionType) &&
+    ["fill", "upload_file", "select_option"].includes(actionType) &&
     action.valueStrategy === undefined
   ) {
     context.add(
@@ -899,7 +1143,7 @@ const validateActionStep = (
     );
   }
   if (
-    ["fill", "select_option"].includes(actionType) &&
+    ["fill", "upload_file", "select_option"].includes(actionType) &&
     action.valueStrategy === "dataset" &&
     action.valueKey === undefined
   ) {
@@ -915,6 +1159,15 @@ const validateActionStep = (
       "missing_property",
       "Acțiunea press_key necesită key.",
     );
+  }
+  if (actionType === "visual_ai") {
+    if (action.visualInstruction === undefined) {
+      context.add(
+        `${path}.visualInstruction`,
+        "missing_property",
+        "Acțiunea vizuală AI necesită o descriere.",
+      );
+    }
   }
   if (
     action.repeatUntil !== undefined &&
@@ -1112,6 +1365,145 @@ const validateImapCheck = (
   }
 };
 
+const validateJsEvalCheck = (
+  value: unknown,
+  path: string,
+  context: ValidationContext,
+): void => {
+  const config = requireRecord(value, path, context);
+  if (!config) {
+    return;
+  }
+  allowOnly(config, ["jsSnippet", "expectedResult"], path, context);
+  requireProperties(config, ["jsSnippet"], path, context);
+  validateString(config.jsSnippet, `${path}.jsSnippet`, context, {
+    min: 1,
+    max: 10000,
+  });
+};
+
+const validateVisualCheck = (
+  value: unknown,
+  path: string,
+  context: ValidationContext,
+): void => {
+  const config = requireRecord(value, path, context);
+  if (!config) return;
+  allowOnly(config, ["prompt", "minimumConfidence"], path, context);
+  requireProperties(config, ["prompt"], path, context);
+  validateString(config.prompt, `${path}.prompt`, context, {
+    min: 3,
+    max: 4000,
+  });
+  if (config.minimumConfidence !== undefined) {
+    validateNumber(
+      config.minimumConfidence,
+      `${path}.minimumConfidence`,
+      context,
+      { min: 0, max: 1 },
+    );
+  }
+};
+
+const validateAdaptiveCheck = (
+  value: unknown,
+  path: string,
+  context: ValidationContext,
+): void => {
+  const config = requireRecord(value, path, context);
+  if (!config) return;
+  allowOnly(
+    config,
+    [
+      "strategy",
+      "expectedTexts",
+      "matchMode",
+      "target",
+      "caseSensitive",
+      "ignoreDiacritics",
+      "visualPrompt",
+      "visualFallback",
+      "minimumConfidence",
+    ],
+    path,
+    context,
+  );
+  requireProperties(
+    config,
+    ["strategy", "expectedTexts", "matchMode", "visualFallback"],
+    path,
+    context,
+  );
+  const strategyValid = validateEnum(
+    config.strategy,
+    ["auto", "dom", "visual"] as const,
+    `${path}.strategy`,
+    context,
+  );
+  validateEnum(
+    config.matchMode,
+    ["any", "all", "exact"] as const,
+    `${path}.matchMode`,
+    context,
+  );
+  if (
+    !Array.isArray(config.expectedTexts) ||
+    config.expectedTexts.length > 20
+  ) {
+    context.add(
+      `${path}.expectedTexts`,
+      "invalid_type",
+      "Mesajele așteptate trebuie să fie o listă cu maximum 20 de valori.",
+    );
+  } else {
+    if (
+      strategyValid &&
+      config.strategy === "dom" &&
+      config.expectedTexts.length === 0
+    ) {
+      context.add(
+        `${path}.expectedTexts`,
+        "missing_property",
+        "Strategia DOM necesită cel puțin un mesaj așteptat.",
+      );
+    }
+    config.expectedTexts.forEach((text, index) => {
+      validateString(text, `${path}.expectedTexts[${index}]`, context, {
+        min: 1,
+        max: 1000,
+      });
+    });
+  }
+  if (config.target !== undefined) {
+    validateLocator(config.target, `${path}.target`, context);
+  }
+  if (config.caseSensitive !== undefined) {
+    validateBoolean(config.caseSensitive, `${path}.caseSensitive`, context);
+  }
+  if (config.ignoreDiacritics !== undefined) {
+    validateBoolean(
+      config.ignoreDiacritics,
+      `${path}.ignoreDiacritics`,
+      context,
+    );
+  }
+  if (config.visualPrompt !== undefined) {
+    validateString(config.visualPrompt, `${path}.visualPrompt`, context, {
+      min: 3,
+      max: 4000,
+    });
+  }
+  validateBoolean(config.visualFallback, `${path}.visualFallback`, context);
+  if (config.minimumConfidence !== undefined) {
+    validateNumber(
+      config.minimumConfidence,
+      `${path}.minimumConfidence`,
+      context,
+      { min: 0, max: 1 },
+    );
+  }
+};
+
 const validateCheckStep = (
   check: JsonRecord,
   path: string,
@@ -1126,6 +1518,7 @@ const validateCheckStep = (
       "title",
       "humanDescription",
       "config",
+      "timeoutMs",
       "enabled",
     ],
     path,
@@ -1148,7 +1541,16 @@ const validateCheckStep = (
   validateId(check.id, `${path}.id`, context);
   const checkTypeValid = validateEnum(
     check.checkType,
-    ["element", "text", "url", "mysql", "imap"] as const,
+    [
+      "element",
+      "text",
+      "url",
+      "mysql",
+      "imap",
+      "js_eval",
+      "visual",
+      "adaptive",
+    ] as const,
     `${path}.checkType`,
     context,
   );
@@ -1161,6 +1563,13 @@ const validateCheckStep = (
     max: 4000,
   });
   validateBoolean(check.enabled, `${path}.enabled`, context);
+  if (check.timeoutMs !== undefined) {
+    validateNumber(check.timeoutMs, `${path}.timeoutMs`, context, {
+      integer: true,
+      min: 0,
+      max: 120_000,
+    });
+  }
   if (!checkTypeValid) {
     return;
   }
@@ -1179,6 +1588,15 @@ const validateCheckStep = (
       break;
     case "imap":
       validateImapCheck(check.config, `${path}.config`, context);
+      break;
+    case "js_eval":
+      validateJsEvalCheck(check.config, `${path}.config`, context);
+      break;
+    case "visual":
+      validateVisualCheck(check.config, `${path}.config`, context);
+      break;
+    case "adaptive":
+      validateAdaptiveCheck(check.config, `${path}.config`, context);
       break;
   }
 };
@@ -1335,6 +1753,13 @@ const validateDatasetValue = (
     allowOnly(item, ["type", "value"], path, context);
     requireProperties(item, ["type", "value"], path, context);
     validatePrimitive(item.value, `${path}.value`, context);
+    return;
+  }
+  if (item.type === "file") {
+    allowOnly(item, ["type", "path", "name"], path, context);
+    requireProperties(item, ["type", "path", "name"], path, context);
+    validateString(item.path, `${path}.path`, context, { min: 1, max: 32_000 });
+    validateString(item.name, `${path}.name`, context, { min: 1, max: 500 });
     return;
   }
   if (item.type !== "generated") {
@@ -1513,6 +1938,140 @@ export const validateTestDataset = (
     : { valid: false, issues: context.issues };
 };
 
+const validateStages = (
+  value: unknown[],
+  context: ValidationContext,
+): value is TestStage[] => {
+  if (value.length === 0) {
+    context.add(
+      "$.stages",
+      "invalid_value",
+      "Testul trebuie să conțină cel puțin o etapă.",
+    );
+    return false;
+  }
+  let valid = true;
+  value.forEach((candidate, stageIndex) => {
+    const path = `$.stages[${stageIndex}]`;
+    const stage = requireRecord(candidate, path, context);
+    if (stage === undefined) {
+      valid = false;
+      return;
+    }
+    allowOnly(
+      stage,
+      ["id", "name", "enabled", "entry", "flowItems", "postChecks"],
+      path,
+      context,
+    );
+    requireProperties(
+      stage,
+      ["id", "name", "enabled", "entry", "flowItems", "postChecks"],
+      path,
+      context,
+    );
+    validateId(stage.id, `${path}.id`, context);
+    validateString(stage.name, `${path}.name`, context, { min: 1, max: 120 });
+    validateBoolean(stage.enabled, `${path}.enabled`, context);
+    const entry = requireRecord(stage.entry, `${path}.entry`, context);
+    if (entry !== undefined) {
+      validateEnum(
+        entry.type,
+        [
+          "test_start",
+          "continue_current_page",
+          "static_url",
+          "url_template",
+          "variable_url",
+        ] as const,
+        `${path}.entry.type`,
+        context,
+      );
+      const entryType = entry.type;
+      const allowedEntry =
+        entryType === "static_url"
+          ? ["type", "url"]
+          : entryType === "url_template"
+            ? ["type", "template"]
+            : entryType === "variable_url"
+              ? ["type", "variableName"]
+              : ["type"];
+      allowOnly(entry, allowedEntry, `${path}.entry`, context);
+      if (entryType === "static_url")
+        validateHttpUrl(entry.url, `${path}.entry.url`, context);
+      if (entryType === "url_template")
+        validateString(entry.template, `${path}.entry.template`, context, {
+          min: 1,
+          max: 4096,
+        });
+      if (entryType === "variable_url")
+        validateString(
+          entry.variableName,
+          `${path}.entry.variableName`,
+          context,
+          { min: 1, max: 120 },
+        );
+    }
+    if (!Array.isArray(stage.flowItems)) {
+      context.add(
+        `${path}.flowItems`,
+        "invalid_type",
+        "flowItems trebuie să fie o listă.",
+      );
+      valid = false;
+    } else {
+      stage.flowItems.forEach((item, index) =>
+        validateFlowItem(item, `${path}.flowItems[${index}]`, context),
+      );
+    }
+    if (!Array.isArray(stage.postChecks)) {
+      context.add(
+        `${path}.postChecks`,
+        "invalid_type",
+        "postChecks trebuie să fie o listă.",
+      );
+      valid = false;
+    } else {
+      stage.postChecks.forEach((item, checkIndex) => {
+        const checkPath = `${path}.postChecks[${checkIndex}]`;
+        if (!isRecord(item)) {
+          context.add(
+            checkPath,
+            "invalid_type",
+            "Check-ul extern trebuie să fie un obiect.",
+          );
+          valid = false;
+          return;
+        }
+        const extractors = item.extractors;
+        const flowCheck = { ...item };
+        delete flowCheck.extractors;
+        delete flowCheck.required;
+        validateFlowItem(flowCheck, checkPath, context);
+        if (
+          item.type !== "check" ||
+          (item.checkType !== "mysql" && item.checkType !== "imap")
+        ) {
+          context.add(
+            `${checkPath}.checkType`,
+            "invalid_value",
+            "postChecks acceptă numai MySQL sau IMAP.",
+          );
+        }
+        if (extractors !== undefined && !Array.isArray(extractors)) {
+          context.add(
+            `${checkPath}.extractors`,
+            "invalid_type",
+            "extractors trebuie să fie o listă.",
+          );
+          valid = false;
+        }
+      });
+    }
+  });
+  return valid;
+};
+
 export const validateDeclarativeTest = (
   value: unknown,
 ): ValidationResult<DeclarativeTestDefinition> => {
@@ -1538,6 +2097,7 @@ export const validateDeclarativeTest = (
       "createdAt",
       "updatedAt",
       "flowItems",
+      "stages",
       "datasets",
     ],
     "$",
@@ -1563,11 +2123,18 @@ export const validateDeclarativeTest = (
     "$",
     context,
   );
-  if (test.schemaVersion !== 1) {
+  if (test.schemaVersion !== 1 && test.schemaVersion !== 2) {
     context.add(
       "$.schemaVersion",
       "invalid_value",
-      "Este suportată numai schemaVersion 1.",
+      "Sunt suportate schemaVersion 1 și 2.",
+    );
+  }
+  if (test.schemaVersion === 2 && !Array.isArray(test.stages)) {
+    context.add(
+      "$.stages",
+      "missing_property",
+      "schemaVersion 2 necesită lista stages.",
     );
   }
   const idValid = validateId(test.id, "$.id", context);
@@ -1648,6 +2215,26 @@ export const validateDeclarativeTest = (
         datasetIds.add(datasetId);
       }
     });
+  }
+
+  if (Array.isArray(test.stages)) {
+    const stageCandidates = test.stages;
+    const stagesValid = validateStages(stageCandidates, context);
+    const datasetKeys = new Set<string>();
+    if (Array.isArray(test.datasets)) {
+      test.datasets.forEach((dataset) => {
+        if (!isRecord(dataset) || !isRecord(dataset.values)) return;
+        Object.keys(dataset.values).forEach((key) => datasetKeys.add(key));
+      });
+    }
+    if (stagesValid) {
+      for (const issue of validateTestStageDependencies(
+        stageCandidates,
+        datasetKeys,
+      )) {
+        context.add(issue.path, "invalid_value", issue.message);
+      }
+    }
   }
 
   return context.issues.length === 0

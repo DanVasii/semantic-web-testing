@@ -1,6 +1,7 @@
 import type {
   DatasetPrimitive,
   DatasetValue,
+  FileDatasetValue,
   TestDataset,
 } from "./test-model.js";
 
@@ -19,7 +20,13 @@ export interface PreviewDatasetValueInput {
 
 export type DatasetPreview = DatasetPrimitive;
 
+export type DatasetFileSelection = FileDatasetValue;
+
 export interface DatasetCrudApi {
+  selectDatasetFile?: (
+    projectId: string,
+    testId: string,
+  ) => Promise<DatasetFileSelection | undefined>;
   listDatasets: (projectId: string, testId: string) => Promise<TestDataset[]>;
   createDataset: (
     projectId: string,

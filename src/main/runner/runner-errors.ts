@@ -44,6 +44,12 @@ export const classifyRunnerError = (
   if (inherited?.causeMessage !== undefined) {
     details.causeMessage = inherited.causeMessage;
   }
+  if (inherited?.severity !== undefined) {
+    details.severity = inherited.severity;
+  }
+  if (inherited?.visualCheckDebug !== undefined) {
+    details.visualCheckDebug = inherited.visualCheckDebug;
+  }
   return details;
 };
 
